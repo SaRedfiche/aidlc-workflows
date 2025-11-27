@@ -97,8 +97,13 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 
 ## Workspace Detection (ALWAYS EXECUTE)
 
-1. **MANDATORY**: Log initial user request in audit.md with complete raw input
-2. Load all steps from `inception/workspace-detection.md`
+1. **MANDATORY - FIRST**: Basic existing project check:
+   - Check if `aidlc-docs/audit.md` exists
+   - **IF exists AND user requests NEW project**: STOP and present protection message
+   - **IF exists AND user requests CONTINUE/RESUME**: Continue normally
+   - **IF not exists**: Continue with new project creation
+2. **MANDATORY**: Log initial user request in audit.md with complete raw input
+3. Load all steps from `inception/workspace-detection.md`
 3. Execute workspace detection:
    - Check for existing aidlc-state.md (resume if found)
    - Scan workspace for existing code
