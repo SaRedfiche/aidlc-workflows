@@ -129,14 +129,7 @@ class ServerProcess:
 
     def _ensure_venv_sandbox(self) -> None:
         """Set up the venv inside a Docker container."""
-        # Remove any host-created .venv before sandbox setup.
-        # The host venv contains symlinks to the host Python interpreter
-        # which are broken inside the container.
-        stale_venv = self.project_root / ".venv"
-        if stale_venv.is_dir():
-            shutil.rmtree(stale_venv)
-
-        setup_cmd = "uv sync --all-extras"        
+        setup_cmd = 'uv venv && uv pip install -e ".[dev]"'
         result = sandbox_run(
             setup_cmd,
             workspace=self.project_root,
@@ -226,7 +219,7 @@ class ServerProcess:
                 resp = httpx.get(f"{self.base_url}/health", timeout=2.0)
                 if resp.status_code == 200:
                     return
-            except (httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError, httpx.TimeoutException) as e:
+            except (httpx.ConnectError, httpx.ReadError, httpx.TimeoutException) as e:
                 last_error = e
             # nosemgrep: arbitrary-sleep - Intentional delay for server startup polling
             time.sleep(0.5)

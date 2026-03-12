@@ -24,9 +24,6 @@ uv run python run.py test
 # Note: On Windows, 7 tests in test_run_command.py are expected to fail
 # because they use Unix shell commands (echo, exit, sleep, etc.) not available on Windows.
 
-# Build sandbox docker image
-./docker/sandbox/build.sh
-
 # Full pipeline: execute AIDLC workflow + evaluate + report (requires Bedrock) with defaults
 uv run python run.py full
 
@@ -48,14 +45,14 @@ uv run python run.py full \
 
 The evaluation pipeline (`run.py full` or `scripts/run_evaluation.py`) orchestrates six stages:
 
-| Stage           | Package                 | Description                                                     |
-| --------------- | ----------------------- | --------------------------------------------------------------- |
-| 1. Execution    | `packages/execution`    | Runs the AIDLC two-agent workflow to produce docs + code        |
-| 2. Post-Run     | (inside execution)      | Installs deps and runs the generated project's tests            |
-| 3. Quantitative | `packages/quantitative` | Lints, security-scans, and duplication-checks generated code    |
-| 4. Contract     | `packages/contracttest` | Spins up the generated app and validates API endpoints          |
-| 5. Qualitative  | `packages/qualitative`  | Compares generated docs against golden baseline via Bedrock LLM |
-| 6. Report       | `packages/reporting`    | Generates consolidated Markdown + HTML reports                  |
+| Stage | Package | Description |
+| ------- | --------- | ------------- |
+| 1. Execution | `packages/execution` | Runs the AIDLC two-agent workflow to produce docs + code |
+| 2. Post-Run | (inside execution) | Installs deps and runs the generated project's tests |
+| 3. Quantitative | `packages/quantitative` | Lints, security-scans, and duplication-checks generated code |
+| 4. Contract | `packages/contracttest` | Spins up the generated app and validates API endpoints |
+| 5. Qualitative | `packages/qualitative` | Compares generated docs against golden baseline via Bedrock LLM |
+| 6. Report | `packages/reporting` | Generates consolidated Markdown + HTML reports |
 
 Output for each run is written to a timestamped folder under `runs/`:
 
@@ -134,17 +131,17 @@ Precedence: `CLI flags > YAML config > built-in defaults`
 
 Per-model config files in `config/` override the executor model while inheriting everything else from `default.yaml`:
 
-| File                          | Model                                       |
-| ----------------------------- | ------------------------------------------- |
-| `config/opus-4-6.yaml`        | Claude Opus 4.6                             |
-| `config/opus-4-5.yaml`        | Claude Opus 4.5                             |
-| `config/sonnet-4-6.yaml`      | Claude Sonnet 4.6                           |
-| `config/sonnet-4-5.yaml`      | Claude Sonnet 4.5                           |
-| `config/nova-premier.yaml`    | Amazon Nova Premier                         |
-| `config/nova-pro.yaml`        | Amazon Nova Pro                             |
-| `config/nova-lite.yaml`       | Amazon Nova Lite                            |
-| `config/mistral-large-3.yaml` | Mistral Large 3 (675B)                      |
-| `config/devstral-2.yaml`      | Mistral Devstral 2 (123B, code-specialized) |
+| File | Model |
+| ------ | ------- |
+| `config/opus-4-6.yaml` | Claude Opus 4.6 |
+| `config/opus-4-5.yaml` | Claude Opus 4.5 |
+| `config/sonnet-4-6.yaml` | Claude Sonnet 4.6 |
+| `config/sonnet-4-5.yaml` | Claude Sonnet 4.5 |
+| `config/nova-premier.yaml` | Amazon Nova Premier |
+| `config/nova-pro.yaml` | Amazon Nova Pro |
+| `config/nova-lite.yaml` | Amazon Nova Lite |
+| `config/mistral-large-3.yaml` | Mistral Large 3 (675B) |
+| `config/devstral-2.yaml` | Mistral Devstral 2 (123B, code-specialized) |
 
 ### Docker Sandbox
 
@@ -344,45 +341,12 @@ uv run python run.py ext-test --scenario sci-calc \
 ```
 
 This runs the evaluation twice:
-
 1. With all extension opt-ins answered "YES" (maximum guidance)
 2. With all extension opt-ins answered "NO" (baseline only)
 
 Results are saved to `runs/<scenario>/extension-test/` with a comparison report showing the impact of different extension configurations.
 
 See [Extension Hook Testing Guide](./docs/extension-hook-testing.md) for detailed documentation.
-
-## Trend Reporting
-
-Generate cross-release trend reports that track evaluation metrics over time. Fetches evaluation bundles from GitHub releases and Actions artifacts, then renders HTML, Markdown, and YAML reports.
-
-```bash
-# Generate trend report (requires gh CLI authenticated)
-uv run python run.py trend --baseline test_cases/sci-calc/golden.yaml
-
-# HTML only with verbose output
-uv run python run.py trend --baseline test_cases/sci-calc/golden.yaml --format html -v
-
-# Include local evaluation bundles
-uv run python run.py trend --baseline test_cases/sci-calc/golden.yaml \
-    --local-bundle runs/my-run/report.zip
-
-# Gate mode (exit non-zero on regressions)
-uv run python run.py trend --baseline test_cases/sci-calc/golden.yaml --gate
-```
-
-The HTML executive summary displays six metric cards:
-
-- **Qualitative Score** — semantic quality vs golden baseline (higher is better)
-- **Contract Tests** — API pass rate as passed/total (higher is better)
-- **Unit Tests** — pass rate shown as percentage (higher is better)
-- **Lint Findings** — static analysis issues (lower is better)
-- **Execution Time** — generation duration (lower is better)
-- **Total Tokens** — LLM token consumption (lower is better)
-
-Output is written to a timestamped folder under the output directory (default: `runs/`).
-
-A sample HTML report is available at [`packages/trend-reports/examples/trend-report.html`](./packages/trend-reports/examples/trend-report.html).
 
 ## Running the Execution Component Directly
 
@@ -418,7 +382,6 @@ Execution-specific toggles:
 │   ├── run_cli_evaluation.py      # CLI adapter evaluation runner
 │   ├── run_ide_evaluation.py      # IDE adapter evaluation runner
 │   ├── run_extension_test.py      # Extension hook testing (opt-in configurations)
-│   ├── run_trend_report.py        # Cross-release trend report generation
 │   └── README.md              # Scripts documentation
 ├── config/
 │   ├── default.yaml           # Default configuration (models, AWS, timeouts, tools)
@@ -433,7 +396,6 @@ Execution-specific toggles:
 │   ├── contracttest/          # API contract testing against OpenAPI specs
 │   ├── nonfunctional/         # NFR evaluation — tokens, timing, consistency
 │   ├── reporting/             # Consolidated report generation (Markdown + HTML)
-│   ├── trend-reports/         # Cross-release trend reporting (HTML, Markdown, YAML)
 │   ├── cli-harness/           # CLI adapter framework (Claude Code, Kiro CLI)
 │   ├── ide-harness/           # IDE adapter framework (Cursor, Cline, Kiro, etc.)
 │   └── shared/                # Common utilities

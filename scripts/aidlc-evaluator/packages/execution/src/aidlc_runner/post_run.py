@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import re
 import shlex
-import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -336,14 +335,6 @@ def run_post_evaluation(
 
     project_root = project.project_root
 
-    # Remove any host-created .venv before sandbox steps.
-    # A host venv has symlinks to the host Python interpreter which are
-    # broken inside the container.
-    if use_sandbox:
-        stale_venv = project_root / ".venv"
-        if stale_venv.is_dir():
-            shutil.rmtree(stale_venv)
-
     data: dict[str, Any] = {
         "status": "completed",
         "project_type": project.project_type,
@@ -351,13 +342,8 @@ def run_post_evaluation(
     }
 
     # Install dependencies
-    # In sandbox mode for Python projects, use `uv sync` which
-    # auto-creates a fresh .venv and installs from the lockfile.
-    install_cmd = project.install_cmd
-    if use_sandbox and project.project_type in ("python", "python-legacy"):
-        install_cmd = "uv sync --all-extras"
     install_result = _run_step(
-        install_cmd, project_root, timeout,
+        project.install_cmd, project_root, timeout,
         use_sandbox=use_sandbox,
         sandbox_image=sandbox_cfg.image,
         sandbox_memory=sandbox_cfg.memory,

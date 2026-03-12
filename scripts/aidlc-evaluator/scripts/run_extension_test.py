@@ -119,15 +119,13 @@ def run_evaluation_with_config(
         "--vision", str(vision),
         "--golden", str(golden),
         "--openapi", str(openapi),
+        "--profile", profile,
+        "--region", region,
         "--scorer-model", scorer_model,
         "--rules-ref", rules_ref,
         "--report-format", "both",
         "--output-dir", str(runs_dir),
     ]
-    if profile:
-        cmd += ["--profile", profile]
-    if region:
-        cmd += ["--region", region]
 
     if tech_env and tech_env.is_file():
         cmd += ["--tech-env", str(tech_env)]
@@ -518,8 +516,13 @@ def main() -> None:
 
     if args.profile is None:
         args.profile = base_cfg.get("aws", {}).get("profile")
+        if args.profile is None:
+            parser.error("--profile is required (or set aws.profile in config YAML)")
+
     if args.region is None:
         args.region = base_cfg.get("aws", {}).get("region")
+        if args.region is None:
+            parser.error("--region is required (or set aws.region in config YAML)")
 
     if args.scorer_model is None:
         args.scorer_model = base_cfg.get("models", {}).get("scorer", {}).get("model_id")

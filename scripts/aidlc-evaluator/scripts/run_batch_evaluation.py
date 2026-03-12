@@ -131,13 +131,11 @@ def run_model(
         "--golden", str(golden),
         "--openapi", str(openapi),
         "--executor-model", model_id,
+        "--profile", profile,
+        "--region", region,
         "--scorer-model", scorer_model,
         "--report-format", "both",
     ]
-    if profile:
-        cmd += ["--profile", profile]
-    if region:
-        cmd += ["--region", region]
     if tech_env and tech_env.is_file():
         cmd += ["--tech-env", str(tech_env)]
     if baseline and baseline.is_file():
@@ -331,8 +329,16 @@ def main() -> None:
 
     if args.profile is None:
         args.profile = base_cfg.get("aws", {}).get("profile")
+        if args.profile is None:
+            parser.error(
+                "--profile is required (or set aws.profile in base config YAML)"
+            )
     if args.region is None:
         args.region = base_cfg.get("aws", {}).get("region")
+        if args.region is None:
+            parser.error(
+                "--region is required (or set aws.region in base config YAML)"
+            )
     if args.scorer_model is None:
         args.scorer_model = (
             base_cfg.get("models", {}).get("scorer", {}).get("model_id")

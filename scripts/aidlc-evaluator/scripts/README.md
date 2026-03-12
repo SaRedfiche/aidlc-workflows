@@ -40,15 +40,6 @@ All run scripts have been consolidated into this `scripts/` directory for better
   - Generates comparison report showing impact of extension choices
   - Uses the extension hook feature branch (feat/extension_hook_question_split)
 
-### Trend Reporting
-
-- **run_trend_report.py** - Cross-release trend report generation
-  - Fetches evaluation bundles from GitHub releases and Actions artifacts
-  - Generates HTML, Markdown, and YAML trend reports comparing metrics across releases
-  - Uses the `packages/trend-reports` package
-  - Executive summary cards show: Qualitative Score, Contract Tests, Unit Test pass rate (%), Lint Findings, Execution Time, and Total Tokens
-  - Execution Time and Total Tokens are "lower is better" metrics (shown with green indicators since lower values are desirable)
-
 ## Usage
 
 ### Using the Master Entry Point (Recommended)
@@ -74,9 +65,6 @@ python run.py compare --scenario sci-calc
 # Test extension hooks (all yes vs all no)
 python run.py ext-test --scenario sci-calc
 
-# Generate trend report across releases
-python run.py trend --baseline test_cases/sci-calc/golden.yaml
-
 # Run tests
 python run.py test
 ```
@@ -97,15 +85,11 @@ python scripts/run_batch_evaluation.py --models all --scenario sci-calc
 
 # Extension hook testing
 python scripts/run_extension_test.py --scenario sci-calc
-
-# Trend report
-python scripts/run_trend_report.py --baseline test_cases/sci-calc/golden.yaml
 ```
 
 ## Path Resolution
 
 All scripts properly resolve paths relative to the repository root, so they work correctly whether invoked:
-
 - Through the master `run.py` dispatcher
 - Directly from the repository root
 - Directly from the `scripts/` directory

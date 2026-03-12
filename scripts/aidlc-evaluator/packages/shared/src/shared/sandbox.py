@@ -9,7 +9,6 @@ Security: All command output is scrubbed for credentials before being returned.
 
 from __future__ import annotations
 
-import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,13 +30,7 @@ _DOCKER_AVAILABLE: bool | None = None
 
 
 def is_docker_available() -> bool:
-    """Check whether Docker can actually run containers.
-
-    Goes beyond ``docker info`` by spawning a trivial container, which
-    catches cgroup v2 / OCI runtime errors that ``docker info`` misses.
-
-    Goes beyond ``docker info`` by spawning a trivial container, which
-    catches cgroup v2 / OCI runtime errors that ``docker info`` misses.
+    """Check whether the Docker CLI is present and the daemon is running.
 
     The result is cached for the lifetime of the process.
     """
@@ -51,18 +44,6 @@ def is_docker_available() -> bool:
             ["docker", "info"],
             capture_output=True,
             timeout=10,
-        )
-        if result.returncode != 0:
-            _DOCKER_AVAILABLE = False
-            return _DOCKER_AVAILABLE
-
-        # Verify containers can actually start *with resource limits*
-        # (catches cgroup v2 / OCI runtime errors that plain `docker run` misses)
-        # nosec B603, B607 - Static docker command for runtime verification
-        result = subprocess.run(
-            ["docker", "run", "--rm", "--memory=6m", "--cpus=1", "alpine", "true"],
-            capture_output=True,
-            timeout=30,
         )
         _DOCKER_AVAILABLE = result.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired):
@@ -114,14 +95,9 @@ def sandbox_run(
         f"--memory={memory}",
         f"--cpus={cpus}",
         "--cap-drop=ALL",
-        f"--user={os.getuid()}:{os.getgid()}",
+        "--user=1000:1000",
         "--workdir=/workspace",
         "-v", f"{workspace.resolve()}:/workspace",
-        # Ensure writable home/cache for the mapped host UID which has
-        # no entry in the container's /etc/passwd.
-        "-e", "HOME=/tmp",
-        "-e", "UV_CACHE_DIR=/tmp/.cache/uv",
-        "-e", "NPM_CONFIG_CACHE=/tmp/.cache/npm",    
     ]
 
     if not network:
@@ -191,14 +167,9 @@ def sandbox_run_detached(
         f"--memory={memory}",
         f"--cpus={cpus}",
         "--cap-drop=ALL",
-        f"--user={os.getuid()}:{os.getgid()}",
+        "--user=1000:1000",
         "--workdir=/workspace",
         "-v", f"{workspace.resolve()}:/workspace",
-        # Ensure writable home/cache for the mapped host UID which has
-        # no entry in the container's /etc/passwd.
-        "-e", "HOME=/tmp",
-        "-e", "UV_CACHE_DIR=/tmp/.cache/uv",
-        "-e", "NPM_CONFIG_CACHE=/tmp/.cache/npm",        
     ]
 
     if not network:
