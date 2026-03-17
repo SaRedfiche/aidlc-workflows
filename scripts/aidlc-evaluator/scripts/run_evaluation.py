@@ -680,16 +680,8 @@ def main() -> None:
 
     if args.profile is None:
         args.profile = cfg_data.get("aws", {}).get("profile")
-        if args.profile is None:
-            parser.error(
-                "--profile is required (or set aws.profile in config YAML)"
-            )
     if args.region is None:
         args.region = cfg_data.get("aws", {}).get("region")
-        if args.region is None:
-            parser.error(
-                "--region is required (or set aws.region in config YAML)"
-            )
     if args.scorer_model is None:
         args.scorer_model = (
             cfg_data.get("models", {}).get("scorer", {}).get("model_id")

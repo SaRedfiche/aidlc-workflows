@@ -173,8 +173,8 @@ def create_executor(
     run_folder: Path,
     rules_dir: Path,
     model_config: ModelConfig,
-    aws_profile: str,
-    aws_region: str,
+    aws_profile: str | None = None,
+    aws_region: str | None = None,
     callback_handler: Callable[..., Any] | None = None,
     execution_config: ExecutionConfig | None = None,
 ) -> Agent:
@@ -206,7 +206,12 @@ def create_executor(
     else:
         system_prompt = _EXECUTOR_PROMPT_NO_EXEC
 
-    boto_session = boto3.Session(profile_name=aws_profile, region_name=aws_region)
+    session_kwargs: dict = {}
+    if aws_profile:
+        session_kwargs["profile_name"] = aws_profile
+    if aws_region:
+        session_kwargs["region_name"] = aws_region
+    boto_session = boto3.Session(**session_kwargs)
     boto_client_config = BotoConfig(
         read_timeout=900,
         connect_timeout=30,

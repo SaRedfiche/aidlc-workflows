@@ -11,11 +11,11 @@ from aidlc_runner.config import RunnerConfig, load_config
 class TestRunnerConfigDefaults:
     def test_default_aws_profile(self):
         config = RunnerConfig()
-        assert config.aws.profile == "default"
+        assert config.aws.profile is None
 
     def test_default_aws_region(self):
         config = RunnerConfig()
-        assert config.aws.region == "us-west-2"
+        assert config.aws.region is None
 
     def test_default_executor_model(self):
         config = RunnerConfig()
@@ -38,7 +38,7 @@ class TestRunnerConfigDefaults:
 class TestLoadConfig:
     def test_load_without_file_returns_defaults(self):
         config = load_config()
-        assert config.aws.profile == "default"
+        assert config.aws.profile is None
         assert config.runs.output_dir == "./runs"
 
     def test_load_from_yaml(self, tmp_path: Path):
@@ -68,7 +68,7 @@ class TestLoadConfig:
         assert config.aws.profile == "override-profile"
         assert config.models.executor.model_id == "some-other-model"
         # Unaffected fields
-        assert config.aws.region == "us-west-2"
+        assert config.aws.region is None
         assert config.models.simulator.model_id != "some-other-model"
 
     def test_cli_overrides_on_top_of_yaml(self, tmp_path: Path):
@@ -87,7 +87,7 @@ class TestLoadConfig:
 
     def test_nonexistent_config_file_returns_defaults(self):
         config = load_config(config_path="/nonexistent/path.yaml")
-        assert config.aws.profile == "default"
+        assert config.aws.profile is None
 
     def test_rules_source_override(self):
         overrides = {

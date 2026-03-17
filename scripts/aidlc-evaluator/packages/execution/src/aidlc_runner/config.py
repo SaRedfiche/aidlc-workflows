@@ -13,8 +13,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class AwsConfig:
-    profile: str = "default"
-    region: str = "us-west-2"
+    profile: str | None = None
+    region: str | None = None
 
 
 @dataclass

@@ -1,6 +1,6 @@
-aws:
-  profile: "default"
-  region: "us-east-1"
+# aws:
+#   profile: "default"
+#   region: "us-east-1"
 
 models:
   executor:
