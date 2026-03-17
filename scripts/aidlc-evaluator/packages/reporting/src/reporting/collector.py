@@ -240,7 +240,7 @@ def collect(run_folder: Path) -> ReportData:
             node_history=raw.get("node_history", []),
             executor_model=cfg.get("executor_model", ""),
             simulator_model=cfg.get("simulator_model", ""),
-            aws_region=cfg.get("aws_region", "us-west-2"),
+            aws_region=cfg.get("aws_region", ""),
             rules_source=cfg.get("rules_source", ""),
             rules_repo=cfg.get("rules_repo") or "",
             rules_ref=cfg.get("rules_ref") or "",

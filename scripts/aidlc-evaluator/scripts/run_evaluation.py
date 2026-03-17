@@ -493,10 +493,12 @@ def stage_qualitative(
         sys.executable, "-m", "qualitative", "compare",
         "--reference", str(golden_docs),
         "--candidate", str(candidate_docs),
-        "--profile", profile,
-        "--region", region,
         "--model-id", model_id,
     ]
+    if profile:
+        cmd += ["--profile", profile]
+    if region:
+        cmd += ["--region", region]
     if output_path:
         cmd += ["--output", str(output_path)]
 

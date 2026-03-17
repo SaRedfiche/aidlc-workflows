@@ -167,14 +167,16 @@ class LlmScorer:
     def __init__(
         self,
         model_id: str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-        region: str = "us-west-2",
+        region: str | None = None,
         profile: str | None = None,
         max_tokens: int = 512,
     ) -> None:
         import boto3
         from botocore.config import Config as BotoConfig
 
-        session_kwargs: dict = {"region_name": region}
+        session_kwargs: dict = {}
+        if region:
+            session_kwargs["region_name"] = region
         if profile:
             session_kwargs["profile_name"] = profile
         session = boto3.Session(**session_kwargs)

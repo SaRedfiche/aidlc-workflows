@@ -20,7 +20,7 @@ def compare_runs(
     output_path: Path | None = None,
     *,
     aws_profile: str | None = None,
-    aws_region: str = "us-west-2",
+    aws_region: str | None = None,
     model_id: str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
 ) -> ComparisonResult:
     """Compare AIDLC document outputs between a reference and candidate run.

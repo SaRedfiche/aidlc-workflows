@@ -119,13 +119,15 @@ def run_evaluation_with_config(
         "--vision", str(vision),
         "--golden", str(golden),
         "--openapi", str(openapi),
-        "--profile", profile,
-        "--region", region,
         "--scorer-model", scorer_model,
         "--rules-ref", rules_ref,
         "--report-format", "both",
         "--output-dir", str(runs_dir),
     ]
+    if profile:
+        cmd += ["--profile", profile]
+    if region:
+        cmd += ["--region", region]
 
     if tech_env and tech_env.is_file():
         cmd += ["--tech-env", str(tech_env)]

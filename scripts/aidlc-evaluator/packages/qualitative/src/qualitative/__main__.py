@@ -46,12 +46,12 @@ def main() -> None:
         help="Write results YAML to this path",
     )
     compare.add_argument(
-        "--profile", default="default",
-        help="AWS profile for Bedrock access (default: default)",
+        "--profile", default=None,
+        help="AWS profile for Bedrock access (default: from environment)",
     )
     compare.add_argument(
-        "--region", default="us-west-2",
-        help="AWS region (default: us-west-2)",
+        "--region", default=None,
+        help="AWS region (default: from environment)",
     )
     compare.add_argument(
         "--model-id", default="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
@@ -74,8 +74,8 @@ def main() -> None:
     print(f"Reference: {args.reference}")
     print(f"Candidate: {args.candidate}")
     print(f"Scorer:    Bedrock LLM ({args.model_id})")
-    print(f"Profile:   {args.profile}")
-    print(f"Region:    {args.region}")
+    print(f"Profile:   {args.profile or '(from environment)'}")
+    print(f"Region:    {args.region or '(from environment)'}")
     print()
 
     result = compare_runs(

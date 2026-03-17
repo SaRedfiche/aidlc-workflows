@@ -25,8 +25,8 @@ def run_ide_evaluation(
     tech_env_path: Path | None = None,
     openapi_path: Path | None = None,
     baseline_path: Path | None = None,
-    profile: str = "default",
-    region: str = "us-west-2",
+    profile: str | None = None,
+    region: str | None = None,
     scorer_model: str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
     report_format: str = "both",
     prompt_template: str | None = None,
@@ -93,11 +93,13 @@ def run_ide_evaluation(
         sys.executable, str(REPO_ROOT / "run_evaluation.py"),
         "--evaluate-only", str(aidlc_docs),
         "--golden", str(golden_docs),
-        "--profile", profile,
-        "--region", region,
         "--scorer-model", scorer_model,
         "--report-format", report_format,
     ]
+    if profile:
+        eval_cmd += ["--profile", profile]
+    if region:
+        eval_cmd += ["--region", region]
     if openapi_path and openapi_path.is_file():
         eval_cmd += ["--openapi", str(openapi_path)]
     if baseline_path and baseline_path.is_file():

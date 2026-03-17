@@ -131,11 +131,13 @@ def run_model(
         "--golden", str(golden),
         "--openapi", str(openapi),
         "--executor-model", model_id,
-        "--profile", profile,
-        "--region", region,
         "--scorer-model", scorer_model,
         "--report-format", "both",
     ]
+    if profile:
+        cmd += ["--profile", profile]
+    if region:
+        cmd += ["--region", region]
     if tech_env and tech_env.is_file():
         cmd += ["--tech-env", str(tech_env)]
     if baseline and baseline.is_file():
