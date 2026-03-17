@@ -46,7 +46,7 @@ complete, working code with full test coverage.
 
 
 def render_prompt(vision_path: str = "vision.md", tech_env_path: str = "tech-env.md") -> str:
-    """Render the AIDLC prompt with customized file paths.
+    r"""Render the AIDLC prompt with customized file paths.
 
     Only replaces backtick-delimited references (``\`vision.md\```) so that
     prose mentions are left intact.
