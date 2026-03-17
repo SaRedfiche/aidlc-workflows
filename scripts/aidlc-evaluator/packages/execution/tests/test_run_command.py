@@ -53,7 +53,7 @@ class TestRunCommandSandbox:
         ws.mkdir()
 
         run_cmd = make_run_command(tmp_path)
-        _call(run_cmd, "echo 'test content' > output.txt")
+        _call(run_cmd, "python3 -c \"from pathlib import Path; Path('output.txt').write_text('test content')\"")
         assert (ws / "output.txt").exists()
         assert "test content" in (ws / "output.txt").read_text()
 
@@ -72,14 +72,14 @@ class TestRunCommandOutput:
         (tmp_path / "workspace").mkdir()
 
         run_cmd = make_run_command(tmp_path)
-        result = _call(run_cmd, "exit 42")
+        result = _call(run_cmd, "python3 -c \"import sys; sys.exit(42)\"")
         assert "[exit code: 42]" in result
 
     def test_stderr_captured(self, tmp_path: Path):
         (tmp_path / "workspace").mkdir()
 
         run_cmd = make_run_command(tmp_path)
-        result = _call(run_cmd, "echo 'err msg' >&2")
+        result = _call(run_cmd, "python3 -c \"import sys; sys.stderr.write('err msg\\n')\"")
         assert "err msg" in result
 
     def test_long_output_truncated(self, tmp_path: Path):
@@ -96,8 +96,10 @@ class TestRunCommandOutput:
 
         run_cmd = make_run_command(tmp_path)
         result = _call(run_cmd, "nonexistent_command_xyz")
-        assert "[exit code:" in result
-        assert int(result.split("[exit code: ")[1].split("]")[0]) != 0
+        # shell=False raises OSError ([error:]), shell=True returns [exit code: 127]
+        is_error = "[error:" in result
+        is_nonzero_exit = "[exit code:" in result and "[exit code: 0]" not in result
+        assert is_error or is_nonzero_exit
 
 
 class TestRunCommandEdgeCases:
