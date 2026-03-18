@@ -26,6 +26,9 @@ uv run python run.py test
 # Build the sandbox docker image
 ./docker/sandbox/build.sh
 
+# Build sandbox docker image
+./docker/sandbox/build.sh
+
 # Full pipeline: execute AIDLC workflow + evaluate + report (requires Bedrock) with defaults
 uv run python run.py full
 
