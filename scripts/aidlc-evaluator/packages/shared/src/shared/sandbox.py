@@ -32,6 +32,9 @@ _DOCKER_AVAILABLE: bool | None = None
 def is_docker_available() -> bool:
     """Check whether Docker can actually run containers.
 
+    Goes beyond ``docker info`` by spawning a trivial container, which
+    catches cgroup v2 / OCI runtime errors that ``docker info`` misses.
+
     The result is cached for the lifetime of the process.
     """
     global _DOCKER_AVAILABLE
