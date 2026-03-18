@@ -23,6 +23,8 @@ uv sync
 uv run python run.py test
 # Note: On Windows, 7 tests in test_run_command.py are expected to fail
 # because they use Unix shell commands (echo, exit, sleep, etc.) not available on Windows.
+# Build the sandbox docker image
+./docker/sandbox/build.sh
 
 # Full pipeline: execute AIDLC workflow + evaluate + report (requires Bedrock) with defaults
 uv run python run.py full
