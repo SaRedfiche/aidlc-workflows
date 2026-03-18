@@ -51,6 +51,18 @@ def is_docker_available() -> bool:
             capture_output=True,
             timeout=10,
         )
+        if result.returncode != 0:
+            _DOCKER_AVAILABLE = False
+            return _DOCKER_AVAILABLE
+
+        # Verify containers can actually start *with resource limits*
+        # (catches cgroup v2 / OCI runtime errors that plain `docker run` misses)
+        # nosec B603, B607 - Static docker command for runtime verification
+        result = subprocess.run(
+            ["docker", "run", "--rm", "--memory=6m", "--cpus=1", "alpine", "true"],
+            capture_output=True,
+            timeout=30,
+        )
         _DOCKER_AVAILABLE = result.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired):
         _DOCKER_AVAILABLE = False
