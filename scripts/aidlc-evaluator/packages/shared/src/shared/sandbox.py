@@ -30,7 +30,7 @@ _DOCKER_AVAILABLE: bool | None = None
 
 
 def is_docker_available() -> bool:
-    """Check whether the Docker CLI is present and the daemon is running.
+    """Check whether Docker can actually run containers.
 
     The result is cached for the lifetime of the process.
     """
