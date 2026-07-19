@@ -22,9 +22,15 @@ import onboardingFills from "./onboarding.fills.ts";
 
 const manifest: HarnessManifest = {
   name: "kiro",
+  productName: "Kiro CLI",
+  initNextStep: "run `kiro-cli chat`, then `/aidlc --doctor`",
   harnessDir: ".kiro",
   orchestratorSkillPath: ".kiro/skills/aidlc/SKILL.md",
   tierFlavor: "kiro",
+  rootIntegrations: [
+    { path: ".gitignore", policy: "managed-block", marker: "gitignore" },
+    { path: "AGENTS.md", policy: "managed-block", marker: "agents" },
+  ],
 
   // Same core projection as claude, EXCEPT: rules→steering, and the
   // orchestrator skill (skills/aidlc/) is authored, not core.

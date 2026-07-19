@@ -143,6 +143,7 @@ import {
   writeCurrentTranscriptPath,
 } from "../tools/aidlc-usage.ts";
 import { questionsFileHasPendingPlanApproval } from "./aidlc-plan-approval-guard.ts";
+import { aidlcToolInvocation } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOK_NAME = "continue-workflow";
 
@@ -986,11 +987,11 @@ function continuationReason(
   return (
     `The AIDLC workflow has a pending step (a ${kind} directive${where}). ` +
     "You have not finished the workflow loop yet. Run " +
-    `\`bun ${harnessDir()}/tools/aidlc-orchestrate.ts next\`, do what the step it prints ` +
+    `\`${aidlcToolInvocation("orchestrate")} next\`, do what the step it prints ` +
     "asks, then run `aidlc-orchestrate report --stage <stage> --result <outcome>` to record " +
     "the outcome. Repeat until it answers `done`. " +
     "If you meant to pause this workflow instead and pick it up in a later " +
-    `session, run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts park\` to stop ` +
+    `session, run \`${aidlcToolInvocation("orchestrate")} park\` to stop ` +
     "cleanly between stages - never mark a stage complete just to end the turn."
   );
 }

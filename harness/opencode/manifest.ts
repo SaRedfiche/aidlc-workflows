@@ -31,9 +31,16 @@ import emit from "./emit.ts";
 
 const manifest: HarnessManifest = {
   name: "opencode",
+  productName: "opencode",
+  initNextStep: "run `opencode`, then `/aidlc --doctor`",
   harnessDir: ".aidlc",
   orchestratorSkillPath: ".aidlc/skills/aidlc/SKILL.md",
   tierFlavor: "opencode",
+  rootIntegrations: [
+    { path: ".gitignore", policy: "managed-block", marker: "gitignore" },
+    { path: "AGENTS.md", policy: "managed-block", marker: "agents" },
+    { path: "opencode.json", policy: "whole-file" },
+  ],
 
   // Same core projection as claude, into .aidlc/. The persona .md files ARE
   // core (the conductor adopts them inline from .aidlc/agents/); the

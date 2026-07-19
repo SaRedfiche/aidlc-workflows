@@ -1,5 +1,13 @@
 {
+<<<<<<< HEAD
   "name": "codex",
+||||||| parent of f5c8f8211 (feat: add transactional install lifecycle (recovered PR2 snapshot))
+=======
+  "schemaVersion": 1,
+  "distribution": "codex",
+  "productName": "Codex CLI",
+  "initNextStep": "run `codex`, then `$aidlc --doctor`",
+>>>>>>> f5c8f8211 (feat: add transactional install lifecycle (recovered PR2 snapshot))
   "harnessDir": ".codex",
   "rulesSubdir": "aidlc-rules"
 }
