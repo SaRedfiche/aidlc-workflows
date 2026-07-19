@@ -33,9 +33,7 @@ scopes:
   - feature
   - infra
   - security-patch
-  - classic
   - workshop
-  - express
 inputs: CD pipeline config from deployment-pipeline stage, provisioned environments from environment-provisioning stage, built artifacts from Construction
 outputs: deployment-log.md, smoke-test-results.md, health-check-report.md, deployment-execution-questions.md (under this stage's record dir, engine-resolved)
 ---
@@ -57,12 +55,7 @@ Load aidlc-pipeline-deploy-agent persona from `agents/aidlc-pipeline-deploy-agen
 - Read build/test results from `<record>/construction/build-and-test/` (if exists)
 - Read rollback runbook (if exists)
 
-Incremental scopes (security-patch, infra) and `express` may skip Environment
-Provisioning or Build and Test by design. Inventory actual target environments
-from the workspace's existing deployment configuration and the approved
-Deployment Pipeline artifacts. For Express greenfield, deployment proceeds only
-when those files identify a real target; otherwise this CONDITIONAL stage reports
-skipped. Never invent an environment inventory or deployment path.
+Incremental scopes (security-patch, infra) skip environment-provisioning or build-and-test by design; a brownfield production system already has environments and a deploy path. When those inputs are absent, inventory the actual environments from the workspace's existing configuration and deploy through the pipeline that exists — never invent the content of a missing artifact.
 
 ### Step 3: Pre-Deployment Checks
 
@@ -85,16 +78,8 @@ Create deployment execution log, smoke test results, health check validation rep
 ### Step 6: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
-<<<<<<< HEAD
-`bun .claude/tools/aidlc-orchestrate.ts report --stage deployment-execution --result <outcome>`.
-That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
-||||||| parent of df361fbee (feat: graduate native install mechanism)
-`bun .claude/tools/aidlc-orchestrate.ts report --stage deployment-execution --result <outcome>`.
+`bun .claude/tools/aidlc.ts __delegate orchestrate report --stage deployment-execution --result <outcome>`.
 The engine owns all lifecycle transitions and advancement.
-=======
-`aidlc __delegate orchestrate report --stage deployment-execution --result <outcome>`.
-The engine owns all lifecycle transitions and advancement.
->>>>>>> df361fbee (feat: graduate native install mechanism)
 
 ### Step 7: Present Completion & Request Approval
 

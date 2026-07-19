@@ -13,15 +13,17 @@ reviewer: aidlc-architecture-reviewer-agent
 reviewer_max_iterations: 2
 for_each: unit-of-work
 produces:
-  - infrastructure-specification
+  - deployment-architecture
+  - infrastructure-services
   - monitoring-design
   - cicd-pipeline
-  - traceability
+optional_produces:
+  - shared-infrastructure
 produces_kinds:
-  infrastructure-specification: [service, ui, packaging]
-  monitoring-design: [service, ui, packaging]
+  deployment-architecture: [service, ui, packaging]
+  infrastructure-services: [service, packaging]
+  monitoring-design: [service, packaging]
   cicd-pipeline: [service, ui, packaging, library]
-  traceability: [service, ui, packaging, library]
 consumes:
   - artifact: performance-design
     required: true
@@ -31,16 +33,14 @@ consumes:
     required: true
   - artifact: reliability-design
     required: true
-  - artifact: observability-design
-    required: true
   - artifact: logical-components
     required: true
   - artifact: components
     required: true
-  - artifact: functional-spec
+  - artifact: services
     required: true
-  - artifact: contract-summary
-    required: false
+  - artifact: business-logic-model
+    required: true
 requires_stage:
   - units-generation
   - nfr-design
@@ -49,25 +49,19 @@ sensors:
   - upstream-coverage
   - linter
   - type-check
-  - traceability
 scopes:
   - enterprise
   - feature
   - mvp
   - infra
-  - classic
   - workshop
-inputs: NFR design artifacts, domain design components.md, functional design
-outputs: "infrastructure-specification.md (deployment + services + shared, tabular), monitoring-design.md (tabular), cicd-pipeline.md, traceability.json (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (a spec unit owes none)"
+inputs: NFR design artifacts, application design, functional design
+outputs: "deployment-architecture.md, infrastructure-services.md, monitoring-design.md, cicd-pipeline.md, CONDITIONAL: shared-infrastructure.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)"
 ---
 
 # Infrastructure Design
 
 MANDATORY: Follow stage-protocol.md for approval gates, question format, and completion messages.
-
-## Constraints
-
-This is a design stage — artifacts describe what infrastructure is needed and why, not implementation-ready code. Complete IaC (CDK constructs, Terraform modules, CloudFormation), full Lambda handlers, and IAM policy documents belong in code-generation. Limit code to short illustrative snippets (pseudocode or interface-level, ≤15 lines) that clarify a design decision.
 
 ## Steps
 
@@ -96,11 +90,10 @@ Load aidlc-aws-platform-agent (lead) persona from `agents/aidlc-aws-platform-age
 Read all prior design artifacts for context:
 - NFR design from `<record>/construction/{unit-name}/nfr-design/` (if exists)
 - Functional design from `<record>/construction/{unit-name}/functional-design/` (if exists)
-- Domain design (component catalogue) from `<record>/inception/domain-design/components.md` (if exists)
-- Inter-unit contracts from `<record>/inception/contract-design/contract-summary.md` (if produced) — boundary integration mechanisms (sync/async/shared store) inform networking, messaging, and shared-resource provisioning
+- Application design from `<record>/inception/application-design/` (if exists)
 - NFR requirements from `<record>/construction/{unit-name}/nfr-requirements/` (if exists)
 
-Incremental scopes (infra) skip the domain-design and functional-design chain by design. When those inputs are absent, derive the component topology from the NFR requirements and, on brownfield, the reverse-engineered code knowledge base at `aidlc/spaces/<active-space>/codekb/<repo>/` — never invent the content of a missing artifact.
+Incremental scopes (infra) skip the application-design and functional-design chain by design. When those inputs are absent, derive the component/service topology from the NFR requirements and, on brownfield, the reverse-engineered code knowledge base at `aidlc/spaces/<active-space>/codekb/<repo>/` — never invent the content of a missing artifact.
 
 ### Step 3: Generate Infrastructure Questions
 
@@ -134,58 +127,19 @@ Design infrastructure across four areas:
 
 ### Step 6: Generate Artifacts
 
-Generate the following in `<record>/construction/{unit-name}/infrastructure-design/`. Keep the content **tabular** — the deployment, services, and shared sections are tables, and monitoring is tabular wherever it can be. Prose is for rationale only, not for data a table can hold.
+Generate the following in `<record>/construction/{unit-name}/infrastructure-design/`:
 
-**1. `infrastructure-specification.md`** — the core infrastructure design: deployment, infrastructure services, and any shared resources, folded into one document. Structure it as:
-
-- **Deployment** — a table of deployment facets:
-  `| Facet | Choice | Rationale |`
-  with rows for compute model (containers/serverless/VMs/hybrid), networking topology (ingress/egress, VPC/subnet), storage strategy, environments (dev/staging/prod), IaC approach, and resource sizing.
-- **Infrastructure Services** — a table keyed by service:
-  `| Service | Role | Configuration | Notes |`
-  (role = database / cache / queue / search / cdn / dns / load-balancer; configuration = sizing, replication, eviction, etc.).
-- **Shared Infrastructure** (CONDITIONAL — only when multiple units share resources) — a table:
-  `| Shared Resource | Owner Unit | Consumer Units | Access Boundary |`
-
-**2. `monitoring-design.md`** — the platform-specific monitoring that implements the `observability-design` strategy from NFR Design, tabular wherever possible:
-
-- **Metrics & KPIs** — `| Metric | Source | Threshold | Why it matters |`
-- **Alerts** — `| Alert | Condition | Severity | Routes to |`
-- **SLIs / SLOs** — `| SLI | SLO target | Measurement window |`
-- **Logs & Tracing** — log aggregation strategy and tracing configuration (short prose or a small table); dashboard specifications.
-
-**3. `cicd-pipeline.md`** — the delivery pipeline: build stages, test-automation integration, deployment strategy (blue-green / canary / rolling), rollback procedures, environment promotion, and secrets management in CI/CD. Steps are inherently sequential, so prose or an ordered list is fine here; use a table for the stage→gate mapping where it helps.
-
-Create
-`<record>/construction/{unit-name}/infrastructure-design/traceability.json`.
-Enumerate every `NFRx.y` design decision that requires infrastructure and map
-it to the concrete resource or configuration:
-
-```json
-{
-  "stage": "infrastructure-design",
-  "unit": "u1-auth",
-  "upstream_ids": ["NFR1.1", "NFR3.1"],
-  "coverage": [
-    { "id": "NFR1.1", "status": "OK", "target": "ElastiCache cluster" },
-    { "id": "NFR3.1", "status": "GAP" }
-  ]
-}
-```
+- **deployment-architecture.md**: Compute resources, networking, storage, environment definitions, infrastructure-as-code approach, resource sizing
+- **infrastructure-services.md**: Database design, caching layer, messaging infrastructure, external service integrations, service discovery
+- **monitoring-design.md**: Metrics and KPIs, log strategy, tracing configuration, alert definitions, dashboard specifications, incident response
+- **cicd-pipeline.md**: Pipeline stages, build configuration, test automation integration, deployment strategy (blue-green, canary, rolling), rollback procedures, secrets management in CI/CD
+- **shared-infrastructure.md** (CONDITIONAL — produce when multiple units share infrastructure resources): Shared databases, shared caches, shared message queues, shared networking, cross-unit service discovery, resource ownership and access boundaries
 
 ### Step 7: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
-<<<<<<< HEAD
-`bun .codex/tools/aidlc-orchestrate.ts report --stage infrastructure-design --result <outcome>`.
-That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
-||||||| parent of df361fbee (feat: graduate native install mechanism)
-`bun .codex/tools/aidlc-orchestrate.ts report --stage infrastructure-design --result <outcome>`.
+`bun .codex/tools/aidlc.ts __delegate orchestrate report --stage infrastructure-design --result <outcome>`.
 The engine owns all lifecycle transitions and advancement.
-=======
-`aidlc __delegate orchestrate report --stage infrastructure-design --result <outcome>`.
-The engine owns all lifecycle transitions and advancement.
->>>>>>> df361fbee (feat: graduate native install mechanism)
 
 ### Step 8: Completion
 
@@ -210,10 +164,9 @@ This stage's outputs are markdown design artefacts under `<record>/construction/
 The imported sensors check those outputs:
 
 - **`required-sections`** verifies the output contains the registry default (≥2 H2 headings).
-- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter (this stage consumes `performance-design`, `security-design`, `scalability-design`, `reliability-design`, `observability-design`, `logical-components`, `components`, `functional-spec`, `contract-summary`).
+- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter (this stage consumes `performance-design`, `security-design`, `scalability-design`, `reliability-design`, `logical-components`, `components`, `services`, `business-logic-model`).
 - **`linter`** runs against any TypeScript/JavaScript snippets the design includes (matches `**/*.{ts,js}`).
 - **`type-check`** runs against any TypeScript/TSX snippets the design includes (matches `**/*.{ts,tsx}`).
-- **`traceability`** validates that every infrastructure-relevant `NFRx.y` design decision is declared and covered.
 
 Failure modes land in `<record>/.aidlc-sensors/<stage-slug>/` as `SENSOR_FAILED` audit rows with per-sensor detail files.
 

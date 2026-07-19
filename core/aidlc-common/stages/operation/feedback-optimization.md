@@ -79,7 +79,7 @@ Create SLO compliance report, AWS Cost Explorer analysis & optimization recommen
 ### Step 5: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
-`bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage feedback-optimization --result <outcome>`.
+`{{INVOKE}} __delegate orchestrate report --stage feedback-optimization --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 6: Present Completion & Request Approval

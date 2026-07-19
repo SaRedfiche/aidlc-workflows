@@ -53,9 +53,9 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ### Step 1: Load Agent Personas
 
-Load aidlc-architect-agent persona from `agents/aidlc-architect-agent.md` and knowledge from `.claude/knowledge/aidlc-architect-agent/`.
-Load aidlc-aws-platform-agent persona from `agents/aidlc-aws-platform-agent.md` and knowledge from `.claude/knowledge/aidlc-aws-platform-agent/` for AWS service mapping.
-Load aidlc-design-agent persona from `agents/aidlc-design-agent.md` and knowledge from `.claude/knowledge/aidlc-design-agent/` for UI component specifications and UX-informed design constraints.
+Load aidlc-architect-agent persona from `agents/aidlc-architect-agent.md` and knowledge from `{{HARNESS_DIR}}/knowledge/aidlc-architect-agent/`.
+Load aidlc-aws-platform-agent persona from `agents/aidlc-aws-platform-agent.md` and knowledge from `{{HARNESS_DIR}}/knowledge/aidlc-aws-platform-agent/` for AWS service mapping.
+Load aidlc-design-agent persona from `agents/aidlc-design-agent.md` and knowledge from `{{HARNESS_DIR}}/knowledge/aidlc-design-agent/` for UI component specifications and UX-informed design constraints.
 
 ### Step 2: Load Prior Context
 
@@ -132,7 +132,7 @@ When only one option is viable, state why and skip the block.
 ### Step 6: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
-`bun .claude/tools/aidlc.ts __delegate orchestrate report --stage application-design --result <outcome>`.
+`{{INVOKE}} __delegate orchestrate report --stage application-design --result <outcome>`.
 The engine owns all lifecycle transitions and advancement.
 
 ### Step 7: Present Completion & Request Approval
@@ -147,7 +147,7 @@ Use stage-protocol.md completion template with completion emoji: :building_const
   - Add Units Generation (if it was skipped in execution plan)
 
 If "Add Units Generation" is selected, run
-`bun .claude/tools/aidlc.ts __delegate utility recompose --add units-generation`
+`{{INVOKE}} __delegate utility recompose --add units-generation`
 before re-entering the approval flow.
 
 ## Sensors
@@ -179,7 +179,7 @@ harness destination per `stage-protocol.md` §13 — never to this stage file:
 
 - Prescriptive rule → a practice line under the routed heading in
   `aidlc/spaces/<active-space>/memory/project.md` (default) or `team.md` (promoted)
-- Verification check → new manifest at `.claude/sensors/aidlc-<id>.md`
+- Verification check → new manifest at `{{HARNESS_DIR}}/sensors/aidlc-<id>.md`
   (capability descriptor only — no `applies_to`); add the new id to
   the relevant stage's `sensors: [...]` frontmatter list to wire it
 

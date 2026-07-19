@@ -10,7 +10,6 @@ mode: inline
 summary_confirmation: required
 reviewer: aidlc-product-lead-agent
 reviewer_max_iterations: 2
-review_class: advisory
 produces:
   - intent-statement
   - stakeholder-map
@@ -159,8 +158,8 @@ confirmation `[Answer]:` is blank.
 ### Step 7: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
-`bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage intent-capture --result <outcome>`.
-That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
+`{{INVOKE}} __delegate orchestrate report --stage intent-capture --result <outcome>`.
+The engine owns all lifecycle transitions and advancement.
 
 ### Step 8: Present Completion & Request Approval
 

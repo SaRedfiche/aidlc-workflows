@@ -9,7 +9,6 @@ mode: inline
 summary_confirmation: required
 reviewer: aidlc-product-lead-agent
 reviewer_max_iterations: 2
-review_class: advisory
 produces:
   - requirements
   - requirements-analysis-questions
@@ -44,9 +43,7 @@ scopes:
   - refactor
   - infra
   - security-patch
-  - classic
   - workshop
-  - express
 inputs: RE artifacts (if brownfield), user's project description (from <record>/audit/<host>-<clone>.md)
 outputs: requirements.md, requirements-analysis-questions.md (under this stage's record dir, engine-resolved)
 ---
@@ -93,7 +90,7 @@ Extract and organize what is already known from the user's input:
 
 Evaluate coverage across six dimensions:
 1. **Functional requirements** — Core behaviors, features, use cases
-2. **Non-functional requirements** - Performance, security, scalability, reliability, observability
+2. **Non-functional requirements** — Performance, security, scalability, reliability
 3. **User scenarios** — User workflows, edge cases, error scenarios
 4. **Business context** — Goals, success metrics, stakeholders, constraints
 5. **Technical context** — Integration points, platform requirements, technology constraints
@@ -134,8 +131,7 @@ filled, append or update a `## Consolidated Summary Confirmation` entry in
 `<record>/inception/requirements-analysis/requirements-analysis-questions.md`.
 The entry MUST contain:
 
-- An unordered bullet list summarizing every answer (never number these summary
-  items; the following structured question starts its own response keys at 1)
+- A clear list summarizing every answer
 - `Does this all look correct before I generate the requirements artifact?`
 - `Looks correct` and `Request changes` options
 - A blank `[Answer]:` tag
@@ -156,29 +152,18 @@ confirmation `[Answer]:` to blank, and repeat this step. Do NOT create
 
 Create `<record>/inception/requirements-analysis/requirements.md` containing:
 - **Intent analysis** — What the user is trying to achieve (goals, not just features)
-- **Functional requirements** — Organized by feature area or domain. Give every requirement a stable `FR{n}` ID (for example `FR1`) and every sub-requirement an `FR{n}.{m}` ID (for example `FR1.2`).
-- **Non-functional requirements** — Performance, security, scalability, reliability, and observability targets. Give every requirement a stable `NFR{n}` ID (for example `NFR3`).
+- **Functional requirements** — Organized by feature area or domain
+- **Non-functional requirements** — Performance, security, scalability targets
 - **Constraints** — Technical, business, and organizational constraints
 - **Assumptions** — Documented assumptions with rationale
 - **Out of scope** — Explicitly excluded items
 - **Open questions** — Any remaining uncertainties for later stages
 
-These IDs are permanent traceability keys. Downstream stages must preserve
-them exactly rather than renumbering or replacing them with prose references.
-
 ### Step 12: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
-<<<<<<< HEAD
-`bun .aidlc/tools/aidlc-orchestrate.ts report --stage requirements-analysis --result <outcome>`.
-That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
-||||||| parent of df361fbee (feat: graduate native install mechanism)
-`bun .aidlc/tools/aidlc-orchestrate.ts report --stage requirements-analysis --result <outcome>`.
+`bun .aidlc/tools/aidlc.ts __delegate orchestrate report --stage requirements-analysis --result <outcome>`.
 The engine owns all lifecycle transitions and advancement.
-=======
-`aidlc __delegate orchestrate report --stage requirements-analysis --result <outcome>`.
-The engine owns all lifecycle transitions and advancement.
->>>>>>> df361fbee (feat: graduate native install mechanism)
 
 ### Step 13: Present Completion & Request Approval
 
@@ -202,7 +187,7 @@ Render `[next stage]` verbatim from the run-stage directive's `next_stage`
 field (per the stage-protocol.md approval-gate binding), or `Complete workflow`
 when it is null. Never guess the next stage name.
 If "Add User Stories" is selected, run
-`aidlc __delegate utility recompose --add user-stories`
+`bun .aidlc/tools/aidlc.ts __delegate utility recompose --add user-stories`
 before re-entering the approval flow.
 
 IF User Stories is NOT set to SKIP: use standard 2-option approval (Approve / Request Changes).

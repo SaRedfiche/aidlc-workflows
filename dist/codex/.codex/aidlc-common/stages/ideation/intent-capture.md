@@ -10,7 +10,6 @@ mode: inline
 summary_confirmation: required
 reviewer: aidlc-product-lead-agent
 reviewer_max_iterations: 2
-review_class: advisory
 produces:
   - intent-statement
   - stakeholder-map
@@ -159,16 +158,8 @@ confirmation `[Answer]:` is blank.
 ### Step 7: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
-<<<<<<< HEAD
-`bun .codex/tools/aidlc-orchestrate.ts report --stage intent-capture --result <outcome>`.
-That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
-||||||| parent of df361fbee (feat: graduate native install mechanism)
-`bun .codex/tools/aidlc-orchestrate.ts report --stage intent-capture --result <outcome>`.
+`bun .codex/tools/aidlc.ts __delegate orchestrate report --stage intent-capture --result <outcome>`.
 The engine owns all lifecycle transitions and advancement.
-=======
-`aidlc __delegate orchestrate report --stage intent-capture --result <outcome>`.
-The engine owns all lifecycle transitions and advancement.
->>>>>>> df361fbee (feat: graduate native install mechanism)
 
 ### Step 8: Present Completion & Request Approval
 

@@ -14,7 +14,9 @@ produces:
   - validation-report
   - environment-provisioning-questions
 consumes:
-  - artifact: infrastructure-specification
+  - artifact: deployment-architecture
+    required: true
+  - artifact: infrastructure-services
     required: true
   - artifact: cd-config
     required: true
@@ -28,7 +30,6 @@ scopes:
   - enterprise
   - feature
   - infra
-  - classic
   - workshop
 inputs: Infrastructure design from infrastructure-design stage, CD pipeline config from deployment-pipeline stage
 outputs: environment-inventory.md, validation-report.md, environment-provisioning-questions.md (under this stage's record dir, engine-resolved)
@@ -70,16 +71,8 @@ Create provisioned environment inventory, infrastructure validation report, secr
 ### Step 6: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
-<<<<<<< HEAD
-`bun .codex/tools/aidlc-orchestrate.ts report --stage environment-provisioning --result <outcome>`.
-That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
-||||||| parent of df361fbee (feat: graduate native install mechanism)
-`bun .codex/tools/aidlc-orchestrate.ts report --stage environment-provisioning --result <outcome>`.
+`bun .codex/tools/aidlc.ts __delegate orchestrate report --stage environment-provisioning --result <outcome>`.
 The engine owns all lifecycle transitions and advancement.
-=======
-`aidlc __delegate orchestrate report --stage environment-provisioning --result <outcome>`.
-The engine owns all lifecycle transitions and advancement.
->>>>>>> df361fbee (feat: graduate native install mechanism)
 
 ### Step 7: Present Completion & Request Approval
 
@@ -94,7 +87,7 @@ This stage's outputs are markdown artefacts under `<record>/operation/environmen
 The imported sensors check those outputs:
 
 - **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
-- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `infrastructure-specification`, `cd-config`).
+- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `deployment-architecture`, `infrastructure-services`, `cd-config`).
 
 ## Learn
 

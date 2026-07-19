@@ -21,7 +21,7 @@ consumes:
     required: true
   - artifact: security-design
     required: true
-  - artifact: infrastructure-specification
+  - artifact: deployment-architecture
     required: true
 requires_stage:
   - observability-setup
@@ -31,7 +31,6 @@ sensors:
 scopes:
   - enterprise
   - feature
-  - classic
   - workshop
 inputs: Observability setup from observability-setup stage, NFR design from nfr-design stage, infrastructure design from infrastructure-design stage
 outputs: runbooks.md, incident-plan.md, escalation-matrix.md, incident-response-questions.md (under this stage's record dir, engine-resolved)
@@ -71,16 +70,8 @@ Create SSM Automation runbook library, incident response plan (integrated with A
 ### Step 5: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
-<<<<<<< HEAD
-`bun .kiro/tools/aidlc-orchestrate.ts report --stage incident-response --result <outcome>`.
-That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
-||||||| parent of df361fbee (feat: graduate native install mechanism)
-`bun .kiro/tools/aidlc-orchestrate.ts report --stage incident-response --result <outcome>`.
+`bun .kiro/tools/aidlc.ts __delegate orchestrate report --stage incident-response --result <outcome>`.
 The engine owns all lifecycle transitions and advancement.
-=======
-`aidlc __delegate orchestrate report --stage incident-response --result <outcome>`.
-The engine owns all lifecycle transitions and advancement.
->>>>>>> df361fbee (feat: graduate native install mechanism)
 
 ### Step 6: Present Completion & Request Approval
 
@@ -95,7 +86,7 @@ This stage's outputs are markdown artefacts under `<record>/operation/incident-r
 The imported sensors check those outputs:
 
 - **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
-- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `dashboards`, `alarms`, `reliability-design`, `security-design`, `infrastructure-specification`).
+- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `dashboards`, `alarms`, `reliability-design`, `security-design`, `deployment-architecture`).
 
 ## Learn
 

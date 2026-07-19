@@ -72,16 +72,8 @@ Create team availability assessment, skill matrix (with gap analysis), mob compo
 ### Step 6: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
-<<<<<<< HEAD
-`bun .aidlc/tools/aidlc-orchestrate.ts report --stage team-formation --result <outcome>`.
-That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
-||||||| parent of df361fbee (feat: graduate native install mechanism)
-`bun .aidlc/tools/aidlc-orchestrate.ts report --stage team-formation --result <outcome>`.
+`bun .aidlc/tools/aidlc.ts __delegate orchestrate report --stage team-formation --result <outcome>`.
 The engine owns all lifecycle transitions and advancement.
-=======
-`aidlc __delegate orchestrate report --stage team-formation --result <outcome>`.
-The engine owns all lifecycle transitions and advancement.
->>>>>>> df361fbee (feat: graduate native install mechanism)
 
 ### Step 7: Present Completion & Request Approval
 

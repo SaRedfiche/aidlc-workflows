@@ -17,7 +17,7 @@ consumes:
     required: true
   - artifact: quality-gates
     required: true
-  - artifact: infrastructure-specification
+  - artifact: deployment-architecture
     required: true
   - artifact: cicd-pipeline
     required: true
@@ -32,9 +32,7 @@ scopes:
   - feature
   - infra
   - security-patch
-  - classic
   - workshop
-  - express
 inputs: CI pipeline config from ci-pipeline stage, infrastructure design from infrastructure-design stage
 outputs: cd-config.md, deployment-strategy.md, rollback-runbook.md, deployment-pipeline-questions.md (under this stage's record dir, engine-resolved)
 ---
@@ -55,14 +53,7 @@ Load aidlc-pipeline-deploy-agent persona from `agents/aidlc-pipeline-deploy-agen
 - Read infrastructure design from `<record>/construction/infrastructure-design/` (if exists)
 - Read NFR design (deployment-related NFRs) from `<record>/construction/nfr-design/` (if exists)
 
-Incremental scopes (security-patch) and `express` skip CI Pipeline and
-Infrastructure Design by design. On brownfield, inspect the workspace's
-existing pipeline and infrastructure configuration plus the code knowledge
-base. On Express greenfield, use the approved requirements, Build and Test
-results, and deployment artifacts generated in the workspace (for example a
-Dockerfile, service manifest, or IaC); if no deployable target exists, this
-CONDITIONAL stage reports skipped. Design only against evidence that exists -
-never invent a missing CI or infrastructure artifact.
+Incremental scopes (security-patch) skip ci-pipeline and infrastructure-design by design; a brownfield production system already has CI and deployment infrastructure. When those inputs are absent, inspect the workspace's existing pipeline and infrastructure configuration (and the code knowledge base on brownfield) and design the CD path against what is actually deployed — never invent the content of a missing artifact.
 
 ### Step 3: Generate Clarifying Questions
 
@@ -82,16 +73,8 @@ Create CD pipeline configuration, deployment strategy document, rollback runbook
 ### Step 5: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
-<<<<<<< HEAD
-`bun .claude/tools/aidlc-orchestrate.ts report --stage deployment-pipeline --result <outcome>`.
-That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
-||||||| parent of df361fbee (feat: graduate native install mechanism)
-`bun .claude/tools/aidlc-orchestrate.ts report --stage deployment-pipeline --result <outcome>`.
+`bun .claude/tools/aidlc.ts __delegate orchestrate report --stage deployment-pipeline --result <outcome>`.
 The engine owns all lifecycle transitions and advancement.
-=======
-`aidlc __delegate orchestrate report --stage deployment-pipeline --result <outcome>`.
-The engine owns all lifecycle transitions and advancement.
->>>>>>> df361fbee (feat: graduate native install mechanism)
 
 ### Step 6: Present Completion & Request Approval
 
@@ -106,7 +89,7 @@ This stage's outputs are markdown artefacts under `<record>/operation/deployment
 The imported sensors check those outputs:
 
 - **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
-- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `ci-config`, `quality-gates`, `infrastructure-specification`, `cicd-pipeline`).
+- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `ci-config`, `quality-gates`, `deployment-architecture`, `cicd-pipeline`).
 
 ## Learn
 
