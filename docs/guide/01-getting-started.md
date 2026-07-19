@@ -241,7 +241,7 @@ cd your-project
 
 All `/aidlc` commands run relative to the project root.
 
-### Alternative: self-contained macOS/Linux channel
+### Alternative: self-contained native channel
 
 Published releases also carry a native installer. It installs a checksum-
 verified binary and the selected harness runtime without bun, Node.js, or git:
@@ -259,8 +259,24 @@ Use `--harness kiro`, `kiro-ide`, or `codex` for another distribution.
 `install.sh --from <release-directory> --offline --harness <name>` installs an
 air-gapped package. Pass `--profile "$HOME/.profile"` only when the installer
 should add its marked PATH block; profiles are never edited by default.
-Windows self-install arrives in the next lifecycle release; the copy-install
-instructions above remain supported on every platform.
+
+On Windows PowerShell:
+
+```powershell
+$installer = Join-Path $env:TEMP install-aidlc.ps1
+irm https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.ps1 -OutFile $installer
+& $installer -Harness claude
+cd your-project
+aidlc init --mcp none
+aidlc doctor
+```
+
+The installer places a stable `aidlc.cmd` under
+`%LOCALAPPDATA%\aidlc\bin`, verifies the same release checksums, and supports
+`-From <release-directory> -Offline` for an air-gapped package. It adds that
+directory to the current PowerShell session and prints the exact command needed
+in a new session when the directory is not already on `PATH`. Copy-install
+instructions remain supported on every platform.
 
 ---
 
