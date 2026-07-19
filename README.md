@@ -62,6 +62,12 @@ Ad-hoc AI coding works until the project gets real. Then context drifts between 
 The deterministic engine — state machine, audit log, and the referee that coordinates parallel agents — is byte-identical across every harness; only the shell differs. Each section in the [Quick Start](#quick-start) installs one harness end to end, and its guide above goes deeper on prerequisites and differences.
 
 > [!NOTE]
+> Release assets now also support a self-contained macOS/Linux install channel:
+> `install.sh --harness <name>` installs the native `aidlc` command, and
+> `aidlc init` safely initializes or refreshes a project. The documented copy
+> install remains supported and continues to require bun.
+
+> [!NOTE]
 > AI-DLC on Kiro (IDE or CLI) works best with **Claude Opus 4.8**, which requires a **paid Kiro plan**. On weaker models the conductor may skip optional stage steps (reviewer pass, learnings ritual) or rush approval gates.
 
 ## Recommended Model
@@ -312,6 +318,8 @@ aidlc-claude/
 │   ├── package.ts              # THE build entry: copy core+harness per manifest → graph compile →
 │   │                           #   runner-gen → emit() per tree.  --check = total drift guard (CI)
 │   ├── build-binaries.ts       # release-only CLI bundles under ignored build/
+│   ├── package-release.ts      # flat release assets, data archives, checksums, version manifest
+│   ├── install.sh              # macOS/Linux online and offline bootstrap
 │   └── manifest-types.ts       # shared manifest contract
 │
 │  ─────────── GENERATED, COMMITTED, DRIFT-GUARDED — never hand-edit ───────────
@@ -321,6 +329,7 @@ aidlc-claude/
 │   ├── kiro/{AGENTS.md, .kiro/}              # what Kiro CLI users copy
 │   ├── codex/{AGENTS.md, .agents/, .codex/}  # what Codex CLI users copy
 │   └── plugins/<name>/{claude,codex,kiro,kiro-ide}/  # one real host plugin per harness — install alongside dist/<harness>/
+├── dist-release/               # GENERATED binary-invocation projections packaged into release archives
 │
 │  ─────────── SUPPORTING ───────────
 ├── tests/                      # all-TypeScript suite (t*.test.ts) — resolves dist via AIDLC_SRC
@@ -346,11 +355,11 @@ Release binary artifacts are built separately after the drift guard is clean:
 ```bash
 bun scripts/build-binaries.ts                 # native binary + mandatory smoke gates
 bun scripts/build-binaries.ts --all-targets   # release matrix
+bun scripts/package-release.ts                # flat archives + checksums + version.json + installer
 ```
 
-Each target is emitted under `build/binaries/<target>/` with the executable
-and a `runtime/<harness>/` copy of every generated harness distribution it may
-dispatch into.
+Each target is emitted under `build/binaries/<target>/`; the release packager
+combines those binaries with the committed `dist-release/` projections.
 
 Adding a whole new harness? See [Porting to a New Harness](docs/harness-engineering/09-porting-to-a-new-harness.md). The authoritative build reference is the [Contributing Guide](docs/reference/11-contributing.md#development-workflow).
 

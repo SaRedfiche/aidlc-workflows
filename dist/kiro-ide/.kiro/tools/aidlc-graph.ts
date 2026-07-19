@@ -48,6 +48,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  aidlcToolInvocation,
   resolveDistributionPath,
   resolveHarnessPath,
   runtimeProjectDir,
@@ -1993,7 +1994,7 @@ function runCompileCheck(): void {
   const graphOnDisk = readFileSync(stageGraphPath(), "utf-8");
   if (json !== graphOnDisk) {
     console.error(
-      "stage-graph.json is out of date. Run `bun aidlc-graph.ts compile` to regenerate."
+      `stage-graph.json is out of date. Run \`${aidlcToolInvocation("graph", undefined, false)} compile\` to regenerate.`
     );
     process.exit(1);
   }
@@ -2023,7 +2024,7 @@ function runCompileCheck(): void {
   }
   if (gridJson !== gridOnDisk) {
     console.error(
-      "scope-grid.json is out of date. Run `bun aidlc-graph.ts compile` to regenerate."
+      `scope-grid.json is out of date. Run \`${aidlcToolInvocation("graph", undefined, false)} compile\` to regenerate.`
     );
     process.exit(1);
   }
@@ -2711,7 +2712,9 @@ const COMMANDS: Record<string, Handler> = {
       if (json !== expected) {
         console.error(
           `export --check: bundle drift vs ${fixturePath}. ` +
-            `Regenerate with: bun aidlc-graph.ts export > ${fixturePath}`
+            `Regenerate with: ${
+              aidlcToolInvocation("graph", undefined, false)
+            } export > ${fixturePath}`
         );
         process.exit(1);
       }
