@@ -1,4 +1,4 @@
-// covers: hook:aidlc-write-audit-log, hook:aidlc-run-sensors, hook:aidlc-sync-workflow-state, hook:aidlc-rebuild-stage-graph, hook:aidlc-validate-state, hook:aidlc-log-subagent, hook:aidlc-continue-workflow
+// covers: hook:aidlc-audit-logger, hook:aidlc-sensor-fire, hook:aidlc-sync-statusline, hook:aidlc-runtime-compile, hook:aidlc-validate-state, hook:aidlc-log-subagent, hook:aidlc-stop
 //
 // t131 — the hooks move (Fork 2→B). Migrated from
 // tests/integration/t131-hooks-settings-fire.sh (TAP plan 16). With the six
@@ -27,18 +27,18 @@
 //
 // SOURCE UNDER TEST:
 //   dist/claude/.claude/settings.json — the hooks: block (lines 32-121).
-//       PostToolUse Write|Edit -> aidlc-write-audit-log.ts + aidlc-run-sensors.ts;
-//       PostToolUse TaskUpdate -> aidlc-sync-workflow-state.ts; PostToolUse Bash ->
-//       aidlc-rebuild-stage-graph.ts; PreCompact -> aidlc-validate-state.ts;
-//       SubagentStop -> aidlc-log-subagent.ts; Stop -> aidlc-continue-workflow.ts.
+//       PostToolUse Write|Edit -> aidlc-audit-logger.ts + aidlc-sensor-fire.ts;
+//       PostToolUse TaskUpdate -> aidlc-sync-statusline.ts; PostToolUse Bash ->
+//       aidlc-runtime-compile.ts; PreCompact -> aidlc-validate-state.ts;
+//       SubagentStop -> aidlc-log-subagent.ts; Stop -> aidlc-stop.ts.
 //   dist/claude/.claude/skills/aidlc/SKILL.md — frontmatter no longer carries
 //       a `^hooks:` line.
-//   dist/claude/.claude/hooks/aidlc-write-audit-log.ts — PostToolUse Write|Edit.
+//   dist/claude/.claude/hooks/aidlc-audit-logger.ts — PostToolUse Write|Edit.
 //       Self-gates: only logs writes to aidlc-docs/ (:47) AND only when
 //       audit.md already exists (:55, "Don't auto-create audit.md"). Inside a
 //       workflow (audit.md present) a Write under aidlc-docs/ -> appendAuditEntry
 //       (:95) appends one ARTIFACT_CREATED/UPDATED row.
-//   dist/claude/.claude/hooks/aidlc-rebuild-stage-graph.ts — PostToolUse Bash.
+//   dist/claude/.claude/hooks/aidlc-runtime-compile.ts — PostToolUse Bash.
 //       Self-gates: command must match aidlc-(state|jump|bolt|utility).ts (:61-64)
 //       AND audit.md must exist (:68). On a GATE_APPROVED-tail audit it dispatches
 //       `bun run <proj>/.claude/tools/aidlc-runtime.ts compile` (:106-111), which
@@ -188,54 +188,54 @@ describe("t131 hooks-move registration (settings.json + SKILL.md, mechanism none
 
   test("R2: audit-logger registered on PostToolUse [.sh test 2]", () => {
     expect(
-      eventHasHook(readSettings(), "PostToolUse", "aidlc-write-audit-log.ts"),
+      eventHasHook(readSettings(), "PostToolUse", "aidlc hook audit-logger"),
     ).toBe(true);
   });
 
   test("R3: sensor-fire registered on PostToolUse [.sh test 3]", () => {
     expect(
-      eventHasHook(readSettings(), "PostToolUse", "aidlc-run-sensors.ts"),
+      eventHasHook(readSettings(), "PostToolUse", "aidlc hook sensor-fire"),
     ).toBe(true);
   });
 
   test("R4: sync-statusline registered on PostToolUse [.sh test 4]", () => {
     expect(
-      eventHasHook(readSettings(), "PostToolUse", "aidlc-sync-workflow-state.ts"),
+      eventHasHook(readSettings(), "PostToolUse", "aidlc hook sync-statusline"),
     ).toBe(true);
   });
 
   test("R5: runtime-compile registered on PostToolUse [.sh test 5]", () => {
     expect(
-      eventHasHook(readSettings(), "PostToolUse", "aidlc-rebuild-stage-graph.ts"),
+      eventHasHook(readSettings(), "PostToolUse", "aidlc hook runtime-compile"),
     ).toBe(true);
   });
 
   test("R6: validate-state registered on PreCompact [.sh test 6]", () => {
     expect(
-      eventHasHook(readSettings(), "PreCompact", "aidlc-validate-state.ts"),
+      eventHasHook(readSettings(), "PreCompact", "aidlc hook validate-state"),
     ).toBe(true);
   });
 
   test("R7: log-subagent registered on SubagentStop [.sh test 7]", () => {
     expect(
-      eventHasHook(readSettings(), "SubagentStop", "aidlc-log-subagent.ts"),
+      eventHasHook(readSettings(), "SubagentStop", "aidlc hook log-subagent"),
     ).toBe(true);
   });
 
   test("R8: stop registered on Stop [.sh test 8]", () => {
-    expect(eventHasHook(readSettings(), "Stop", "aidlc-continue-workflow.ts")).toBe(true);
+    expect(eventHasHook(readSettings(), "Stop", "aidlc hook stop")).toBe(true);
   });
 
   test("R9: audit-logger matcher is Write|Edit [.sh test 9]", () => {
     // .sh: assert_eq WE_MATCHER "Write|Edit". The matcher belongs to the
     // PostToolUse group that carries the audit-logger command.
     expect(
-      matcherForHook(readSettings(), "PostToolUse", "aidlc-write-audit-log.ts"),
+      matcherForHook(readSettings(), "PostToolUse", "aidlc hook audit-logger"),
     ).toBe("Write|Edit");
     // STRONGER: runtime-compile (the other PostToolUse seam under test) sits in
     // a Bash-matcher group, distinct from the Write|Edit group.
     expect(
-      matcherForHook(readSettings(), "PostToolUse", "aidlc-rebuild-stage-graph.ts"),
+      matcherForHook(readSettings(), "PostToolUse", "aidlc hook runtime-compile"),
     ).toBe("Bash");
   });
 
@@ -273,7 +273,7 @@ function makeProject(withState: boolean): string {
     join(SRC_TOOLS, "data", "stage-graph.json"),
     join(proj, ".claude", "tools", "data", "stage-graph.json"),
   );
-  for (const h of ["aidlc-write-audit-log.ts", "aidlc-rebuild-stage-graph.ts"]) {
+  for (const h of ["aidlc-audit-logger.ts", "aidlc-runtime-compile.ts"]) {
     copyFileSync(join(SRC_HOOKS, h), join(proj, ".claude", "hooks", h));
   }
   writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
@@ -287,9 +287,9 @@ function makeProject(withState: boolean): string {
 }
 
 const auditLoggerHook = (proj: string): string =>
-  join(proj, ".claude", "hooks", "aidlc-write-audit-log.ts");
+  join(proj, ".claude", "hooks", "aidlc-audit-logger.ts");
 const runtimeCompileHook = (proj: string): string =>
-  join(proj, ".claude", "hooks", "aidlc-rebuild-stage-graph.ts");
+  join(proj, ".claude", "hooks", "aidlc-runtime-compile.ts");
 const graphPath = (proj: string): string =>
   join(seededRecordDir(proj), "runtime-graph.json");
 

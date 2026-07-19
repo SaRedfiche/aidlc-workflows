@@ -20,9 +20,9 @@
 // matcher set, AND MEMORY_EMPTY is not in the event-class regex. The
 // compile's own audit emits cannot re-trigger the compile.
 
-import { spawnSync } from "node:child_process";
 import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { compileRuntime } from "../tools/aidlc-runtime.ts";
 import {
   activeIntent,
   activeSpace,
@@ -40,7 +40,6 @@ import {
   recordHookDrop,
   resolveProjectDirFromHook,
   runtimeGraphPath,
-  harnessDir,
   writeSessionIntentHandoff,
   writeSessionIntentUuid,
 } from "../tools/aidlc-lib.ts";
@@ -124,7 +123,7 @@ bindCreatedIntentToInvokingSession(projectDir, parsed);
 //    legacy tool-file commands and the new `aidlc ...` grammar.
 //    aidlc-runtime.ts / aidlc runtime is rejected explicitly (recursion guard
 //    at the command level - a positive-only allowlist would let composites like
-//    `bun aidlc-runtime.ts compile && bun aidlc-state.ts approve` through and
+//    `{{INVOKE}} __delegate runtime compile && {{INVOKE}} __delegate state approve` through and
 //    loop). aidlc-log.ts emits only chatty in-stage events
 //    (DECISION_RECORDED / QUESTION_ANSWERED / ERROR_LOGGED), none
 //    transition-class. aidlc-worktree.ts emits only WORKTREE_* events.
@@ -231,24 +230,10 @@ if (ideAuditMode) {
   }
 }
 
-// 8. Dispatch — sync subprocess. Hook waits for completion. On non-zero
-//    exit, record the drop for `--doctor` to surface; never block the
-//    parent Bash call (mirrors aidlc-write-audit-log.ts:95-101).
-const runtimeTs = join(projectDir, harnessDir(), "tools", "aidlc-runtime.ts");
+// 8. Dispatch in-process. On failure, record the drop for `--doctor` to
+//    surface; never block the parent Bash call.
 try {
-  const args = ["run", runtimeTs, "compile"];
-  const result = spawnSync("bun", args, {
-    cwd: projectDir,
-    timeout: 30_000,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  if (result.status !== 0) {
-    recordHookDrop(
-      projectDir,
-      "rebuild-stage-graph",
-      `exit ${result.status}: ${result.stderr?.toString() ?? ""}`
-    );
-  }
+  compileRuntime(projectDir);
 } catch (e) {
   recordHookDrop(projectDir, "rebuild-stage-graph", errorMessage(e));
 }

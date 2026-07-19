@@ -72,7 +72,7 @@ per-unit construction stages stage-major: it runs 3.1 for every Unit, then 3.2
 for every Unit, and so on, with 3.5 Code Generation last for every Unit. When
 the state file records `Construction Iteration: unit-major` under
 `## Runtime State` (set at delivery-planning via
-`aidlc-state.ts set-construction-iteration unit-major`, or by a human), the
+`aidlc __delegate state set-construction-iteration unit-major`, or by a human), the
 engine walks unit-major instead: for each Unit in Bolt build order, it authors
 that Unit's four design documents (3.1 through 3.4) and then generates its code
 (3.5) before the next Unit begins — the first working code lands after one

@@ -20,9 +20,9 @@
 // matcher set, AND MEMORY_EMPTY is not in the event-class regex. The
 // compile's own audit emits cannot re-trigger the compile.
 
-import { spawnSync } from "node:child_process";
 import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { compileRuntime } from "../tools/aidlc-runtime.ts";
 import {
   activeIntent,
   activeSpace,
@@ -40,9 +40,14 @@ import {
   recordHookDrop,
   resolveProjectDirFromHook,
   runtimeGraphPath,
+<<<<<<< HEAD:dist/codex/.codex/hooks/aidlc-rebuild-stage-graph.ts
   harnessDir,
   writeSessionIntentHandoff,
   writeSessionIntentUuid,
+||||||| parent of a7ee3db2a (fix: close native install integration gaps):dist/codex/.codex/hooks/aidlc-runtime-compile.ts
+  harnessDir,
+=======
+>>>>>>> a7ee3db2a (fix: close native install integration gaps):dist/codex/.codex/hooks/aidlc-runtime-compile.ts
 } from "../tools/aidlc-lib.ts";
 
 // intent-create runs before a workflow exists, so SessionStart cannot stamp that
@@ -231,11 +236,22 @@ if (ideAuditMode) {
   }
 }
 
+<<<<<<< HEAD:dist/codex/.codex/hooks/aidlc-rebuild-stage-graph.ts
 // 8. Dispatch — sync subprocess. Hook waits for completion. On non-zero
 //    exit, record the drop for `--doctor` to surface; never block the
 //    parent Bash call (mirrors aidlc-write-audit-log.ts:95-101).
 const runtimeTs = join(projectDir, harnessDir(), "tools", "aidlc-runtime.ts");
+||||||| parent of a7ee3db2a (fix: close native install integration gaps):dist/codex/.codex/hooks/aidlc-runtime-compile.ts
+// 8. Dispatch — sync subprocess. Hook waits for completion. On non-zero
+//    exit, record the drop for `--doctor` to surface; never block the
+//    parent Bash call (mirrors aidlc-audit-logger.ts:95-101).
+const runtimeTs = join(projectDir, harnessDir(), "tools", "aidlc-runtime.ts");
+=======
+// 8. Dispatch in-process. On failure, record the drop for `--doctor` to
+//    surface; never block the parent Bash call.
+>>>>>>> a7ee3db2a (fix: close native install integration gaps):dist/codex/.codex/hooks/aidlc-runtime-compile.ts
 try {
+<<<<<<< HEAD:dist/codex/.codex/hooks/aidlc-rebuild-stage-graph.ts
   const args = ["run", runtimeTs, "compile"];
   const result = spawnSync("bun", args, {
     cwd: projectDir,
@@ -249,6 +265,23 @@ try {
       `exit ${result.status}: ${result.stderr?.toString() ?? ""}`
     );
   }
+||||||| parent of a7ee3db2a (fix: close native install integration gaps):dist/codex/.codex/hooks/aidlc-runtime-compile.ts
+  const args = ["run", runtimeTs, "compile"];
+  const result = spawnSync("bun", args, {
+    cwd: projectDir,
+    timeout: 30_000,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.status !== 0) {
+    recordHookDrop(
+      projectDir,
+      "runtime-compile",
+      `exit ${result.status}: ${result.stderr?.toString() ?? ""}`
+    );
+  }
+=======
+  compileRuntime(projectDir);
+>>>>>>> a7ee3db2a (fix: close native install integration gaps):dist/codex/.codex/hooks/aidlc-runtime-compile.ts
 } catch (e) {
   recordHookDrop(projectDir, "rebuild-stage-graph", errorMessage(e));
 }

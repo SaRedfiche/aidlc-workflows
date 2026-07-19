@@ -23,15 +23,15 @@
 //     lines (SKILL.md:1-14). Fields asserted: name, description, user-invocable;
 //     the absence of a top-level `hooks:` key in that block.
 //   settings.json          — the project-wide hook registration. PostToolUse
-//     Write|Edit matcher carries aidlc-write-audit-log.ts; PreCompact carries
-//     aidlc-validate-state.ts; SubagentStop carries aidlc-log-subagent.ts.
+//     Write|Edit matcher carries `aidlc hook audit-logger`; PreCompact carries
+//     `aidlc hook validate-state`; SubagentStop carries `aidlc hook log-subagent`.
 //
 // Old TAP -> new test parity (1:1, every .sh assertion -> a named test()):
 //   .sh 1  assert_grep SKILL  "^name: aidlc"                  -> "frontmatter declares name: aidlc"
 //   .sh 2  assert_grep SKILL  "^description:"                 -> "frontmatter carries a description field"
 //   .sh 3  assert_grep SKILL  "^user-invocable: true"         -> "frontmatter is user-invocable: true"
 //   .sh 4  assert_not_grep SKILL "^hooks:"                    -> "frontmatter carries NO hooks: block (moved to settings.json)"
-//   .sh 5  assert_grep SETTINGS "aidlc-write-audit-log.ts"       -> "settings.json registers aidlc-write-audit-log.ts"
+//   .sh 5  assert_grep SETTINGS "aidlc-audit-logger.ts"       -> "settings.json registers aidlc-audit-logger.ts"
 //   .sh 6  assert_grep SETTINGS "\"PostToolUse\""             -> "settings.json registers a PostToolUse hook block"
 //   .sh 7  assert_grep SETTINGS "\"PreCompact\""              -> "settings.json registers a PreCompact hook block"
 //   .sh 8  assert_grep SETTINGS "aidlc-validate-state.ts"     -> "settings.json references aidlc-validate-state.ts"
@@ -124,33 +124,27 @@ describe("t06 SKILL.md frontmatter (migrated from t06-skill-frontmatter.sh, plan
   });
 
   // --- settings.json hook registration (.sh tests 5-9) ---------------------
-  test("settings.json registers aidlc-write-audit-log.ts on PostToolUse [.sh 5 + 6]", () => {
-    // .sh 5: aidlc-write-audit-log.ts appears; .sh 6: a PostToolUse block exists.
+  test("settings.json registers the audit-logger hook on PostToolUse [.sh 5 + 6]", () => {
+    // .sh 5: the audit logger appears; .sh 6: a PostToolUse block exists.
     // STRONGER: the audit-logger command is bound to the PostToolUse event
     // (the .sh only proved each appears SOMEWHERE in the file independently).
     const postCmds = commandsForEvent("PostToolUse");
     expect(postCmds.length).toBeGreaterThan(0); // PostToolUse block present (.sh 6)
-    expect(
-      postCmds.some((c) => c.includes("aidlc-write-audit-log.ts")),
-    ).toBe(true); // audit-logger registered there (.sh 5)
+    expect(postCmds).toContain("aidlc hook audit-logger");
   });
 
-  test("settings.json registers aidlc-validate-state.ts on PreCompact [.sh 7 + 8]", () => {
-    // .sh 7: a PreCompact block exists; .sh 8: aidlc-validate-state.ts appears.
+  test("settings.json registers the validate-state hook on PreCompact [.sh 7 + 8]", () => {
+    // .sh 7: a PreCompact block exists; .sh 8: validate-state appears.
     // STRONGER: validate-state is the PreCompact hook (not just present).
     const preCompactCmds = commandsForEvent("PreCompact");
     expect(preCompactCmds.length).toBeGreaterThan(0); // PreCompact block present (.sh 7)
-    expect(
-      preCompactCmds.some((c) => c.includes("aidlc-validate-state.ts")),
-    ).toBe(true); // validate-state registered there (.sh 8)
+    expect(preCompactCmds).toContain("aidlc hook validate-state");
   });
 
-  test("settings.json registers aidlc-log-subagent.ts on SubagentStop [.sh 9]", () => {
+  test("settings.json registers the log-subagent hook on SubagentStop [.sh 9]", () => {
     // STRONGER: log-subagent is the SubagentStop hook, the event that owns it
     // (the .sh only proved the filename appears anywhere in settings.json).
     const subagentCmds = commandsForEvent("SubagentStop");
-    expect(
-      subagentCmds.some((c) => c.includes("aidlc-log-subagent.ts")),
-    ).toBe(true);
+    expect(subagentCmds).toContain("aidlc hook log-subagent");
   });
 });

@@ -705,12 +705,19 @@ export function blockReason(target: string, dispatch: ReviewerDispatch): string 
 // identity during enforcement.
 const REVIEW_AGENT_RE = /^aidlc-(architecture-reviewer|product-lead)-agent$/;
 
+<<<<<<< HEAD
 // --- Main ---------------------------------------------------------------------
 
 /** The dispatchable body (`aidlc hook reviewer-scope` requires an exported
  *  run(input)). Returns the exit code (0 allow, 2 block with the reason on
  *  stderr) instead of process.exit so the compiled-binary route can relay the
  *  block; the CLI entry below preserves the direct-run contract unchanged. */
+||||||| parent of a7ee3db2a (fix: close native install integration gaps)
+// --- Main ---------------------------------------------------------------------
+
+if (import.meta.main) {
+=======
+>>>>>>> a7ee3db2a (fix: close native install integration gaps)
 export async function run(input: string): Promise<number> {
   // Deterministic off-switch: enforcement disabled entirely.
   if (process.env.AIDLC_DISABLE_REVIEWER_SCOPE_HOOK === "1") return 0;
@@ -725,6 +732,16 @@ export async function run(input: string): Promise<number> {
     // Heartbeat failure is non-fatal - never let it affect the decision.
   }
 
+<<<<<<< HEAD
+||||||| parent of a7ee3db2a (fix: close native install integration gaps)
+  // A TTY means no harness JSON is coming (test / debug contexts) - allow.
+  if (process.stdin.isTTY) process.exit(0);
+
+=======
+  // A TTY means no harness JSON is coming (test / debug contexts) - allow.
+  if (process.stdin.isTTY) return 0;
+
+>>>>>>> a7ee3db2a (fix: close native install integration gaps)
   let parsed: ClaudeCodeHookInput;
   try {
     const raw: unknown = JSON.parse(input);
@@ -867,7 +884,12 @@ export async function run(input: string): Promise<number> {
 }
 
 if (import.meta.main) {
+<<<<<<< HEAD
   // A TTY means no harness JSON is coming (test / debug contexts) - allow.
   if (process.stdin.isTTY) process.exit(0);
+||||||| parent of a7ee3db2a (fix: close native install integration gaps)
+  process.exit(2); // harness PreToolUse reject contract: exit 2 + stderr blocks
+=======
+>>>>>>> a7ee3db2a (fix: close native install integration gaps)
   process.exit(await run(await Bun.stdin.text()));
 }

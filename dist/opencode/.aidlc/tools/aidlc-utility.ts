@@ -342,7 +342,6 @@ Utilities:
   plugin sync       Legacy injected-root compose (public route uses aidlc-plugin.ts)
 >>>>>>> 1be171311 (feat: add native plugin state synchronization)
   --doctor          Run health check on hooks, settings, and directory structure
-  --doctor --export Write a redacted diagnostic report (timeline + findings, no work product); --output <dir> to relocate
   --stage <id>      Jump to a specific stage (by slug or number, e.g., code-generation or 3.5)
   --phase <name>    Jump to the first in-scope stage of a phase (e.g., construction or 3)
   --scope <scope>   Set or change scope (standalone or with --stage/--phase)
@@ -5899,6 +5898,7 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
 // set-status — atomically update statusline fields at stage start
 // ---------------------------------------------------------------------------
 
+<<<<<<< HEAD
 function handleSetStatus(projectDir: string, flags: Record<string, string>): void {
   if (
     process.env.AIDLC_STATUSLINE_OWNER !== `statusline:${process.ppid}`
@@ -5910,14 +5910,29 @@ function handleSetStatus(projectDir: string, flags: Record<string, string>): voi
         "(status synchronization is owned by the sync-workflow-state hook.)",
     );
   }
+||||||| parent of a7ee3db2a (fix: close native install integration gaps)
+function handleSetStatus(projectDir: string, flags: Record<string, string>): void {
+  if (
+    process.env.AIDLC_STATUSLINE_OWNER !== `statusline:${process.ppid}`
+  ) {
+    die(
+      "Direct aidlc-utility set-status is blocked: status synchronization is owned by the sync-statusline hook.",
+    );
+  }
+=======
+export function setStatus(
+  projectDir: string,
+  flags: Record<string, string>,
+): { phase: string; stage: string; agent: string } {
+>>>>>>> a7ee3db2a (fix: close native install integration gaps)
   const sp = stateFilePath(projectDir, flags.intent, flags.space);
-  if (!existsSync(sp)) die("No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").");
+  if (!existsSync(sp)) throw new Error(NO_STATE_FILE_MESSAGE);
 
   const stage = flags.stage;
-  if (!stage) die("--stage is required for set-status");
+  if (!stage) throw new Error("--stage is required for set-status");
 
   const entry = findStageBySlug(stage);
-  if (!entry) die(`Unknown stage: ${stage}`);
+  if (!entry) throw new Error(`Unknown stage: ${stage}`);
 
   const phase = (flags.phase || entry.phase).toUpperCase();
   const agent = flags.agent || entry.lead_agent;
@@ -5949,7 +5964,16 @@ function handleSetStatus(projectDir: string, flags: Record<string, string>): voi
     recordHookDrop(projectDir, "active-directive", errorMessage(e));
   }
 
-  process.stdout.write(`${JSON.stringify({ updated: true, phase, stage, agent })}\n`);
+  return { phase, stage, agent };
+}
+
+function handleSetStatus(projectDir: string, flags: Record<string, string>): void {
+  try {
+    const result = setStatus(projectDir, flags);
+    process.stdout.write(`${JSON.stringify({ updated: true, ...result })}\n`);
+  } catch (error) {
+    die(errorMessage(error));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -6371,6 +6395,7 @@ export async function main(argv: string[]): Promise<void> {
   errorArgs = [...rawArgs];
   const { positional, flags, bareFlags, blankFlags } = parseArgs(rawArgs);
   const subcommand = positional[0];
+<<<<<<< HEAD
   if (
     (subcommand === "intent-create" || subcommand === "init") &&
     (flags.help === "true" || rawArgs.includes("-h"))
@@ -6394,6 +6419,23 @@ export async function main(argv: string[]): Promise<void> {
   if (isIntentCreate) {
     validateIntentCreateFlagValues(flags, missingValueFlags);
   }
+||||||| parent of a7ee3db2a (fix: close native install integration gaps)
+  errorProjectDirArg = flags["project-dir"];
+  if (
+    (subcommand === "intent-birth" || subcommand === "init") &&
+    (flags.help === "true" || rawArgs.includes("-h"))
+  ) {
+    process.stdout.write(
+      "Usage: aidlc-utility intent-birth --scope <scope> " +
+        '[--arguments "<description>"] [--label "<short label>"] ' +
+        "[--depth <level>] [--test-strategy <level>] [--repos <name,...>] " +
+        "[--project-dir <path>]\n",
+    );
+    return;
+  }
+=======
+  errorProjectDirArg = flags["project-dir"];
+>>>>>>> a7ee3db2a (fix: close native install integration gaps)
   const projectDir = resolveProjectDir(flags["project-dir"]);
 
   switch (subcommand) {
