@@ -1110,7 +1110,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     cpSync(join(pluginBuilt, "hooks"), join(root, "hooks"), { recursive: true });
     const mf = join(root, ".claude-plugin", "plugin.json");
     const manifest = JSON.parse(readFileSync(mf, "utf-8"));
-    manifest.name = name;
+    manifest.name = `aidlc-${name}`;
     writeFileSync(mf, JSON.stringify(manifest));
     for (const [rel, body] of Object.entries(files)) {
       const path = join(root, rel);
