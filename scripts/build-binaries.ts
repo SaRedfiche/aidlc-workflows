@@ -239,8 +239,17 @@ function stampedVersion(stdout: string): string {
   return prefixed?.[1] ?? trimmed;
 }
 
+let standaloneGateProject: string | null = null;
+
+function standaloneGateCwd(): string {
+  if (standaloneGateProject) return standaloneGateProject;
+  standaloneGateProject = mkdtempSync(join(tmpdir(), "aidlc-binary-standalone-"));
+  writeFileSync(join(standaloneGateProject, "package.json"), "{}\n");
+  return standaloneGateProject;
+}
+
 function versionGate(artifact: string): GateResult {
-  const result = run(artifact, ["version"], { cwd: tmpdir(), timeoutMs: 30_000 });
+  const result = run(artifact, ["version"], { cwd: standaloneGateCwd(), timeoutMs: 30_000 });
   const actual = stampedVersion(result.stdout);
   return commandGate(
     "version",
@@ -249,13 +258,13 @@ function versionGate(artifact: string): GateResult {
     {
       expected: AIDLC_VERSION,
       actual,
-      detail: "runs from os.tmpdir() and checks the stamped AIDLC version",
+      detail: "runs from an isolated temporary project and checks the stamped AIDLC version",
     },
   );
 }
 
 function helpGate(artifact: string): GateResult {
-  const result = run(artifact, ["help"], { cwd: tmpdir(), timeoutMs: 30_000 });
+  const result = run(artifact, ["help"], { cwd: standaloneGateCwd(), timeoutMs: 30_000 });
   const firstLine = result.stdout.split(/\r?\n/)[0] ?? "";
   return commandGate(
     "help",
@@ -264,7 +273,7 @@ function helpGate(artifact: string): GateResult {
     {
       expected: "first stdout line contains aidlc",
       actual: firstLine,
-      detail: "runs from os.tmpdir() and checks that help reached the dispatcher",
+      detail: "runs from an isolated temporary project and checks that help reached the dispatcher",
     },
   );
 }
@@ -296,7 +305,7 @@ function runtimeCrash(output: string): boolean {
 
 function sensorListGate(artifact: string): GateResult {
   const result = run(artifact, ["sensor", "list"], {
-    cwd: tmpdir(),
+    cwd: standaloneGateCwd(),
     env: pathlessEnv(),
     timeoutMs: 30_000,
   });
@@ -395,7 +404,7 @@ function packagedRuntimeImmutableGate(artifact: string): GateResult {
 
 function validateOutputsGate(artifact: string): GateResult {
   const result = run(artifact, ["validate", "outputs", "inception"], {
-    cwd: tmpdir(),
+    cwd: standaloneGateCwd(),
     env: pathlessEnv(),
     timeoutMs: 30_000,
   });
@@ -423,7 +432,7 @@ function generatedSurfaceGate(
   expectedText?: string,
 ): GateResult {
   const result = run(artifact, args, {
-    cwd: tmpdir(),
+    cwd: standaloneGateCwd(),
     env: pathlessEnv(),
     timeoutMs: 30_000,
   });
@@ -449,12 +458,12 @@ function harnessRuntimeGate(
     AIDLC_HARNESS_NAME: distribution,
   };
   const sensors = run(artifact, ["sensor", "list"], {
-    cwd: tmpdir(),
+    cwd: standaloneGateCwd(),
     env,
     timeoutMs: 30_000,
   });
   const runners = run(artifact, ["gen", "runners", "--check"], {
-    cwd: tmpdir(),
+    cwd: standaloneGateCwd(),
     env,
     timeoutMs: 30_000,
   });
@@ -558,7 +567,7 @@ function conductorPersonaGate(artifact: string): GateResult {
     "memory",
   );
   const options = {
-    cwd: tmpdir(),
+    cwd: standaloneGateCwd(),
     env: { ...pathlessEnv(), AIDLC_RULES_DIR: rulesDir },
     timeoutMs: 30_000,
   };
@@ -842,23 +851,41 @@ function swarmReentryGate(artifact: string): GateResult {
 }
 
 function delegatePluginSyncGate(artifact: string): GateResult {
-  const result = run(artifact, ["plugin", "sync"], { cwd: tmpdir(), timeoutMs: 30_000 });
-  const output = `${result.stdout}\n${result.stderr}`;
-  const moduleError = /Cannot find module|\/\$bunfs\//.test(output);
-  const actual = result.stdout.trim();
-  return commandGate(
-    "delegate-plugin-sync",
-    result,
-    !result.error &&
-      result.status === 0 &&
-      actual === "no installed plugins; nothing to sync" &&
-      !moduleError,
-    {
-      expected: "no installed plugins; nothing to sync",
-      actual: actual || result.stderr.trim(),
-      detail: "runs a real utility delegate from the compiled artifact",
-    },
-  );
+  const fixture = mkdtempSync(join(tmpdir(), "aidlc-binary-plugin-empty-"));
+  try {
+    const registry = join(fixture, "installed_plugins.json");
+    const settings = join(fixture, "settings.json");
+    writeFileSync(registry, '{"version":2,"plugins":{}}\n');
+    writeFileSync(settings, '{"enabledPlugins":{}}\n');
+    const result = run(artifact, ["plugin", "sync"], {
+      cwd: standaloneGateCwd(),
+      env: {
+        ...process.env,
+        AIDLC_HARNESS_DIR: ".claude",
+        AIDLC_CLAUDE_PLUGIN_REGISTRY: registry,
+        AIDLC_CLAUDE_SETTINGS: settings,
+      },
+      timeoutMs: 30_000,
+    });
+    const output = `${result.stdout}\n${result.stderr}`;
+    const moduleError = /Cannot find module|\/\$bunfs\//.test(output);
+    const actual = result.stdout.trim();
+    return commandGate(
+      "delegate-plugin-sync",
+      result,
+      !result.error &&
+        result.status === 0 &&
+        actual === "plugin sync complete: 0 plugin(s)" &&
+        !moduleError,
+      {
+        expected: "plugin sync complete: 0 plugin(s)",
+        actual: actual || result.stderr.trim(),
+        detail: "runs a real plugin delegate from the compiled artifact",
+      },
+    );
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
 }
 
 function realPluginSyncGate(artifact: string): GateResult {
@@ -1395,7 +1422,7 @@ function routedProjectDirGate(artifact: string): GateResult {
 }
 
 function delegateDoctorDataGate(artifact: string): GateResult {
-  const result = run(artifact, ["doctor"], { cwd: tmpdir(), timeoutMs: 30_000 });
+  const result = run(artifact, ["doctor"], { cwd: standaloneGateCwd(), timeoutMs: 30_000 });
   const output = `${result.stdout}\n${result.stderr}`;
   const crashSignature = output.match(/Cannot find module|\/\$bunfs\/|ENOENT/)?.[0] ?? "";
   const reportEmitted = result.stdout.includes("AI-DLC Health Check");
@@ -1411,14 +1438,14 @@ function delegateDoctorDataGate(artifact: string): GateResult {
     {
       expected: "doctor report with a non-zero complete schema count and no compiled-data crash signatures",
       actual: crashSignature || schemaCount?.[0] || "schema count missing",
-      detail: "runs doctor from os.tmpdir() against executable-relative runtime data",
+      detail: "runs doctor from an isolated temporary project against executable-relative runtime data",
     },
   );
 }
 
 function pathlessVersionGate(artifact: string): GateResult {
   const result = run(artifact, ["version"], {
-    cwd: tmpdir(),
+    cwd: standaloneGateCwd(),
     env: { ...process.env, PATH: "" },
     timeoutMs: 30_000,
   });
@@ -1720,40 +1747,49 @@ function tail(text: string, lines = 20): string {
 }
 
 function main(): void {
-  const targets = selectedTargets(process.argv.slice(2));
+  try {
+    const targets = selectedTargets(process.argv.slice(2));
 
-  const packageCheck = run(process.execPath, ["scripts/package.ts", "--check"], {
-    cwd: REPO_ROOT,
-    timeoutMs: 300_000,
-  });
-  if (packageCheck.status !== 0 || packageCheck.error) {
-    console.error("package drift guard failed; run bun scripts/package.ts before building binaries");
-    const output = tail(`${packageCheck.stdout}${packageCheck.stderr}`);
-    if (output) console.error(output);
-    process.exit(1);
+    const packageCheck = run(process.execPath, ["scripts/package.ts", "--check"], {
+      cwd: REPO_ROOT,
+      timeoutMs: 300_000,
+    });
+    if (packageCheck.status !== 0 || packageCheck.error) {
+      console.error("package drift guard failed; run bun scripts/package.ts before building binaries");
+      const output = tail(`${packageCheck.stdout}${packageCheck.stderr}`);
+      if (output) console.error(output);
+      process.exitCode = 1;
+      return;
+    }
+
+    mkdirSync(OUT_DIR, { recursive: true });
+    const bunVersion = run(process.execPath, ["--version"], { cwd: REPO_ROOT, timeoutMs: 30_000 }).stdout.trim();
+    const results: TargetResult[] = [];
+
+    for (const target of targets) {
+      const result = buildTarget(target);
+      results.push(result);
+      const ok = resultFailures(result).length === 0 ? "ok" : "FAIL";
+      console.log(`${result.name}\t${ok}\t${result.seconds}s\t${result.bytes} bytes\t${result.artifact}`);
+    }
+
+    writeResults(bunVersion, packageCheck, results);
+
+    const failures = results.flatMap(resultFailures);
+    if (failures.length > 0) {
+      for (const failure of failures) console.error(failure);
+      console.error(`wrote ${join(OUT_DIR, "build-results.json")}`);
+      process.exitCode = 1;
+      return;
+    }
+
+    console.log(`wrote ${join(OUT_DIR, "build-results.json")}`);
+  } finally {
+    if (standaloneGateProject) {
+      rmSync(standaloneGateProject, { recursive: true, force: true });
+      standaloneGateProject = null;
+    }
   }
-
-  mkdirSync(OUT_DIR, { recursive: true });
-  const bunVersion = run(process.execPath, ["--version"], { cwd: REPO_ROOT, timeoutMs: 30_000 }).stdout.trim();
-  const results: TargetResult[] = [];
-
-  for (const target of targets) {
-    const result = buildTarget(target);
-    results.push(result);
-    const ok = resultFailures(result).length === 0 ? "ok" : "FAIL";
-    console.log(`${result.name}\t${ok}\t${result.seconds}s\t${result.bytes} bytes\t${result.artifact}`);
-  }
-
-  writeResults(bunVersion, packageCheck, results);
-
-  const failures = results.flatMap(resultFailures);
-  if (failures.length > 0) {
-    for (const failure of failures) console.error(failure);
-    console.error(`wrote ${join(OUT_DIR, "build-results.json")}`);
-    process.exit(1);
-  }
-
-  console.log(`wrote ${join(OUT_DIR, "build-results.json")}`);
 }
 
 main();
