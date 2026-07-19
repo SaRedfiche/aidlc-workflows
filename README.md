@@ -66,8 +66,8 @@ Ad-hoc AI coding works until the project gets real. Then context drifts between 
 The deterministic engine — state machine, audit log, and the referee that coordinates parallel agents — is byte-identical across every harness; only the shell differs. Each section in the [Quick Start](#quick-start) installs one harness end to end, and its guide above goes deeper on prerequisites and differences.
 
 > [!NOTE]
-> Release assets now also support a self-contained macOS/Linux install channel:
-> `install.sh --harness <name>` installs the native `aidlc` command, and
+> Release assets support self-contained macOS, Linux, and Windows installs:
+> `install.sh --harness <name>` or `install.ps1 -Harness <name>` installs the native `aidlc` command, and
 > `aidlc init` safely initializes or refreshes a project. The documented copy
 > install remains supported and continues to require bun.
 
@@ -394,6 +394,7 @@ aidlc-claude/
 │   ├── build-binaries.ts       # release-only CLI bundles under ignored build/
 │   ├── package-release.ts      # flat release assets, data archives, checksums, version manifest
 │   ├── install.sh              # macOS/Linux online and offline bootstrap
+│   ├── install.ps1             # Windows online and offline bootstrap
 │   └── manifest-types.ts       # shared manifest contract
 │
 │  ─────────── GENERATED, COMMITTED, DRIFT-GUARDED — never hand-edit ───────────
