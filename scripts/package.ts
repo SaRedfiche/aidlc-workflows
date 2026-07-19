@@ -1361,7 +1361,7 @@ function buildPluginProjection(pluginName: string, harnessName: string, outDir: 
 
   // 3. The compose hook + per-harness wiring. Prefer an installed aidlc binary
   //    so the host hook can front the fold through `aidlc plugin sync`; fall back
-  //    to the direct bun compose.ts path for source/tree installs. Claude
+  //    only when that entrypoint is absent, never when a transaction fails. Claude
   //    populates CLAUDE_PLUGIN_ROOT, Codex PLUGIN_ROOT, and Cursor resolves
   //    relative commands from the plugin root; AIDLC_HARNESS_DIR targets the
   //    right harness tree.
@@ -1385,7 +1385,7 @@ function buildPluginProjection(pluginName: string, harnessName: string, outDir: 
     // executable, exit 0 with a note rather than running a non-existent binary.
     const aidlcExpr =
       'AIDLC=$(command -v aidlc 2>/dev/null || true); ' +
-      `[ -n "$AIDLC" ] && { AIDLC_HARNESS_DIR=${harnessLeaf} AIDLC_HARNESS_NAME=${targetHarnessName} "$AIDLC" plugin sync && exit 0; }; `;
+      `[ -n "$AIDLC" ] && { AIDLC_HARNESS_DIR=${harnessLeaf} AIDLC_HARNESS_NAME=${targetHarnessName} "$AIDLC" plugin sync; exit $?; }; `;
     const bunExpr =
       'BUN=$(command -v bun 2>/dev/null || true); ' +
       '[ -z "$BUN" ] && [ -x "$HOME/.bun/bin/bun" ] && BUN="$HOME/.bun/bin/bun"; ' +
@@ -1393,7 +1393,7 @@ function buildPluginProjection(pluginName: string, harnessName: string, outDir: 
     const sharedToolExpr =
       `PROJECT_ROOT="\${CLAUDE_PROJECT_DIR:-\${AIDLC_PROJECT_DIR:-$PWD}}"; ` +
       `PLUGIN_TOOL="$PROJECT_ROOT/${harnessLeaf}/tools/aidlc-plugin.ts"; ` +
-      `[ -f "$PLUGIN_TOOL" ] && { AIDLC_HARNESS_DIR=${harnessLeaf} AIDLC_HARNESS_NAME=${targetHarnessName} "$BUN" "$PLUGIN_TOOL" sync && exit 0; }; `;
+      `[ -f "$PLUGIN_TOOL" ] && { AIDLC_HARNESS_DIR=${harnessLeaf} AIDLC_HARNESS_NAME=${targetHarnessName} "$BUN" "$PLUGIN_TOOL" sync; exit $?; }; `;
     command = `sh -c '${aidlcExpr}${bunExpr}; ${sharedToolExpr}AIDLC_HARNESS_DIR=${harnessLeaf} AIDLC_HARNESS_NAME=${targetHarnessName} "$BUN" "${composePath}"'`;
   }
 
