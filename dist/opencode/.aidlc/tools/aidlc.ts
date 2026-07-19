@@ -4,7 +4,6 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   errorMessage,
-  parsePluginCommand,
   parseWorkspaceCommand,
   workspaceCommandUtilityArgv,
 } from "./aidlc-lib.ts";
@@ -18,7 +17,11 @@ import {
   versionRoot,
 } from "./aidlc-install-paths.ts";
 import { executePlan, transactionState, writeOperation } from "./aidlc-transaction.ts";
-import { packagedDistributionRoot, runtimeHarnessDir } from "./aidlc-runtime-paths.ts";
+import {
+  discoverProjectHarnesses,
+  packagedDistributionRoot,
+  runtimeHarnessDir,
+} from "./aidlc-runtime-paths.ts";
 import { cachedUpdateNotice } from "./aidlc-update.ts";
 import {
   recoverWindowsUninstallContinuations,
@@ -96,7 +99,6 @@ export const TOOLS = {
   doctor: "aidlc-doctor.ts",
   init: "aidlc-init.ts",
   jump: "aidlc-jump.ts",
-  knowledge: "aidlc-knowledge.ts",
   learnings: "aidlc-learnings.ts",
   log: "aidlc-log.ts",
   lifecycle: "aidlc-lifecycle.ts",
@@ -509,7 +511,6 @@ export const ROUTES: readonly Route[] = [
       "merge",
       "park",
       "unpark",
-      "unit",
     ],
   },
   {
@@ -648,19 +649,11 @@ export const ROUTES: readonly Route[] = [
     group: "intent",
     kind: "custom",
     classification: "translation",
-    verbs: ["list", "switch", "<name>", "create"],
+    verbs: ["list", "switch", "<name>", "birth"],
     custom: "workspace",
-<<<<<<< HEAD
-    human: [{ command: "intent [list|switch|create]", summary: "list, switch, or create intent context" }],
-    all: ["list [--json]", "switch <name>", "<name>", "create [args]"],
-||||||| parent of f5c8f8211 (feat: add transactional install lifecycle (recovered PR2 snapshot))
-    human: [{ command: "intent [list|switch|birth]", summary: "list, switch, or create intent context" }],
-    all: ["list [--json]", "switch <name>", "<name>", "birth [args]"],
-=======
     ...PUBLIC_ENGINE,
     human: [{ command: "intent [list|switch|birth]", summary: "list, switch, or create intent context" }],
     all: ["list [--json]", "switch <name>", "<name>", "birth [args]"],
->>>>>>> f5c8f8211 (feat: add transactional install lifecycle (recovered PR2 snapshot))
   },
   {
     id: "space",
@@ -703,13 +696,12 @@ export const ROUTES: readonly Route[] = [
     group: "config",
     kind: "custom",
     classification: "translation",
-    verbs: ["set depth", "set test-strategy", "set review", "get", "list"],
+    verbs: ["set depth", "set test-strategy", "get", "list"],
     custom: "config",
     ...PUBLIC_ENGINE,
     targets: {
       "set depth": "config-change",
       "set test-strategy": "config-change",
-      "set review": "config-change",
       get: "config-get",
       list: "config-list",
     },
@@ -718,7 +710,7 @@ export const ROUTES: readonly Route[] = [
       { command: "config set <key> <value>", summary: "change supported project configuration" },
       { command: "config list", summary: "list supported project configuration" },
     ],
-    all: ["set depth <value>", "set test-strategy <value>", "set review <value>", "get <key>", "list"],
+    all: ["set depth <value>", "set test-strategy <value>", "get <key>", "list"],
   },
   {
     id: "plugin",
@@ -735,40 +727,6 @@ export const ROUTES: readonly Route[] = [
       { command: "plugin sync [--prune-missing]", summary: "transactionally compose installed plugins" },
     ],
     all: ["select [names]", "sync [--prune-missing] [--yes]", "list [--verbose] [--json]"],
-  },
-  {
-    // The DocumentKB noun. Unlike `plugin`, the verb IS the subcommand -- these
-    // verbs live in their own tool -- so there is no `targets` translation table
-    // to keep in step. Only the verbs the tool actually implements are listed:
-    // registering a verb the tool would reject turns a clean "unknown verb"
-    // error into a confusing one from a layer down.
-    id: "knowledge",
-    group: "knowledge",
-    // `noun-passthrough`, NOT `top-passthrough`: this route's group is
-    // "knowledge", and the two resolvers split on group. `resolveTop` only
-    // iterates `group === "top"` routes, so it never saw this one; `resolveNoun`
-    // did see it but handles only `noun-passthrough`/`noun-map`/`custom`/
-    // `routing-only`, so it fell through to "unknown verb". The result was that
-    // NO knowledge verb ran through the compiled dispatcher while the tool
-    // itself worked perfectly when invoked directly -- which is why the defect
-    // survived a review round in which it was reported, claimed fixed, and never
-    // executed. The dispatcher test below runs every verb rather than asserting
-    // this literal, because reading the route is exactly what missed it.
-    kind: "noun-passthrough",
-    classification: "passthrough",
-    verbs: ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind"],
-    tool: TOOLS.knowledge,
-    // ONE line in the human help, which is capped at 20 lines: it is a summary
-    // for a person deciding what to type, not the surface. Every verb still
-    // appears in `help --all` via `all` below.
-    human: [
-      { command: "knowledge <verb>", summary: "index and read customer documents" },
-    ],
-    all: [
-      "onboard [path]", "sync", "list", "show <id>",
-      "associate <id> --intent [slug]", "dissociate <id> --intent [slug]",
-      "rebind <id> --to <path>",
-    ],
   },
   {
     id: "gen",
@@ -871,23 +829,16 @@ function toolsDir(): string {
   return dispatcherDir();
 }
 
-type AdapterHarness = "codex" | "cursor" | "kiro" | "kiro-ide";
+type AdapterHarness = "codex" | "kiro" | "kiro-ide";
 
 const ADAPTER_HARNESS_LEAF: Record<AdapterHarness, string> = {
   codex: ".codex",
-  cursor: ".cursor",
   kiro: ".kiro",
   "kiro-ide": ".kiro",
 };
 
 function isAdapterHarness(value: string): value is AdapterHarness {
   return Object.hasOwn(ADAPTER_HARNESS_LEAF, value);
-}
-
-function adapterFile(harness: AdapterHarness): string {
-  if (harness === "codex") return "aidlc-codex-adapter.ts";
-  if (harness === "cursor") return "aidlc-cursor-adapter.ts";
-  return "aidlc-kiro-adapter.ts";
 }
 
 function resolveHookPath(
@@ -903,10 +854,7 @@ function resolveHookPath(
     ? [ADAPTER_HARNESS_LEAF[harness]]
     : [
         runtimeLeaf,
-        ".claude",
-        ".kiro",
-        ".codex",
-        ".cursor",
+        ...discoverProjectHarnesses(projectDir).map((candidate) => candidate.harnessDir),
       ].filter((value, index, values): value is string =>
         typeof value === "string" && value.length > 0 && values.indexOf(value) === index
       );
@@ -966,7 +914,7 @@ export function renderAllHelp(): string {
 function topLevelError(command: string): Action {
   return {
     type: "error",
-    code: 1,
+    code: 2,
     message: `aidlc: unknown command or noun '${command}'; try 'aidlc --help'\n`,
   };
 }
@@ -975,7 +923,7 @@ function nounError(noun: string, verb: string | undefined): Action {
   const detail = verb ? `unknown verb '${verb}'` : "missing verb";
   return {
     type: "error",
-    code: 1,
+    code: 2,
     message: `aidlc: ${detail} for noun '${noun}'; try 'aidlc help --all'\n`,
   };
 }
@@ -994,7 +942,7 @@ function handleWorkspace(argv: string[]): Action {
   const command = parseWorkspaceCommand(argv);
   if (command.kind === "not-workspace") return nounError(argv[0], argv[1]);
   if (command.kind === "error") {
-    return { type: "error", code: 1, message: `${command.message}\n` };
+    return { type: "error", code: 2, message: `${command.message}\n` };
   }
   const utilityArgv = workspaceCommandUtilityArgv(command);
   if (utilityArgv === null) return nounError(argv[0], argv[1]);
@@ -1031,36 +979,20 @@ function handleConfig(route: Route, argv: string[]): Action {
     if (missing) return missing;
     return { type: "delegate", tool: TOOLS.utility, args: ["config-change", "--test-strategy", value, ...argv.slice(4)] };
   }
-  if (key === "review") {
-    const missing = requireValue("config", "set review", value);
-    if (missing) return missing;
-    return { type: "delegate", tool: TOOLS.utility, args: ["config-change", "--review", value, ...argv.slice(4)] };
-  }
   return nounError("config", key ? `set ${key}` : "set");
 }
 
-function handlePlugin(argv: string[]): Action {
-  const command = parsePluginCommand(argv);
-  if (command.kind === "help") {
-    return { type: "help", all: false };
+function handlePlugin(route: Route, argv: string[]): Action {
+  const verb = argv[1];
+  if (verb === "select") {
+    const target = route.targets?.select ?? "select-plugins";
+    return { type: "delegate", tool: TOOLS.utility, args: [target, ...argv.slice(2)] };
   }
-<<<<<<< HEAD
-  if (command.kind === "error") {
-    return { type: "error", code: 1, message: `${command.message}\n` };
-||||||| parent of 1be171311 (feat: add native plugin state synchronization)
-  if (verb === "sync" || verb === "list") {
-    const target = route.targets?.[verb];
-    if (target) return { type: "delegate", tool: TOOLS.utility, args: [target, ...argv.slice(2)] };
-=======
   if (verb === "sync" || verb === "list") {
     const target = route.targets?.[verb];
     if (target) return { type: "delegate", tool: TOOLS.plugin, args: [target, ...argv.slice(2)] };
->>>>>>> 1be171311 (feat: add native plugin state synchronization)
   }
-  if (command.kind === "run") {
-    return { type: "delegate", tool: TOOLS.utility, args: command.argv };
-  }
-  return nounError("plugin", argv[1]);
+  return nounError("plugin", verb);
 }
 
 function handleGen(argv: string[]): Action {
@@ -1088,7 +1020,7 @@ function handleGen(argv: string[]): Action {
 function handleCustom(route: Route, argv: string[]): Action {
   if (route.custom === "workspace") return handleWorkspace(argv);
   if (route.custom === "config") return handleConfig(route, argv);
-  if (route.custom === "plugin") return handlePlugin(argv);
+  if (route.custom === "plugin") return handlePlugin(route, argv);
   if (route.custom === "gen") return handleGen(argv);
   return nounError(argv[0], argv[1]);
 }
@@ -1144,7 +1076,7 @@ function handleRouteOnly(route: Route, argv: string[]): Action {
     if (!isAdapterHarness(harness)) return nounError("adapter", harness);
     if (!target) return nounError("adapter", undefined);
     if (!isSafeName(target)) return nounError("adapter", target);
-    const file = adapterFile(harness);
+    const file = harness === "codex" ? "aidlc-codex-adapter.ts" : "aidlc-kiro-adapter.ts";
     return {
       type: "adapter",
       harness,
@@ -1292,7 +1224,7 @@ export function resolveAction(argv: string[]): Action {
     if (!value || value.startsWith("--")) {
       return {
         type: "error",
-        code: 1,
+        code: 2,
         message: "aidlc: --project-dir requires a path value\n",
       };
     }
@@ -1314,7 +1246,9 @@ export function resolveAction(argv: string[]): Action {
       action.path = resolveHookPath("aidlc-statusline.ts", undefined, absoluteProjectDir);
     } else if (action.type === "adapter") {
       action.projectDir = absoluteProjectDir;
-      const file = adapterFile(action.harness);
+      const file = action.harness === "codex"
+        ? "aidlc-codex-adapter.ts"
+        : "aidlc-kiro-adapter.ts";
       action.path = resolveHookPath(file, action.harness, absoluteProjectDir);
     } else if (action.type === "sensor-script-file") {
       action.projectDir = absoluteProjectDir;
@@ -1376,8 +1310,6 @@ async function loadDelegate(tool: string): Promise<DelegateModule | null> {
       return import("./aidlc-init.ts");
     case TOOLS.jump:
       return import("./aidlc-jump.ts");
-    case TOOLS.knowledge:
-      return import("./aidlc-knowledge.ts");
     case TOOLS.learnings:
       return import("./aidlc-learnings.ts");
     case TOOLS.log:
@@ -1548,13 +1480,7 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
     let input = "";
     if (action.harness !== "kiro-ide") {
       input = await readStdin();
-    } else if (
-      action.target === "audit-and-sensors" ||
-      action.target === "log-subagent" ||
-      action.target === "rebuild-stage-graph" ||
-      action.target === "session-start" ||
-      action.target === "continue-workflow"
-    ) {
+    } else if (action.target === "audit-and-sensors" || action.target === "log-subagent") {
       // Mirror the adapter entry point's dual-generation channel contract.
       // IDE 0.12 provides USER_PROMPT and leaves stdin open forever, so consume
       // a non-empty env payload immediately. IDE 1.x leaves USER_PROMPT empty
@@ -1803,19 +1729,9 @@ function routePinPolicy(argv: readonly string[]): PinPolicy {
 }
 
 function projectDistribution(projectDir: string): string | null {
-  for (const harnessDir of [".claude", ".kiro", ".codex"]) {
-    const stampPath = join(projectDir, harnessDir, "tools", "data", "aidlc-stamp.json");
-    if (!existsSync(stampPath)) continue;
-    try {
-      const stamp = JSON.parse(readFileSync(stampPath, "utf-8")) as { distribution?: unknown };
-      if (typeof stamp.distribution === "string" && stamp.distribution.length > 0) {
-        return stamp.distribution;
-      }
-    } catch {
-      return null;
-    }
-  }
-  return null;
+  const harnessDir = runtimeHarnessDir(projectDir);
+  return discoverProjectHarnesses(projectDir)
+    .find((candidate) => candidate.harnessDir === harnessDir)?.distribution ?? null;
 }
 
 function completePinnedVersion(version: string, distribution: string | null): boolean {
@@ -1897,25 +1813,17 @@ function refuseUnpinnedMajorSkew(argv: readonly string[]): number | null {
   if (routePinPolicy(argv) !== "pinned") return null;
   const projectDir = projectDirFrom(argv);
   if (existsSync(join(projectDir, ".aidlc-version"))) return null;
-  for (const harnessDir of [".claude", ".kiro", ".codex"]) {
-    const stampPath = join(projectDir, harnessDir, "tools", "data", "aidlc-stamp.json");
-    if (!existsSync(stampPath)) continue;
-    try {
-      const stamp = JSON.parse(readFileSync(stampPath, "utf-8")) as { frameworkVersion?: unknown };
-      if (
-        typeof stamp.frameworkVersion === "string" &&
-        STRICT_SEMVER.test(stamp.frameworkVersion) &&
-        stamp.frameworkVersion.split(".")[0] !== AIDLC_VERSION.split(".")[0]
-      ) {
-        return renderDispatcherFailure(
-          argv,
-          1,
-          `project runtime ${stamp.frameworkVersion} is incompatible with selected engine ${AIDLC_VERSION}`,
-          "aidlc use <installed-version> or aidlc init",
-        );
-      }
-    } catch {
-      return null;
+  for (const harness of discoverProjectHarnesses(projectDir)) {
+    if (
+      harness.frameworkVersion &&
+      harness.frameworkVersion.split(".")[0] !== AIDLC_VERSION.split(".")[0]
+    ) {
+      return renderDispatcherFailure(
+        argv,
+        1,
+        `project runtime ${harness.frameworkVersion} is incompatible with selected engine ${AIDLC_VERSION}`,
+        "aidlc use <installed-version> or aidlc init",
+      );
     }
   }
   return null;
@@ -1976,10 +1884,8 @@ function projectPolicyError(route: Route, argv: readonly string[]): string | nul
     "go.mod",
     "pyproject.toml",
     "aidlc",
-    ".claude",
-    ".kiro",
-    ".codex",
-  ].some((entry) => existsSync(join(projectDir, entry)));
+  ].some((entry) => existsSync(join(projectDir, entry))) ||
+    discoverProjectHarnesses(projectDir).length > 0;
   return recognized
     ? null
     : `${route.id} requires an installed project harness or recognized project directory; run aidlc init`;
@@ -2015,11 +1921,11 @@ export async function main(argv: string[]): Promise<void> {
     return;
   }
   if (import.meta.url.includes("/$bunfs/") && !process.env.AIDLC_HARNESS_DIR) {
-    // Compiled, no explicit harness: probe the project install (.claude /
-    // .kiro / .codex by tools/data/harness.json) rather than assuming
-    // .claude — module-relative derivation can't work from $bunfs, and every
-    // delegate and sibling tool reads this env, so pin the probe's answer
-    // once here. Falls back to .claude when no install is present.
+    // Compiled, no explicit harness: discover the project install from its
+    // shipped stamp/harness metadata. Module-relative derivation cannot work
+    // from $bunfs, and every delegate and sibling tool reads this env, so pin
+    // the discovered answer once here. Falls back to .claude when no install
+    // is present.
     process.env.AIDLC_HARNESS_DIR = runtimeHarnessDir();
   }
   if (

@@ -32,30 +32,16 @@
 //   - session-start: the core hook prints
 //     {"additionalContext": "..."}; Codex expects the hookSpecificOutput
 //     wrapper (verified live, findings E1) — the shim re-wraps.
-//   - continue-workflow: {"decision":"block","reason"} passes through VERBATIM — the
+//   - stop: {"decision":"block","reason"} passes through VERBATIM — the
 //     contract is identical on Codex (stop_hook_active included).
 //   - everything else: advisory; stdout ignored, exit 0.
 //
 // Usage (wired in .codex/hooks.json):
-<<<<<<< HEAD
-//   bun .codex/hooks/aidlc-codex-adapter.ts <target>
-// where <target> ∈ session-start | audit-and-sensors | sync-workflow-state |
-//                  rebuild-stage-graph | validate-state | log-subagent | continue-workflow |
-//                  record-human-turn | state-transition-guard | reviewer-scope |
-//                  review-freeze | deliver-stage-rules | plan-approval-guard
-||||||| parent of df361fbee (feat: graduate native install mechanism)
-//   bun .codex/hooks/aidlc-codex-adapter.ts <target>
+//   bun .codex/tools/aidlc.ts adapter codex <target>
 // where <target> ∈ session-start | audit-and-sensors | state-sync |
 //                  runtime-compile | validate-state | log-subagent | stop |
 //                  mint | state-transition-guard | reviewer-scope |
 //                  dispatch-rules | plan-approval-guard
-=======
-//   aidlc adapter codex <target>
-// where <target> ∈ session-start | audit-and-sensors | state-sync |
-//                  runtime-compile | validate-state | log-subagent | stop |
-//                  mint | state-transition-guard | reviewer-scope |
-//                  dispatch-rules | plan-approval-guard
->>>>>>> df361fbee (feat: graduate native install mechanism)
 
 import { createHash } from "node:crypto";
 import {
@@ -71,7 +57,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
-import { sessionsDir, stateFilePath } from "../tools/aidlc-lib.ts";
+import { stateFilePath } from "../tools/aidlc-lib.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -290,15 +276,14 @@ function wrapContext(coreStdout: string, eventName: string): string {
 
 // --- D-4: SESSION_ENDED reconcile-at-next-start ------------------------------
 
-const heartbeatFile = join(sessionsDir(projectDir), "codex-session.json");
+const heartbeatFile = join(projectDir, "aidlc-docs", ".aidlc-hooks-health", "codex-session.json");
 
 function reconcilePriorSession(): void {
-  // The heartbeat is recorded even before a workflow exists. If the first turn
-  // births an intent, the utility can then bind this session to that record and
-  // a later Codex session can reconcile its inferred SESSION_ENDED correctly.
-  const hasActiveWorkflow = existsSync(stateFilePath(projectDir));
+  // Only meaningful inside an active workflow; the heartbeat lives in the
+  // same health dir the core hooks already maintain.
+  if (!existsSync(join(projectDir, "aidlc-docs"))) return;
   try {
-    if (hasActiveWorkflow && existsSync(heartbeatFile)) {
+    if (existsSync(heartbeatFile)) {
       const prior = JSON.parse(readFileSync(heartbeatFile, "utf-8")) as {
         session_id?: string;
         ts?: string;
@@ -310,10 +295,7 @@ function reconcilePriorSession(): void {
         const reason =
           `inferred — Codex has no SessionEnd event (D-4); reconciled at next ` +
           `SessionStart. Prior session ${prior.session_id} last seen ${prior.ts ?? "unknown"}.`;
-        runCore(
-          "aidlc-session-end.ts",
-          JSON.stringify({ reason, session_id: prior.session_id }),
-        );
+        runCore("aidlc-session-end.ts", JSON.stringify({ reason }));
       }
     }
     mkdirSync(dirname(heartbeatFile), { recursive: true });
@@ -363,7 +345,7 @@ switch (target) {
   }
 
   case "audit-and-sensors": {
-    // apply_patch → write-audit-log THEN run-sensors per touched file (mirrors
+    // apply_patch → audit-logger THEN sensor-fire per touched file (mirrors
     // the Claude settings.json Write|Edit registration order). Advisory.
     if ((codex.tool_name ?? "") === "apply_patch") {
       const command = (codex.tool_input?.command as string) ?? "";
@@ -373,15 +355,15 @@ switch (target) {
           tool_name: f.tool,
           tool_input: { file_path: f.path },
         });
-        runCore("aidlc-write-audit-log.ts", fwd);
-        runCore("aidlc-run-sensors.ts", fwd);
+        runCore("aidlc-audit-logger.ts", fwd);
+        runCore("aidlc-sensor-fire.ts", fwd);
       }
     }
     persistResponse("", 0);
     return 0;
   }
 
-  case "sync-workflow-state": {
+  case "state-sync": {
     // update_plan → the first in_progress step maps to the TaskUpdate
     // in_progress transition; the core hook extracts the "[slug]" suffix.
     if ((codex.tool_name ?? "") === "update_plan") {
@@ -393,17 +375,17 @@ switch (target) {
           tool_name: "TaskUpdate",
           tool_input: { status: "in_progress", activeForm: active.step },
         });
-        runCore("aidlc-sync-workflow-state.ts", fwd);
+        runCore("aidlc-sync-statusline.ts", fwd);
       }
     }
     persistResponse("", 0);
     return 0;
   }
 
-  case "rebuild-stage-graph": {
+  case "runtime-compile": {
     // Codex already names the shell tool "Bash" with tool_input.command —
     // the core hook's exact contract. Verbatim pipe.
-    runCore("aidlc-rebuild-stage-graph.ts", rawInput);
+    runCore("aidlc-runtime-compile.ts", rawInput);
     persistResponse("", 0);
     return 0;
   }
@@ -424,10 +406,10 @@ switch (target) {
     return 0;
   }
 
-  case "continue-workflow": {
+  case "stop": {
     // Contract identical on Codex (stop_hook_active included): pass stdin
     // verbatim, forward {"decision":"block","reason"} stdout + exit code.
-    const r = runCore("aidlc-continue-workflow.ts", rawInput);
+    const r = runCore("aidlc-stop.ts", rawInput);
     persistResponse(r.stdout, r.code);
     if (r.stdout) process.stdout.write(r.stdout);
     return r.code;
@@ -531,11 +513,11 @@ switch (target) {
     return 0;
   }
 
-  case "deliver-stage-rules": {
+  case "dispatch-rules": {
     // Codex 0.145 consumes the same PreToolUse hookSpecificOutput.updatedInput
     // contract as Claude. The core hook recognizes spawn_agent and appends the
     // exact active-stage bundle to message/items without adapter re-shaping.
-    const r = runCoreWithStderr("aidlc-deliver-stage-rules.ts", rawInput);
+    const r = runCoreWithStderr("aidlc-dispatch-rules.ts", rawInput);
     const answeredCode = r.code === 2 ? 2 : 0;
     persistResponse(r.stdout, answeredCode, r.stderr);
     if (r.stdout) process.stdout.write(r.stdout);
@@ -600,12 +582,12 @@ switch (target) {
     break;
   }
 
-  case "record-human-turn": {
+  case "mint": {
     // UserPromptSubmit: a real human acted this turn — record a HUMAN_TURN event
     // in the active intent's audit shard (human-presence gate). Gated on workflow
-    // state existing (same self-gate as the core record-human-turn hook) so a prompt in a
+    // state existing (same self-gate as the core mint hook) so a prompt in a
     // project that never ran the framework does not scaffold audit shards.
-    // Fail-open: a record-human-turn failure must never block the turn. Advisory, no stdout.
+    // Fail-open: a mint failure must never block the turn. Advisory, no stdout.
     try {
       if (existsSync(stateFilePath(projectDir))) {
         appendAuditEntry("HUMAN_TURN", {}, projectDir);

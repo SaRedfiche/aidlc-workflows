@@ -543,7 +543,10 @@ describe("t221 (c) harness registration and protocol prose", () => {
       };
       const groups = s.hooks?.PreToolUse ?? [];
       const group = groups.find((g) =>
-        (g.hooks ?? []).some((h) => h.command === "aidlc hook reviewer-scope"),
+        (g.hooks ?? []).some(
+          (h) => h.command ===
+            `bun ${harness.manifest.harnessDir}/tools/aidlc.ts hook reviewer-scope`,
+        ),
       );
       expect(group, harness.name).toBeDefined();
       expect(group?.matcher).toBe(
@@ -572,7 +575,9 @@ describe("t221 (c) harness registration and protocol prose", () => {
         for (const e of reviewerEntries) {
           // The registration passes its own agent name so the adapter forwards
           // a real identity instead of a bare scoped_registration.
-          expect(e.command).toBe(`aidlc adapter kiro reviewer-scope ${agent}`);
+          expect(e.command).toBe(
+            `bun ${harness.manifest.harnessDir}/tools/aidlc.ts adapter kiro reviewer-scope ${agent}`,
+          );
         }
         expect(
           entries.some((entry) =>
@@ -643,7 +648,8 @@ describe("t221 (c) harness registration and protocol prose", () => {
       expect(
         pre.some((g) =>
           g.hooks.some(
-            (h) => h.command === "aidlc adapter codex reviewer-scope",
+            (h) => h.command ===
+              `bun ${harness.manifest.harnessDir}/tools/aidlc.ts adapter codex reviewer-scope`,
           ),
         ),
       ).toBe(true);

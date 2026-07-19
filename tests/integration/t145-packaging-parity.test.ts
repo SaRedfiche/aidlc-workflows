@@ -201,7 +201,7 @@ describe("t145 packager contract regressions", () => {
       expect(descriptor.harnessDir).toBe(".foo");
       expect(graph).toContain('"path": ".foo/sensors/');
       expect(graph).not.toContain('"path": ".claude/sensors/');
-      expect(runner).toContain("aidlc __delegate utility");
+      expect(runner).toContain("bun .foo/tools/aidlc-utility.ts");
       expect(runner).not.toContain("bun .claude/tools/aidlc-utility.ts");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -238,11 +238,15 @@ describe("t145 packager contract regressions", () => {
         .flat()
         .flatMap((group) => group.hooks.map((hook) => hook.command));
       expect(commands.length).toBeGreaterThan(0);
-      expect(commands.every((command: string) => command.startsWith("aidlc adapter foo"))).toBe(true);
+      expect(
+        commands.every((command: string) =>
+          command.startsWith("bun .foo/tools/aidlc.ts adapter foo")
+        ),
+      ).toBe(true);
 
       const rules = readFileSync(join(generated, "rules", "default.rules"), "utf-8");
-      expect(rules).toContain('pattern = ["aidlc"]');
-      expect(rules).not.toContain('pattern = ["bun"');
+      expect(rules).toContain('pattern = ["bun", ".foo/tools/"]');
+      expect(rules).not.toContain('pattern = ["aidlc"]');
       expect(rules).not.toContain('["bun", ".codex/');
 
       const trustSeed = readFileSync(join(generated, "trust-seed.toml"), "utf-8");
@@ -253,7 +257,7 @@ describe("t145 packager contract regressions", () => {
         join(distRoot, ".agents", "skills", "aidlc-init", "SKILL.md"),
         "utf-8",
       );
-      expect(runner).toContain("aidlc __delegate utility");
+      expect(runner).toContain("bun .foo/tools/aidlc-utility.ts");
       expect(runner).not.toContain("bun .codex/tools/aidlc-utility.ts");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -282,7 +286,7 @@ describe("t145 packager contract regressions", () => {
       ).toContain('"path": ".foo/sensors/');
       expect(
         readFileSync(join(generated, "skills", "aidlc-init", "SKILL.md"), "utf-8"),
-      ).toContain("aidlc __delegate utility");
+      ).toContain("bun .foo/tools/aidlc-utility.ts");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

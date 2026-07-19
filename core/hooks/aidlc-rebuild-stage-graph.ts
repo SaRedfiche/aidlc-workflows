@@ -34,70 +34,15 @@ import {
   hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
-  listIntents,
   readAllAuditShards,
-  readSessionIntentUuid,
   recordHookDrop,
   resolveProjectDirFromHook,
   runtimeGraphPath,
-  writeSessionIntentHandoff,
-  writeSessionIntentUuid,
 } from "../tools/aidlc-lib.ts";
-
-// intent-create runs before a workflow exists, so SessionStart cannot stamp that
-// conversation yet. PostToolUse is the first boundary that carries both the
-// exact host session_id and the successful birth result. Bind from that pair,
-// never from the workspace-global `.current-session` marker: another
-// pre-workflow conversation may have started more recently. Existing stamps
-// are immutable here so a second, unrelated birth keeps the ending session
-// owned by its original intent.
-function bindCreatedIntentToInvokingSession(
-  projectDir: string,
-  parsed: ClaudeCodeHookInput,
-): void {
-  const sessionId = parsed.session_id;
-  if (!sessionId) return;
-  const command = parsed.tool_input?.command ?? "";
-  const ideAuditMode = (parsed.tool_input?.source ?? "") === "ide-audit-sync";
-  if (!ideAuditMode && !/(?:intent-create|intent\s+create)/.test(command)) return;
-
-  let response = "";
-  try {
-    response =
-      typeof parsed.tool_response === "string"
-        ? parsed.tool_response
-        : JSON.stringify(parsed.tool_response ?? "");
-  } catch {
-    return;
-  }
-  const match = response.match(
-    /(?:Intent created:|Migrated flat workspace into intent:)\s*([A-Za-z0-9._-]+)\s+\(space:\s*([A-Za-z0-9._-]+)\)/,
-  );
-  if (!match) return;
-
-  const [, dirName, space] = match;
-  const created = listIntents(projectDir, space).find(
-    (intent) => intent.dirName === dirName,
-  );
-  const existingUuid = readSessionIntentUuid(projectDir, sessionId);
-  hookDebug(projectDir, "rebuild-stage-graph", "session-bind", {
-    sessionId,
-    dirName,
-    space,
-    resolvedUuid: created?.uuid ?? "",
-    existingUuid: existingUuid ?? "",
-  });
-  if (!created?.uuid) return;
-  if (existingUuid) {
-    writeSessionIntentHandoff(projectDir, sessionId, existingUuid, created.uuid);
-    return;
-  }
-  writeSessionIntentUuid(projectDir, sessionId, created.uuid);
-}
 
 export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
-hookDebug(projectDir, "rebuild-stage-graph", "invoked");
+hookDebug(projectDir, "runtime-compile", "invoked");
 
 // 1. TTY guard — exit cleanly when invoked outside a piped stdin context
 //    (interactive shell, test harness running under `bash -x`).
@@ -114,16 +59,11 @@ try {
 }
 const command: string = parsed.tool_input?.command ?? "";
 
-// Session ownership is independent of runtime-graph compilation and must run
-// before the command/audit filters below. Most intent-create calls are not
-// transition-class commands, so they intentionally exit at the next gate.
-bindCreatedIntentToInvokingSession(projectDir, parsed);
-
 // 3. Command filter - only dispatch on the audit-emit-side seam for both
 //    legacy tool-file commands and the new `aidlc ...` grammar.
 //    aidlc-runtime.ts / aidlc runtime is rejected explicitly (recursion guard
 //    at the command level - a positive-only allowlist would let composites like
-//    `{{INVOKE}} __delegate runtime compile && {{INVOKE}} __delegate state approve` through and
+//    `bun .claude/tools/aidlc.ts __delegate runtime compile && bun .claude/tools/aidlc.ts __delegate state approve` through and
 //    loop). aidlc-log.ts emits only chatty in-stage events
 //    (DECISION_RECORDED / QUESTION_ANSWERED / ERROR_LOGGED), none
 //    transition-class. aidlc-worktree.ts emits only WORKTREE_* events.
@@ -137,12 +77,12 @@ bindCreatedIntentToInvokingSession(projectDir, parsed);
 // 6-7). The audit-tail transition check is the real gate; the command filter is
 // only a cheap pre-filter that needs a command string to work.
 const ideAuditMode = (parsed.tool_input?.source ?? "") === "ide-audit-sync";
-hookDebug(projectDir, "rebuild-stage-graph", "command-gate", { ideAuditMode, command: command.slice(0, 120) });
+hookDebug(projectDir, "runtime-compile", "command-gate", { ideAuditMode, command: command.slice(0, 120) });
 if (!ideAuditMode) {
   const commandDecision = classifyRuntimeCompileCommand(command);
   if (commandDecision === "reject") return 0;
   if (commandDecision === "pass") {
-    hookDebug(projectDir, "rebuild-stage-graph", "exit: command not a transition tool");
+    hookDebug(projectDir, "runtime-compile", "exit: command not a transition tool");
     return 0;
   }
 }
@@ -159,7 +99,7 @@ const space = activeSpace(projectDir);
 const intent = activeIntent(projectDir, space) ?? undefined;
 const audit = readAllAuditShards(projectDir, intent, space).replace(/\r\n/g, "\n");
 if (audit.length === 0) {
-  hookDebug(projectDir, "rebuild-stage-graph", "exit: audit empty");
+  hookDebug(projectDir, "runtime-compile", "exit: audit empty");
   return 0;
 }
 
@@ -169,7 +109,7 @@ if (audit.length === 0) {
 //    is a per-hook liveness probe, not per-intent state.
 const healthDir = hooksHealthDir(projectDir);
 mkdirSync(healthDir, { recursive: true });
-writeFileSync(join(healthDir, "rebuild-stage-graph.last"), isoTimestamp(), "utf-8");
+writeFileSync(join(healthDir, "runtime-compile.last"), isoTimestamp(), "utf-8");
 
 // 6. Tail-read last 3 audit blocks. Three is the upper bound: a normal
 //    approve writes GATE_APPROVED + STAGE_COMPLETED + STAGE_STARTED in
@@ -190,9 +130,9 @@ const last3 = blocks.slice(-3);
 //    (before the orchestrator wrote any §13 entries).
 const transitionRegex = /^\*\*Event\*\*:\s*(GATE_APPROVED|STAGE_STARTED|STAGE_AWAITING_APPROVAL|AUDIT_MERGED|WORKFLOW_COMPLETED)\s*$/m;
 const hasTransition = last3.some((b) => transitionRegex.test(b));
-hookDebug(projectDir, "rebuild-stage-graph", "transition-gate", { hasTransition, last3count: last3.length });
+hookDebug(projectDir, "runtime-compile", "transition-gate", { hasTransition, last3count: last3.length });
 if (!hasTransition) {
-  hookDebug(projectDir, "rebuild-stage-graph", "exit: no transition in audit tail");
+  hookDebug(projectDir, "runtime-compile", "exit: no transition in audit tail");
   return 0;
 }
 
@@ -219,7 +159,7 @@ if (ideAuditMode) {
       }
     }
     if (graphMtime >= newestShard) {
-      hookDebug(projectDir, "rebuild-stage-graph", "skip: graph newer than audit (idempotent)", {
+      hookDebug(projectDir, "runtime-compile", "skip: graph newer than audit (idempotent)", {
         graphMtime,
         newestShard,
       });
@@ -235,7 +175,7 @@ if (ideAuditMode) {
 try {
   compileRuntime(projectDir);
 } catch (e) {
-  recordHookDrop(projectDir, "rebuild-stage-graph", errorMessage(e));
+  recordHookDrop(projectDir, "runtime-compile", errorMessage(e));
 }
 return 0;
 }
