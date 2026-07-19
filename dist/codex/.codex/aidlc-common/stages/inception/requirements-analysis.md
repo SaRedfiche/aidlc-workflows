@@ -169,8 +169,16 @@ them exactly rather than renumbering or replacing them with prose references.
 ### Step 12: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
+<<<<<<< HEAD
 `bun .codex/tools/aidlc-orchestrate.ts report --stage requirements-analysis --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
+||||||| parent of df361fbee (feat: graduate native install mechanism)
+`bun .codex/tools/aidlc-orchestrate.ts report --stage requirements-analysis --result <outcome>`.
+The engine owns all lifecycle transitions and advancement.
+=======
+`aidlc __delegate orchestrate report --stage requirements-analysis --result <outcome>`.
+The engine owns all lifecycle transitions and advancement.
+>>>>>>> df361fbee (feat: graduate native install mechanism)
 
 ### Step 13: Present Completion & Request Approval
 
@@ -194,7 +202,7 @@ Render `[next stage]` verbatim from the run-stage directive's `next_stage`
 field (per the stage-protocol.md approval-gate binding), or `Complete workflow`
 when it is null. Never guess the next stage name.
 If "Add User Stories" is selected, run
-`bun .codex/tools/aidlc-utility.ts recompose --add user-stories`
+`aidlc __delegate utility recompose --add user-stories`
 before re-entering the approval flow.
 
 IF User Stories is NOT set to SKIP: use standard 2-option approval (Approve / Request Changes).

@@ -37,11 +37,25 @@
 //   - everything else: advisory; stdout ignored, exit 0.
 //
 // Usage (wired in .codex/hooks.json):
+<<<<<<< HEAD
 //   bun .codex/hooks/aidlc-codex-adapter.ts <target>
 // where <target> ∈ session-start | audit-and-sensors | sync-workflow-state |
 //                  rebuild-stage-graph | validate-state | log-subagent | continue-workflow |
 //                  record-human-turn | state-transition-guard | reviewer-scope |
 //                  review-freeze | deliver-stage-rules | plan-approval-guard
+||||||| parent of df361fbee (feat: graduate native install mechanism)
+//   bun .codex/hooks/aidlc-codex-adapter.ts <target>
+// where <target> ∈ session-start | audit-and-sensors | state-sync |
+//                  runtime-compile | validate-state | log-subagent | stop |
+//                  mint | state-transition-guard | reviewer-scope |
+//                  dispatch-rules | plan-approval-guard
+=======
+//   aidlc adapter codex <target>
+// where <target> ∈ session-start | audit-and-sensors | state-sync |
+//                  runtime-compile | validate-state | log-subagent | stop |
+//                  mint | state-transition-guard | reviewer-scope |
+//                  dispatch-rules | plan-approval-guard
+>>>>>>> df361fbee (feat: graduate native install mechanism)
 
 import { createHash } from "node:crypto";
 import {

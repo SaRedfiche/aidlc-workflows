@@ -165,8 +165,16 @@ stage before Construction begins.
 ### Step 7: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
+<<<<<<< HEAD
 `bun .aidlc/tools/aidlc-orchestrate.ts report --stage delivery-planning --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
+||||||| parent of df361fbee (feat: graduate native install mechanism)
+`bun .aidlc/tools/aidlc-orchestrate.ts report --stage delivery-planning --result <outcome>`.
+The engine owns all lifecycle transitions and advancement.
+=======
+`aidlc __delegate orchestrate report --stage delivery-planning --result <outcome>`.
+The engine owns all lifecycle transitions and advancement.
+>>>>>>> df361fbee (feat: graduate native install mechanism)
 
 **Construction iteration.** Classify how the approved `bolt-plan.md` wants the
 per-unit construction stages (functional-design, nfr-requirements, nfr-design,
@@ -176,7 +184,7 @@ building one unit completely before the next unit begins — the first working
 code lands after one unit's design, honoring a skeleton-first sequence; a plan
 that reasons stage-by-stage across all units does not. Only when the plan calls
 for the unit-first order, record it:
-`bun .aidlc/tools/aidlc-state.ts set-construction-iteration unit-major`.
+`aidlc __delegate state set-construction-iteration unit-major`.
 The default is `stage-major` (each design stage runs for every unit, then the
 next stage, with code-generation last), needs no write, and is byte-identical
 to prior behaviour. Under `unit-major` the same per-stage gates still fire, but

@@ -186,6 +186,7 @@ describe("t238 build-binaries release builder", () => {
       "adapter-codex-validate-state",
       "adapter-cursor-validate-state",
       "routed-project-dir",
+      "bun-compiled-parity",
     ]) {
       expect(gate(native, name).ok, name).toBe(true);
     }

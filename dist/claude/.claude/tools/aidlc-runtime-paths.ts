@@ -10,8 +10,14 @@ const KNOWN_HARNESSES = [".claude", ".kiro", ".codex", ".cursor", ".aidlc"] as c
 const KNOWN_HARNESSES = [".claude", ".kiro", ".codex"] as const;
 =======
 const KNOWN_HARNESSES = [".claude", ".kiro", ".codex"] as const;
+<<<<<<< HEAD
 const PROJECTED_INVOKE = "bun .claude/tools/aidlc.ts";
 >>>>>>> f5c8f8211 (feat: add transactional install lifecycle (recovered PR2 snapshot))
+||||||| parent of df361fbee (feat: graduate native install mechanism)
+const PROJECTED_INVOKE = "bun .claude/tools/aidlc.ts";
+=======
+const PROJECTED_INVOKE = "aidlc";
+>>>>>>> df361fbee (feat: graduate native install mechanism)
 
 export interface HarnessLocation {
   harnessDir?: string;

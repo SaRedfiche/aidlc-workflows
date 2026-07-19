@@ -286,11 +286,11 @@ resolution uses the name to distinguish shared engine directories and
 `rulesSubdir()` reads the rename. One set of tool sources runs in every harness. See
 [Porting to a New Harness](../harness-engineering/09-porting-to-a-new-harness.md).
 
-The copy-install and binary-install channels are projections of the same
-authored tree. `dist/` retains bun-shaped invocation for existing projects;
-`dist-release/` routes hooks and tools through the statically embedded `aidlc`
-dispatcher. Both trees carry `aidlc-stamp.json` and
-`aidlc-projection.json`, and both are checked by `package.ts --check`.
+`dist/` and `dist-release/` are byte-identical native projections of the same
+authored tree. Hooks, generated commands, adapters, and host trust entries all
+route through the statically embedded `aidlc` dispatcher. Both roots remain
+committed and independently checked by `package.ts --check`; `dist-release/`
+is the stable staging input for release archive assembly.
 
 ## Directory Structure
 
