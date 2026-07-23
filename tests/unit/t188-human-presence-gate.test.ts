@@ -1,4 +1,4 @@
-// covers: cli:aidlc-state(approve,gate-start), cli:aidlc-log(answer), cli:aidlc-audit(append), function:handleApprove, function:handleGateStart, function:handleAnswer, function:humanActedSinceGate, function:humanActedSinceLastAnswer, function:hasOpenGate, function:isAutonomousMode, function:humanPresenceGuardDisabled, file:hooks/aidlc-mint-presence.ts
+// covers: cli:aidlc-state(approve,gate-start), cli:aidlc-orchestrate(report), cli:aidlc-log(answer), cli:aidlc-audit(append), function:handleApprove, function:handleGateStart, function:handleAnswer, function:humanActedSinceGate, function:humanActedSinceLastAnswer, function:hasOpenGate, function:isAutonomousMode, function:humanPresenceGuardDisabled, file:hooks/aidlc-mint-presence.ts
 //
 // t188 - human-presence approval gate (ledger-event design).
 //
@@ -19,6 +19,13 @@
 //     auto-cascaded in the same human turn opens AFTER the GATE_APPROVED that just
 //     committed (so no HUMAN_TURN follows it -> refused); a stale human turn
 //     precedes the last resolution (-> refused).
+//   - `aidlc-log answer` for a stage already at [?] is a successful no-op WHEN
+//     a human acted and no unresolved DECISION_RECORDED follows the gate-open:
+//     approval choices are report-owned and must not emit QUESTION_ANSWERED,
+//     which would consume the HUMAN_TURN before the following approve. With NO
+//     human turn the same call REFUSES (so a fabricated `answer && report
+//     rejected` chain breaks at the answer). A pending non-gate decision makes
+//     the answer record normally, regardless of its wording.
 //   - fail-open when the ledger has NO events at all (presence not tracked yet).
 //
 // CRITICAL test-harness note: run-tests.ts sets AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1
@@ -51,6 +58,7 @@ import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts
 
 const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
+const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const AUDIT = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
 const MID_IDEATION = "state-mid-ideation.md"; // Current Stage: feasibility
@@ -76,6 +84,22 @@ function guardedLog(proj: string, args: string[]): { rc: number; out: string } {
   env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
   delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
   const r = spawnSync(BUN, [LOG, ...args, "--project-dir", proj], {
+    encoding: "utf-8",
+    env,
+  });
+  return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+}
+
+// Drive the public report surface with the same guard posture. NOTE the
+// contract difference from `guarded`: when aidlc-state.ts refuses the
+// transition, orchestrate relays the refusal as an error DIRECTIVE
+// ({"kind":"error",...}) on stdout and exits 0 — only a malformed directive
+// exits non-zero. Refusal assertions must read the directive, not the rc.
+function guardedReport(proj: string, args: string[]): { rc: number; out: string } {
+  const env = { ...process.env };
+  env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
+  delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+  const r = spawnSync(BUN, [ORCHESTRATE, "report", ...args, "--project-dir", proj], {
     encoding: "utf-8",
     env,
   });
@@ -323,7 +347,19 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   describe("handleAnswer twin (aidlc-log answer)", () => {
     test("REFUSES to record an answer when the ledger has events but no HUMAN_TURN", () => {
       const slug = field(proj, "Current Stage");
-      guarded(proj, ["gate-start", slug]); // ledger non-empty, no HUMAN_TURN
+      // A decision row activates presence tracking without opening an approval
+      // gate, keeping this an ordinary interview-answer scenario.
+      expect(
+        guardedLog(proj, [
+          "decision",
+          "--stage",
+          slug,
+          "--decision",
+          "Choose",
+          "--options",
+          "A,B",
+        ]).rc,
+      ).toBe(0);
       const r = guardedLog(proj, ["answer", "--stage", slug, "--details", "my answer"]);
       expect(r.rc).not.toBe(0);
       expect(r.out).toContain("Refusing to record this answer");
@@ -341,6 +377,208 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       const r2 = guardedLog(proj, ["answer", "--stage", slug, "--details", "second answer"]);
       expect(r2.rc).not.toBe(0);
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
+    });
+
+    test("a redundant approval answer is a no-op and report still approves", () => {
+      const slug = field(proj, "Current Stage");
+      guarded(proj, ["checkbox", `${slug}=in-progress`]);
+      guarded(proj, ["gate-start", slug]);
+      recordHumanTurn(proj);
+
+      const answer = guardedLog(proj, [
+        "answer",
+        "--stage",
+        slug,
+        "--details",
+        "Approve",
+      ]);
+      expect(answer.rc).toBe(0);
+      expect(answer.out).toContain('"skipped":"QUESTION_ANSWERED"');
+      expect(answer.out).toContain('"reason":"approval-gate-report-owned"');
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
+
+      const approve = guardedReport(proj, [
+        "--stage",
+        slug,
+        "--result",
+        "approved",
+        "--user-input",
+        "Approve",
+      ]);
+      expect(approve.rc).toBe(0);
+      expect(approve.out).toContain('"kind":"done"');
+      expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+    });
+
+    test("a paraphrased approval is a no-op and report still approves", () => {
+      const slug = field(proj, "Current Stage");
+      guarded(proj, ["checkbox", `${slug}=in-progress`]);
+      guarded(proj, ["gate-start", slug]);
+      recordHumanTurn(proj);
+
+      const answer = guardedLog(proj, [
+        "answer",
+        "--stage",
+        slug,
+        "--details",
+        "The user approved",
+      ]);
+      expect(answer.rc).toBe(0);
+      expect(answer.out).toContain('"skipped":"QUESTION_ANSWERED"');
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
+
+      const approve = guardedReport(proj, [
+        "--stage",
+        slug,
+        "--result",
+        "approved",
+        "--user-input",
+        "The user approved",
+      ]);
+      expect(approve.rc).toBe(0);
+      expect(approve.out).toContain('"kind":"done"');
+      expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+    });
+
+    test("an interview answer still cannot authorize a later same-turn approval", () => {
+      const slug = field(proj, "Current Stage");
+      guarded(proj, ["checkbox", `${slug}=in-progress`]);
+      recordHumanTurn(proj);
+      expect(
+        guardedLog(proj, [
+          "answer",
+          "--stage",
+          slug,
+          "--details",
+          "Interview response",
+        ]).rc,
+      ).toBe(0);
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
+
+      guarded(proj, ["gate-start", slug]);
+      const approve = guardedReport(proj, [
+        "--stage",
+        slug,
+        "--result",
+        "approved",
+        "--user-input",
+        "fabricated approval",
+      ]);
+      expect(approve.rc).toBe(0);
+      expect(approve.out).toContain('"kind":"error"');
+      expect(approve.out).toContain("Refusing to approve");
+      expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+    });
+
+    test("a redundant gate answer with NO human turn refuses (fabricated approve chain breaks at the answer)", () => {
+      const slug = field(proj, "Current Stage");
+      guarded(proj, ["checkbox", `${slug}=in-progress`]);
+      guarded(proj, ["gate-start", slug]);
+
+      const answer = guardedLog(proj, [
+        "answer",
+        "--stage",
+        slug,
+        "--details",
+        "Approve",
+      ]);
+      expect(answer.rc).not.toBe(0);
+      expect(answer.out).toContain("Refusing to acknowledge this approval choice");
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
+
+      const approve = guardedReport(proj, [
+        "--stage",
+        slug,
+        "--result",
+        "approved",
+        "--user-input",
+        "fabricated approval",
+      ]);
+      expect(approve.rc).toBe(0);
+      expect(approve.out).toContain('"kind":"error"');
+      expect(approve.out).toContain("Refusing to approve");
+      expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+    });
+
+    test("a redundant rejection answer with NO human turn refuses (reject carries no presence guard of its own)", () => {
+      const slug = field(proj, "Current Stage");
+      guarded(proj, ["checkbox", `${slug}=in-progress`]);
+      guarded(proj, ["gate-start", slug]);
+
+      const answer = guardedLog(proj, [
+        "answer",
+        "--stage",
+        slug,
+        "--details",
+        "Request Changes: tighten the schema",
+      ]);
+      expect(answer.rc).not.toBe(0);
+      expect(answer.out).toContain("Refusing to acknowledge this approval choice");
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
+      expect(eventCount(proj, "GATE_REJECTED")).toBe(0);
+    });
+
+    test("a redundant rejection answer with a human turn is a no-op and report still rejects", () => {
+      const slug = field(proj, "Current Stage");
+      guarded(proj, ["checkbox", `${slug}=in-progress`]);
+      guarded(proj, ["gate-start", slug]);
+      recordHumanTurn(proj);
+
+      const answer = guardedLog(proj, [
+        "answer",
+        "--stage",
+        slug,
+        "--details",
+        "Request Changes: tighten the schema",
+      ]);
+      expect(answer.rc).toBe(0);
+      expect(answer.out).toContain('"skipped":"QUESTION_ANSWERED"');
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
+
+      const reject = guardedReport(proj, [
+        "--stage",
+        slug,
+        "--result",
+        "rejected",
+        "--user-input",
+        "Request Changes: tighten the schema",
+      ]);
+      expect(reject.rc).toBe(0);
+      expect(eventCount(proj, "GATE_REJECTED")).toBe(1);
+    });
+
+    test("a gate-word-prefixed answer to a pending non-gate question is recorded exactly", () => {
+      const slug = field(proj, "Current Stage");
+      guarded(proj, ["checkbox", `${slug}=in-progress`]);
+      guarded(proj, ["gate-start", slug]);
+      expect(
+        guardedLog(proj, [
+          "decision",
+          "--stage",
+          slug,
+          "--decision",
+          "Choose deployment option",
+          "--options",
+          "A,B",
+        ]).rc,
+      ).toBe(0);
+      recordHumanTurn(proj);
+
+      // The audit structure, not words such as "Reject", identifies this as the
+      // pending clarifying question's answer.
+      const answer = guardedLog(proj, [
+        "answer",
+        "--stage",
+        slug,
+        "--details",
+        "Reject option B, use A",
+      ]);
+      expect(answer.rc).toBe(0);
+      expect(answer.out).toContain('"emitted":"QUESTION_ANSWERED"');
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
+      expect(readAllAuditShards(proj)).toContain(
+        "**Details**: Reject option B, use A",
+      );
     });
   });
 });

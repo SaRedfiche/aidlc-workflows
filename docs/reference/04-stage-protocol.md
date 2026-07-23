@@ -78,9 +78,9 @@ with a fresh timestamp.
 | # | Check |
 |---|-------|
 | 1 | At the approval gate, call `bun .claude/tools/aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval`. The engine flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. (`STAGE_STARTED` / the `[-]` transition was emitted when the stage became active.) |
-| 2 | Log options BEFORE calling `AskUserQuestion` via `bun .claude/tools/aidlc-log.ts decision` (not by hand-writing to the `audit/` shards) |
-| 3 | After the user responds, log the exact choice via `bun .claude/tools/aidlc-log.ts answer`, then use `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` for approval or `aidlc-orchestrate.ts report --stage <slug> --result rejected --user-input "<feedback>"` for request-changes. After revision work, report `--result revised` before re-presenting the gate. |
-| 4 | Never summarize user input -- pass exact option labels to the log tool; for automated stages use `N/A -- [reason]` |
+| 2 | For non-gate questions, log options BEFORE calling `AskUserQuestion` via `bun .claude/tools/aidlc-log.ts decision` (not by hand-writing to the `audit/` shards), then log the exact response via `aidlc-log.ts answer`. |
+| 3 | After an approval-gate response, call `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` for approval or `aidlc-orchestrate.ts report --stage <slug> --result rejected --user-input "<feedback>"` for request-changes. Never call `aidlc-log.ts decision` or `aidlc-log.ts answer` for the gate. After revision work, report `--result revised` before re-presenting it. |
+| 4 | Never summarize user input -- pass exact option labels to the owning log or report tool; for automated stages use `N/A -- [reason]` |
 | 5 | One audit entry per interaction -- the log/state tools enforce single-event emission; never merge multiple events into one call |
 | 6 | At stage end, call `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` (gated stages) or `report --stage <slug> --result completed` (Initialization). The engine flips `[?]`/`[-]` to `[x]`, emits `GATE_APPROVED` when gated, and emits `STAGE_COMPLETED` atomically through the state tool |
 | 7 | Mark previous stage task `completed` and current stage task `in_progress` with `activeForm` BEFORE work begins (the `sync-statusline` hook handles state syncing) |
@@ -164,8 +164,7 @@ revision, an 'Accept as-is' option will become available."
 ```mermaid
 flowchart TD
     COMPLETE["Stage work complete"]
-    REPORT_AWAITING["Report awaiting-approval:\nengine verifies evidence + opens gate"]
-    AUDIT_PRE["Append to this clone's audit shard:\nstage summary + options\n(fresh ISO timestamp)"]
+    REPORT_AWAITING["Report awaiting-approval:\nengine verifies evidence + opens gate\n(emits STAGE_AWAITING_APPROVAL)"]
     ASK["AskUserQuestion:\nApproval Gate"]
 
     APPROVE["Approve"]
@@ -173,16 +172,11 @@ flowchart TD
     ACCEPT["Accept as-is\n(escape hatch)"]
     ADD_STAGE["Add Skipped Stage\n(Ideation/Inception only)"]
 
-    AUDIT_POST_A["Log: User approved\n(fresh timestamp)"]
-    AUDIT_POST_C["Log: User requested changes\n(fresh timestamp)"]
-    AUDIT_POST_ACC["Log: User accepted as-is\n(fresh timestamp)"]
-    AUDIT_POST_ADD["Log: User added stage\n(fresh timestamp)"]
-
     REVISION_COUNT{"Revision\ncycle >= 3?"}
     NOTE_2ND["After 2nd revision:\nnote that escape hatch\nactivates next cycle"]
 
-    REPORT_APPROVED["Report approved:\nengine completes + routes"]
-    REPORT_REJECTED["Report rejected:\nengine records feedback + revising state"]
+    REPORT_APPROVED["Report approved with exact choice:\nengine emits GATE_APPROVED,\ncompletes + routes"]
+    REPORT_REJECTED["Report rejected with feedback:\nengine emits GATE_REJECTED,\nrecords revising state"]
     REPORT_REVISED["Report revised:\nengine verifies evidence + re-opens gate"]
     PROGRESS["Display progress line:\nN/total overall"]
     NEXT_STAGE["Proceed to next stage"]
@@ -190,22 +184,22 @@ flowchart TD
     REVISE["Apply user feedback\nto stage artifacts"]
     RE_PRESENT["Re-present completion\nmessage"]
 
-    ADD_EXEC["Insert skipped stage\ninto workflow"]
+    ADD_EXEC["Insert skipped stage into workflow\n(scope tooling records the change)"]
 
-    COMPLETE --> REPORT_AWAITING --> AUDIT_PRE --> ASK
+    COMPLETE --> REPORT_AWAITING --> ASK
     ASK --> APPROVE
     ASK --> CHANGES
     ASK --> ACCEPT
     ASK --> ADD_STAGE
 
-    APPROVE --> AUDIT_POST_A --> REPORT_APPROVED --> PROGRESS --> NEXT_STAGE
-    ACCEPT --> AUDIT_POST_ACC --> REPORT_APPROVED
+    APPROVE --> REPORT_APPROVED --> PROGRESS --> NEXT_STAGE
+    ACCEPT --> REPORT_APPROVED
 
-    CHANGES --> AUDIT_POST_C --> REPORT_REJECTED --> REVISION_COUNT
-    REVISION_COUNT -->|"< 3"| NOTE_2ND --> REVISE --> REPORT_REVISED --> RE_PRESENT --> AUDIT_PRE
+    CHANGES --> REPORT_REJECTED --> REVISION_COUNT
+    REVISION_COUNT -->|"< 3"| NOTE_2ND --> REVISE --> REPORT_REVISED --> RE_PRESENT --> ASK
     REVISION_COUNT -->|">= 3"| REVISE
 
-    ADD_STAGE --> AUDIT_POST_ADD --> ADD_EXEC
+    ADD_STAGE --> ADD_EXEC
 
     style COMPLETE fill:#e8f5e9,stroke:#388e3c
     style REPORT_AWAITING fill:#e3f2fd,stroke:#1565c0
@@ -229,9 +223,9 @@ Every stage ends with this 5-part structure, in order. All parts mandatory.
 
 ### Part 0: Audit Logging
 
-Before showing the completion message:
-1. Append to `<record>/audit/` (per-clone shards): stage name, work summary, artifacts
-2. After receiving approval response, append user's choice with fresh timestamp
+The gate's audit trail is report-owned:
+1. Before presenting the gate, `report --result awaiting-approval` records the held gate (`STAGE_AWAITING_APPROVAL`)
+2. After the response, `report --result approved|rejected --user-input "<exact choice>"` records the user's choice (`GATE_APPROVED`/`GATE_REJECTED`); no separate log entry is added for the gate prompt or choice
 
 ### Part 1: Announcement
 
@@ -531,12 +525,13 @@ Read and Edit).
 `PostToolUse` hook auto-logs file writes. Conversation events must be logged
 manually (most commonly missed step).
 
-**At each approval gate:** (1) BEFORE `AskUserQuestion` -- append options with
-fresh timestamp. (2) AFTER response -- append user's choice with fresh
-timestamp.
+**At each approval gate:** (1) BEFORE `AskUserQuestion` -- report
+`awaiting-approval`. (2) AFTER response -- report `approved` or `rejected` with
+the exact user input. The report-owned lifecycle events are the gate's complete
+audit record; do not call `aidlc-log.ts decision` or `aidlc-log.ts answer`.
 
-**At each question interaction:** AFTER receiving answers -- append Q&A
-summary.
+**At each non-gate question interaction:** AFTER receiving answers -- append
+the Q&A summary through `aidlc-log.ts answer`.
 
 ---
 
