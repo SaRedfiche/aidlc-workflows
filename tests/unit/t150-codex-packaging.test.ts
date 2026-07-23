@@ -21,8 +21,19 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import {
+  chmodSync,
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import { parse } from "smol-toml";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
@@ -38,7 +49,6 @@ const TRUST_SUFFIXES = [
   "post_tool_use:1:0",
   "post_tool_use:2:0",
   "pre_compact:0:0",
-  "post_compact:0:0",
   "subagent_stop:0:0",
   "stop:0:0",
 ] as const;
@@ -71,6 +81,48 @@ function* walk(dir: string): Generator<string> {
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) yield* walk(full);
     else yield full;
+  }
+}
+
+function runDoctorWithCodexVersion(version: string): {
+  status: number;
+  output: string;
+} {
+  const root = mkdtempSync(join(tmpdir(), "t150-codex-version-"));
+  try {
+    const project = join(root, "project");
+    cpSync(join(REPO_ROOT, "dist", "codex", ".codex"), join(project, ".codex"), {
+      recursive: true,
+    });
+    cpSync(join(REPO_ROOT, "dist", "codex", "aidlc"), join(project, "aidlc"), {
+      recursive: true,
+    });
+
+    const binDir = join(root, "bin");
+    mkdirSync(binDir, { recursive: true });
+    if (process.platform === "win32") {
+      writeFileSync(join(binDir, "codex.cmd"), `@echo off\r\necho codex-cli ${version}\r\n`);
+    } else {
+      const fakeCodex = join(binDir, "codex");
+      writeFileSync(fakeCodex, `#!/bin/sh\necho "codex-cli ${version}"\n`);
+      chmodSync(fakeCodex, 0o755);
+    }
+
+    const tool = join(project, ".codex", "tools", "aidlc-utility.ts");
+    const result = spawnSync(process.execPath, [tool, "doctor", "--project-dir", project], {
+      cwd: project,
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+      },
+    });
+    return {
+      status: result.status ?? -1,
+      output: `${result.stdout ?? ""}${result.stderr ?? ""}`,
+    };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 }
 
@@ -148,7 +200,7 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
       hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>;
     };
     expect(Object.keys(wiring.hooks).sort()).toEqual(
-      ["PostCompact", "PostToolUse", "PreCompact", "PreToolUse", "SessionStart", "Stop", "SubagentStop", "UserPromptSubmit"].sort(),
+      ["PostToolUse", "PreCompact", "PreToolUse", "SessionStart", "Stop", "SubagentStop", "UserPromptSubmit"].sort(),
     );
     // Matchers per the verified tool-name map.
     const postMatchers = wiring.hooks.PostToolUse.map((g) => g.matcher).sort();
@@ -413,5 +465,17 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
     expect(entries.length).toBe(groupCount);
     expect(entries).toEqual(expectedTrustKeys("/tmp/example-proj/.codex/hooks.json"));
     expect(r.stdout).not.toContain("<PROJECT_DIR>");
+  });
+
+  test("13: doctor enforces Codex 0.145.0 as the compact-session reload floor", () => {
+    const unsupported = runDoctorWithCodexVersion("0.144.9");
+    expect(unsupported.status).toBe(1);
+    expect(unsupported.output).toContain("codex CLI version 0.144.9 >= 0.145.0");
+    expect(unsupported.output).toContain("upgrade Codex CLI to 0.145.0 or later");
+
+    const supported = runDoctorWithCodexVersion("0.145.0");
+    expect(supported.status).toBe(0);
+    expect(supported.output).toContain("codex CLI version 0.145.0 >= 0.145.0");
+    expect(supported.output).toContain("immediate compact-session reload");
   });
 });
