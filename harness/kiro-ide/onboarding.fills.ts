@@ -14,7 +14,7 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 
     prereq_bullets: `- **Kiro IDE**: Sign in and select Claude Opus 4.8 as the chat model before starting a workflow.
 - **bun**: Required for the CLI tools and hook scripts (state management, audit logging, orchestration engine). Install via \`curl -fsSL https://bun.sh/install | bash\`. \`bun\` must be on your PATH for the non-interactive shells the harness spawns — these source \`~/.zshenv\` (zsh) or \`~/.bashrc\` (bash), NOT \`~/.zshrc\`.
-- **Activation**: Open the project in Kiro IDE and invoke \`/aidlc\`; the command loads the shipped \`skills/aidlc/SKILL.md\` conductor. The \`.kiro/hooks/*.kiro.hook\` files register in the IDE's Agent Hooks panel.
+- **Activation**: Open the project in Kiro IDE and invoke \`/aidlc\`; the command loads the shipped \`skills/aidlc/SKILL.md\` conductor. The \`.kiro/hooks/aidlc-*.json\` v2 hook files register in the IDE's Agent Hooks panel.
 - **Permissions**: delegation-target agent \`.md\` files receive the IDE-native read/write/shell grants they need. The conductor's approval gates and your IDE permission settings remain the control boundary.`,
 
     prereq_bullets_tail: "",
@@ -32,7 +32,7 @@ This is the same AI-DLC core that ships to every harness — one deterministic e
 - Approval gates and questions render as **numbered prose options** (no structured-question widget); the questions FILE with \`[Answer]:\` tags remains the source of truth.
 - There is **no statusline** and **no welcome message**; use \`/aidlc --status\` and the progress lines at gates.
 - Construction swarm runs as **subagent fan-out only** (\`AIDLC_USE_SWARM=1\` is a loud no-op).
-- \`SESSION_STARTED\` and \`SESSION_ENDED\` are emitted; Kiro IDE has no pre-compaction event, so \`SESSION_COMPACTED\` is not emitted.
+- \`SESSION_STARTED\` is emitted on IDE 1.x (via the \`SessionStart\` v2 hook); \`SESSION_ENDED\` is NOT emitted on 1.x (the IDE's \`Stop\` trigger is turn-scoped, not session-scoped, so there is no safe registration for it). Kiro IDE has no pre-compaction event, so \`SESSION_COMPACTED\` is not emitted.
 - **MCP servers**: none ship, and the Kiro MCP config mechanism is not configured here (the Claude distribution ships five; Kiro ships zero today).
 - A workflow's \`aidlc/\` workspace tree is harness-neutral: a project can move between Claude Code and Kiro IDE installs (supported but untested — keep both \`.claude/\` and \`.kiro/\` in sync via the framework's packaging if you do this).
 `,
