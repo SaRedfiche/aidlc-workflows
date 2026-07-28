@@ -22,7 +22,6 @@ sensors:
   - upstream-coverage
 scopes:
   - ai-plc-discovery
-  - ai-plc-full
   - ai-plc-prototype-build
 inputs: The approved product strategy from ai-plc-product-strategy
 outputs: gtm-plan.md, gtm-questions.md (under this stage's record dir, engine-resolved)

@@ -23,7 +23,6 @@ sensors:
   - upstream-coverage
 scopes:
   - ai-plc-discovery
-  - ai-plc-full
 inputs: The approved PR/FAQ and pain-point analysis from ai-plc-envision
 outputs: identified-solutions.md (under this stage's record dir, engine-resolved)
 ---

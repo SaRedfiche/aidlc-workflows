@@ -40,7 +40,6 @@ sensors:
   - upstream-coverage
 scopes:
   - ai-plc-discovery
-  - ai-plc-full
   - ai-plc-prototype-build
 inputs: Every discovery artifact this run produced - which subset exists depends on the entry point taken
 outputs: discovery-document.md (under this stage's record dir, engine-resolved)
@@ -51,10 +50,10 @@ outputs: discovery-document.md (under this stage's record dir, engine-resolved)
 MANDATORY: Follow stage-protocol.md for approval gates, question format, and completion messages.
 
 Compile everything discovery produced into one comprehensive, self-contained
-Discovery Document. This is AI-PLC's handoff artifact: a development team (or
-the continuation of this run under the `ai-plc-full` scope) uses it as the
-product input to Inception's Requirements Analysis, and it works equally as a
-traditional product brief read without any AI tooling.
+Discovery Document. This is AI-PLC's handoff artifact: the continuation of
+this run (or a separate development team receiving the document) uses it as
+the product input to Inception's Requirements Analysis, and it works equally
+as a traditional product brief read without any AI tooling.
 
 ## Steps
 
@@ -103,11 +102,12 @@ STOP for the human response. Report Approve with
 Request Changes with `--result rejected --user-input "<feedback>"`, revise the
 artifacts, then report `--result revised` before re-presenting.
 
-After approval, tell the user where the run goes next: under
-`ai-plc-discovery` or `ai-plc-prototype-build` the discovery workflow is
-complete and the document is ready to hand to a development team; under
-`ai-plc-full` the run continues into Inception, where Requirements Analysis
-consumes this document directly.
+After approval, tell the user where the run goes next: this is the phase
+boundary. Under `ai-plc-discovery` the run continues into Inception, where
+Requirements Analysis consumes this document directly - OR the user stops
+here and hands the document (plus the PROTOTYPE-*.md specs) to a separate
+development team; ask which they want. Under `ai-plc-prototype-build` the
+workflow is complete.
 
 ## Sensors
 

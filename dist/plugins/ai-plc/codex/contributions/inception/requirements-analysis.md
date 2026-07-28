@@ -6,7 +6,7 @@ adds:
     - artifact: ai-plc-discovery-document
       required: false
   scopes:
-    - ai-plc-full
+    - ai-plc-discovery
 fragments:
   - anchor: after-step:2
     order: 100

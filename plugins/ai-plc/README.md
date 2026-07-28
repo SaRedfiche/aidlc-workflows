@@ -22,18 +22,20 @@ to core ideation stages):
 | `ai-plc-go-to-market` | Marketing, sales, launch plan, kill criteria |
 | `ai-plc-discovery-document` | Assemble the handoff Discovery Document |
 
-**Three scopes** mapping AI-PLC's entry points and handoff models:
+**Two scopes** mapping AI-PLC's entry points and handoff models:
 
-- `ai-plc-discovery` - the PM workspace: discovery only, both the pain-point
-  and use-case entry points (the fork between them is a runtime decision),
-  ending at the Discovery Document. Core phases are SKIP.
+- `ai-plc-discovery` - the main scope: discovery first (both the pain-point
+  and use-case entry points; the fork between them is a runtime decision),
+  then the run continues into core Inception through Operation with
+  Requirements Analysis consuming the Discovery Document. The Discovery
+  Document approval gate is the phase boundary: stop there for the
+  PM-workspace handoff model (document + specs go to a separate team), or
+  keep approving to build in the same workspace. Core ideation stays SKIP.
+  The core-stage memberships arrive via `adds.scopes` contributions; an
+  install whose compose hook predates that merge surface advisory-drops them
+  (visible in doctor), leaving the scope discovery-only.
 - `ai-plc-prototype-build` - the workshop handoff: PROTOTYPE-*.md specs
   already exist, skip all discovery, build + strategy + GTM + document.
-- `ai-plc-full` - discovery joined to the core lifecycle in one run: the
-  discovery stages replace core ideation, then Inception through Operation
-  run as in the core `feature` scope. Requires an install whose compose hook
-  merges `adds.scopes` (older installs advisory-drop the join contributions,
-  leaving this scope discovery-only; use the two-scope handoff there).
 
 **One agent** (`ai-plc-product-strategist-agent`) leading the discovery
 stages, with methodology knowledge under `knowledge/`.
@@ -41,7 +43,7 @@ stages, with methodology knowledge under `knowledge/`.
 **Contributions**: `requirements-analysis` gains an optional consume of
 `ai-plc-discovery-document` plus a prose step for using it; the core
 inception/construction/operation stages of the `feature` path gain
-`ai-plc-full` scope membership (the join - `adds.scopes`).
+`ai-plc-discovery` scope membership (the join - `adds.scopes`).
 
 ## Entry points -> scopes
 
@@ -50,7 +52,7 @@ inception/construction/operation stages of the `feature` path gain
 | 1. Start from customer pain points | `ai-plc-discovery` scope (answer "pain points" at the fork) |
 | 2. Start from use cases | `ai-plc-discovery` scope (answer "use cases" at the fork) |
 | 3. Build from existing PROTOTYPE-*.md specs | `ai-plc-prototype-build` scope |
-| Discovery + build in one workspace | `ai-plc-full` scope |
+| PM handoff vs. build-in-place | same scope: stop at (or continue past) the Discovery Document gate |
 
 ## Tests
 

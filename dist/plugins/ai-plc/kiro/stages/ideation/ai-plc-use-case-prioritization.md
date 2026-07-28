@@ -22,7 +22,6 @@ sensors:
   - upstream-coverage
 scopes:
   - ai-plc-discovery
-  - ai-plc-full
 inputs: The confirmed use-case set from ai-plc-use-case-intake
 outputs: scoring.md, ranking.md (under this stage's record dir, engine-resolved)
 ---
