@@ -26,6 +26,8 @@ consumes:
     required: false
   - artifact: ai-plc-prototype-builds
     required: false
+  - artifact: ai-plc-validation-results
+    required: false
   - artifact: ai-plc-product-strategy
     required: true
   - artifact: ai-plc-gtm-plan
@@ -79,7 +81,7 @@ section per artifact that exists, in this order):
 - **Solution Analysis** - the identified solutions and determination
 - **Use Case Prioritization** - the ranked lists, scores, and selection rationale
 - **Prototype Specifications** - one subsection per PROTOTYPE-*.md file: the spec verbatim or a faithful summary with the file's location
-- **Prototype Validation** - build outcomes, iteration history, what users validated or rejected, the selected winner
+- **Prototype Validation** - build outcomes, iteration history, the synthesized validation results (theme analysis, pain-point mapping, unmet needs), the build decision (Proceed/Iterate/Pivot/Kill) and the selected winner
 - **Product Strategy** - positioning, differentiation, business model, target market, success metrics
 - **Go-to-Market Plan** - marketing, sales, launch, metrics and kill criteria
 - **Handoff Notes** - what the receiving team needs: where the spec files live, open questions discovery left unresolved, and the recommendation for what to build first

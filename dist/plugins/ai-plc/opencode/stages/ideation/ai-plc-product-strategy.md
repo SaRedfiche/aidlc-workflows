@@ -21,6 +21,8 @@ consumes:
     required: false
   - artifact: ai-plc-prototype-builds
     required: false
+  - artifact: ai-plc-validation-results
+    required: false
 requires_stage: []
 sensors:
   - required-sections
@@ -52,10 +54,11 @@ Load ai-plc-product-strategist-agent persona from `agents/ai-plc-product-strateg
 ### Step 2: Load Discovery Evidence
 
 Read whichever upstream artifacts this run produced: pain-point analysis and
-PR/FAQ, the prioritization ranking, and the prototype build log with its
-validation notes. When prototype validation ran, ground strategy questions in
-specific findings ("users validated X", "3 of 5 users requested Y"); when it
-did not, note that strategy rests on discovery findings only.
+PR/FAQ, the prioritization ranking, the prototype build log, and the
+synthesized validation results. When prototype validation ran, ground
+strategy questions in specific findings ("users validated X", "3 of 5 users
+requested Y"); when it did not, note that strategy rests on discovery
+findings only.
 
 ### Step 3: Gather Strategy Inputs
 
