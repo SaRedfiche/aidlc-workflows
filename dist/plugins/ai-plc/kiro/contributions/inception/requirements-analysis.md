@@ -7,6 +7,8 @@ adds:
       required: false
   scopes:
     - ai-plc
+    - ai-plc-pain-points
+    - ai-plc-use-cases
 fragments:
   - anchor: after-step:2
     order: 100

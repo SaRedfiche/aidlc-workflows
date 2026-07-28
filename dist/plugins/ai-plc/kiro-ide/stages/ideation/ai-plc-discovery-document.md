@@ -40,6 +40,8 @@ sensors:
   - upstream-coverage
 scopes:
   - ai-plc
+  - ai-plc-pain-points
+  - ai-plc-use-cases
   - ai-plc-prototype-build
 inputs: Every discovery artifact this run produced - which subset exists depends on the entry point taken
 outputs: discovery-document.md (under this stage's record dir, engine-resolved)
@@ -103,11 +105,11 @@ Request Changes with `--result rejected --user-input "<feedback>"`, revise the
 artifacts, then report `--result revised` before re-presenting.
 
 After approval, tell the user where the run goes next: this is the phase
-boundary. Under `ai-plc` the run continues into Inception, where
-Requirements Analysis consumes this document directly - OR the user stops
-here and hands the document (plus the PROTOTYPE-*.md specs) to a separate
-development team; ask which they want. Under `ai-plc-prototype-build` the
-workflow is complete.
+boundary. Under `ai-plc`, `ai-plc-pain-points`, or `ai-plc-use-cases` the
+run continues into Inception, where Requirements Analysis consumes this
+document directly - OR the user stops here and hands the document (plus the
+PROTOTYPE-*.md specs) to a separate development team; ask which they want.
+Under `ai-plc-prototype-build` the workflow is complete.
 
 ## Sensors
 

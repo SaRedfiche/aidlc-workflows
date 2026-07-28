@@ -20,6 +20,7 @@ sensors:
   - upstream-coverage
 scopes:
   - ai-plc
+  - ai-plc-pain-points
 inputs: User's product description ($ARGUMENTS), customer feedback, research, or a single user-provided URL
 outputs: pain-point-analysis.md, prfaq.md, envision-questions.md (under this stage's record dir, engine-resolved)
 ---

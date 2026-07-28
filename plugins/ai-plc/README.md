@@ -22,7 +22,7 @@ to core ideation stages):
 | `ai-plc-go-to-market` | Marketing, sales, launch plan, kill criteria |
 | `ai-plc-discovery-document` | Assemble the handoff Discovery Document |
 
-**Two scopes** mapping AI-PLC's entry points and handoff models:
+**Four scopes** mapping AI-PLC's entry points and handoff models:
 
 - `ai-plc` - the main scope: discovery first (both the pain-point
   and use-case entry points; the fork between them is a runtime decision),
@@ -34,6 +34,14 @@ to core ideation stages):
   The core-stage memberships arrive via `adds.scopes` contributions; an
   install whose compose hook predates that merge surface advisory-drops them
   (visible in doctor), leaving the scope discovery-only.
+- `ai-plc-pain-points` - entry point 1 baked in: starts at Envision, no fork
+  question. Intake/Prioritization remain conditional members because a
+  multi-solution PR/FAQ merges into the use-case path mid-run (the
+  methodology's path A.2). Same tail and core join as `ai-plc`.
+- `ai-plc-use-cases` - entry point 2 baked in: starts at Use Case Intake.
+  Envision and Solution Analysis are structurally SKIP (a use-case start can
+  never need them - this scope guarantees no PR/FAQ detour). Same tail and
+  core join as `ai-plc`.
 - `ai-plc-prototype-build` - the workshop handoff: PROTOTYPE-*.md specs
   already exist, skip all discovery, build + strategy + GTM + document.
 
@@ -49,10 +57,10 @@ inception/construction/operation stages of the `feature` path gain
 
 | AI-PLC entry point | How to run it |
 | --- | --- |
-| 1. Start from customer pain points | `ai-plc` scope (answer "pain points" at the fork) |
-| 2. Start from use cases | `ai-plc` scope (answer "use cases" at the fork) |
-| 3. Build from existing PROTOTYPE-*.md specs | `ai-plc-prototype-build` scope |
-| PM handoff vs. build-in-place | same scope: stop at (or continue past) the Discovery Document gate |
+| 1. Start from customer pain points | `ai-plc-pain-points` scope (or `ai-plc` and answer the fork) |
+| 2. Start from use cases | `ai-plc-use-cases` scope (or `ai-plc` and answer the fork) |
+| 3. Build from existing PROTOTYPE-*.md specs | `ai-plc-prototype-build` scope (or `ai-plc` - the spec check is runtime) |
+| PM handoff vs. build-in-place | any scope: stop at (or continue past) the Discovery Document gate |
 
 ## Tests
 
