@@ -1,5 +1,5 @@
 ---
-name: ai-plc-discovery
+name: ai-plc
 plugin: ai-plc
 depth: Standard
 keywords:
@@ -13,7 +13,7 @@ skeleton: on
 runner: true
 ---
 
-# ai-plc-discovery scope
+# ai-plc scope
 
 Standard depth for the AI-PLC flow: product discovery first, and the core
 lifecycle after it. The nine discovery stages run in place of core ideation,

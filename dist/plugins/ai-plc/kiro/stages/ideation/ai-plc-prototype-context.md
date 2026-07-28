@@ -22,7 +22,7 @@ sensors:
   - required-sections
   - upstream-coverage
 scopes:
-  - ai-plc-discovery
+  - ai-plc
 inputs: The selected use cases (from ai-plc-use-case-prioritization's ranking, or the single solution from ai-plc-solution-analysis)
 outputs: prototypes/<use-case-slug>/PROTOTYPE-<use-case-slug>.md per selected use case, prototype-context-questions.md (under this stage's record dir, engine-resolved)
 ---

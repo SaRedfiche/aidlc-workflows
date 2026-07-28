@@ -20,7 +20,7 @@ sensors:
   - required-sections
   - upstream-coverage
 scopes:
-  - ai-plc-discovery
+  - ai-plc
 inputs: The user's use-case list (any format), or the identified solutions from ai-plc-solution-analysis
 outputs: use-cases.md, use-case-intake-questions.md (under this stage's record dir, engine-resolved)
 ---

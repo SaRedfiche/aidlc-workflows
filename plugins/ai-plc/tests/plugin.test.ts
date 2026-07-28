@@ -225,7 +225,8 @@ describe(`${PLUGIN_NAME} plugin — own content validation`, () => {
           ? [...scopesSection[1].matchAll(/^\s+- ([\w-]+)/gm)].map((m) => m[1])
           : [];
         for (const scope of items) {
-          expect(scope.startsWith(`${PLUGIN_NAME}-`)).toBe(true);
+          // Owned names: the bare plugin name or a <plugin>- prefixed scope.
+          expect(scope === PLUGIN_NAME || scope.startsWith(`${PLUGIN_NAME}-`)).toBe(true);
         }
       });
     }

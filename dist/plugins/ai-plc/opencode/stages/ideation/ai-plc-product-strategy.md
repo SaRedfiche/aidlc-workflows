@@ -28,7 +28,7 @@ sensors:
   - required-sections
   - upstream-coverage
 scopes:
-  - ai-plc-discovery
+  - ai-plc
   - ai-plc-prototype-build
 inputs: The discovery evidence so far - pain-point analysis and PR/FAQ (pain-point path), prioritization ranking (use-case path), prototype builds and validation notes (when built)
 outputs: product-strategy.md, strategy-questions.md (under this stage's record dir, engine-resolved)

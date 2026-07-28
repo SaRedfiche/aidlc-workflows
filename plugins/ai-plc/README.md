@@ -24,7 +24,7 @@ to core ideation stages):
 
 **Two scopes** mapping AI-PLC's entry points and handoff models:
 
-- `ai-plc-discovery` - the main scope: discovery first (both the pain-point
+- `ai-plc` - the main scope: discovery first (both the pain-point
   and use-case entry points; the fork between them is a runtime decision),
   then the run continues into core Inception through Operation with
   Requirements Analysis consuming the Discovery Document. The Discovery
@@ -43,14 +43,14 @@ stages, with methodology knowledge under `knowledge/`.
 **Contributions**: `requirements-analysis` gains an optional consume of
 `ai-plc-discovery-document` plus a prose step for using it; the core
 inception/construction/operation stages of the `feature` path gain
-`ai-plc-discovery` scope membership (the join - `adds.scopes`).
+`ai-plc` scope membership (the join - `adds.scopes`).
 
 ## Entry points -> scopes
 
 | AI-PLC entry point | How to run it |
 | --- | --- |
-| 1. Start from customer pain points | `ai-plc-discovery` scope (answer "pain points" at the fork) |
-| 2. Start from use cases | `ai-plc-discovery` scope (answer "use cases" at the fork) |
+| 1. Start from customer pain points | `ai-plc` scope (answer "pain points" at the fork) |
+| 2. Start from use cases | `ai-plc` scope (answer "use cases" at the fork) |
 | 3. Build from existing PROTOTYPE-*.md specs | `ai-plc-prototype-build` scope |
 | PM handoff vs. build-in-place | same scope: stop at (or continue past) the Discovery Document gate |
 

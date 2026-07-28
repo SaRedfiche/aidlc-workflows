@@ -21,7 +21,7 @@ sensors:
   - required-sections
   - upstream-coverage
 scopes:
-  - ai-plc-discovery
+  - ai-plc
   - ai-plc-prototype-build
 inputs: PROTOTYPE-*.md specification files (from ai-plc-prototype-context, or pre-existing in the workspace)
 outputs: prototype-builds.md build log, validation-results.md, plus one runnable prototype directory per spec (under this stage's record dir, engine-resolved)
