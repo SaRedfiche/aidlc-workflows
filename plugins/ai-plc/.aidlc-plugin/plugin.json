@@ -1,0 +1,16 @@
+{
+  "name": "ai-plc",
+  "version": "0.1.0",
+  "description": "AI-PLC product discovery plugin - a PM-facing Discovery flow (pain points to PR/FAQ, use-case prioritization, prototype specs, product strategy, go-to-market) that runs before Inception and hands a Discovery Document to the core requirements stages. Ported from aws-samples/sample-ai-plc.",
+  "author": { "name": "AWS AIDLC" },
+  "dependencies": ["core"],
+  "aidlc": {
+    "contributes": {
+      "stages": "stages/",
+      "overlays": "contributions/",
+      "agents": "agents/",
+      "scopes": "scopes/",
+      "knowledge": "knowledge/"
+    }
+  }
+}
