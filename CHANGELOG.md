@@ -1,6 +1,16 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.17] - 2026-07-29
+
+Hardens the Kiro CLI and Kiro IDE shell permission lists. Kiro matches each `execute_bash` pattern as a full string, not as a prefix, so the shipped patterns were both too narrow (a bare `date -u` and `bun run .kiro/tools/<tool>.ts` needed an approval the framework never asked for, stalling a workflow when no approver was available) and too broad (a trailing wildcard let `bun .kiro/tools/../../anything.ts` run unprompted). The pre-approved set is now the framework's own project-relative tool calls and nothing else, and the deny list catches the recursive-`rm` and `git push` variants full-string matching used to miss. **Upgrade:** re-copy your `dist/kiro/` or `dist/kiro-ide/` shell into the project so the corrected agent configs are installed. If you start Kiro from a directory other than the project root, start it from the root instead: out-of-root invocation forms are no longer pre-approved.
+
+* Framework commands that previously hit an approval prompt now run as intended from the project root: `bun run .kiro/tools/<tool>.ts`, a quoted project-relative script path, and a bare `date -u` (the old `date -u .*` could not match it).
+* Closed the traversal bypass in the old `bun \.kiro/tools/.*` grant. Approved script paths are now one project-relative filename under `.kiro/tools/`. Absolute paths, `KIRO_PROJECT_DIR` expansion, and `cd` chains stay gated because a pattern can only check a path's shape, not its trustworthiness: pre-approving any `/.../.kiro/tools/*.ts` would also pre-approve a script planted in a world-writable directory.
+* The 14 delegated persona agents now carry the same allow and deny policy as the conductor on both Kiro harnesses.
+* `deniedCommands` now catches recursive `rm` variants regardless of flag grouping or executable path, plus bare, option-prefixed, and path-qualified `git push` commands. The behavioral tests distinguish an approvable command from an unconditional denial.
+* Kiro guidance now recommends ACP permission responses for unattended clients and warns that `--trust-all-tools` bypasses the deny list; the doctor cleanup hint uses the supported `aidlc-worktree discard` command instead of a denied recursive `rm`.
+
 ## [2.5.12] - 2026-07-24
 
 Closes the payload boundary 2.5.10 left open on Kiro IDE 1.x: the hook adapter now reads the IDE's stdin context channel for the two payload-dependent hooks (`audit-and-sensors`, `log-subagent`). Artifact audit rows and sensor firing were verified live on Kiro IDE 1.0.165 (same session, no restart). Subagent tracking uses the live 1.0.89-1.0.138 evidence in #543 plus adapter regression coverage; no real delegate completion was captured on 1.0.165. **Upgrade:** copy the tree CONTENTS - `mkdir -p your-project/.kiro && cp -R dist/kiro-ide/.kiro/. your-project/.kiro/` into your project.
