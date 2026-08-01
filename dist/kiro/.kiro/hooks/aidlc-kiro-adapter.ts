@@ -28,6 +28,7 @@
 // where <target> ∈ session-start | audit-and-sensors | runtime-compile |
 //                  state-sync | log-subagent | stop | verb-intercept |
 //                  pretool-block | state-transition-guard | reviewer-scope
+//                  | dispatch-rules
 
 import {
   existsSync,
@@ -561,6 +562,60 @@ if (target === "reviewer-scope") {
   if (r.exitCode === 2) {
     process.stderr.write(stderrText);
     return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
+  }
+  return 0;
+}
+
+// --- dispatch-rules: exact conductor-to-worker steering ---------------------
+//
+// Kiro exposes subagent arguments to preToolUse hooks but does not support
+// updated tool input, and a block-with-retry contract deadlocks live: the
+// conductor cannot reliably reproduce a multi-KB bundle byte-exactly, so
+// every retry re-blocks (observed on the ACP gate - zero dispatches
+// converged). Kiro is also the ONE harness where the rules invariant already
+// holds without the brief: every delegated agent's config preloads the full
+// active memory tree via its `resources` glob, so the worker holds the rules
+// before it reads the brief. Run the shared augmenter as an OBSERVER: a
+// complete brief passes silently; an incomplete one proceeds WITH a warning
+// (visible in the transcript and traces), never a block. The strict rewrite
+// path stays on the harnesses that support updatedInput (Claude, Codex,
+// opencode).
+if (target === "dispatch-rules") {
+  if ((kiro.tool_name ?? "") !== "subagent") return 0;
+  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  const command = executable
+    ? [executable, "hook", "dispatch-rules"]
+    : [process.execPath, join(HOOKS_DIR, "aidlc-dispatch-rules.ts")];
+  const r = Bun.spawnSync(command, {
+    stdin: Buffer.from(input, "utf-8"),
+    cwd: projectDir,
+    stdout: "pipe",
+    stderr: "pipe",
+    env: {
+      ...projectEnv,
+      AIDLC_DISPATCH_RULES_PRELOAD_FALLBACK: "1",
+    },
+  });
+  if (r.exitCode === 2) {
+    // A required rule file could not be loaded at all (missing/unreadable):
+    // that is real missing steering with no preload to fall back on - the
+    // one case that still blocks, with the core hook's repair guidance.
+    process.stderr.write(r.stderr?.toString() ?? "");
+    return 2;
+  }
+  if (r.exitCode === 3) {
+    // The bundle is valid but too large for the hook rewrite channel. Kiro's
+    // agent-v1 resources preload the same active memory files, so this is the
+    // advisory fallback case rather than an unloadable-rule block.
+    process.stderr.write(r.stderr?.toString() ?? "");
+    return 0;
+  }
+  if ((r.stdout?.toString().trim() ?? "") !== "") {
+    process.stderr.write(
+      "Advisory: the AIDLC subagent brief did not carry the active-stage rule bundle verbatim. " +
+        "The dispatch proceeded - Kiro agents preload the active memory tree natively - but keep " +
+        "briefs aligned with the delivered load-steering content.\n",
+    );
   }
   return 0;
 }

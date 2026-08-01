@@ -20,6 +20,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, wri
 import { dirname, join, posix, relative, win32 } from "node:path";
 import { stringify } from "smol-toml";
 import type { EmitContext } from "../../scripts/manifest-types.ts";
+import { absorbReviewerKnowledge } from "../../scripts/agent-knowledge.ts";
 import { renderOnboarding } from "../../scripts/onboarding.ts";
 import onboardingFills from "./onboarding.fills.ts";
 import { projectTier } from "../../core/tools/aidlc-tiers.ts";
@@ -31,6 +32,7 @@ import { projectTier } from "../../core/tools/aidlc-tiers.ts";
 const HOOK_WIRING: Array<{ event: string; matcher?: string; target: string }> = [
   { event: "SessionStart", target: "session-start" },
   { event: "UserPromptSubmit", target: "mint" },
+  { event: "PreToolUse", matcher: "spawn_agent", target: "dispatch-rules" },
   { event: "PreToolUse", target: "state-transition-guard" },
   // No matcher: the reviewer-scope target self-filters (Bash + apply_patch;
   // everything else exits 0 instantly), and Codex read access rides the shell
@@ -304,6 +306,10 @@ export default function emit(ctx: EmitContext): void {
     const raw = readFileSync(mdPath, "utf-8");
     const { fm, body } = parseAgentMd(raw);
     const name = fm.name ?? "";
+    // Reviewer knowledge absorption (scripts/agent-knowledge.ts): the emit
+    // plugin reads core/agents/*.md directly, so the packager's transform
+    // never runs here - absorb into the body the same way it does.
+    const absorbedBody = absorbReviewerKnowledge(body, name, coreRoot);
     const description = (fm.description ?? "").replace(/\s+/g, " ").trim();
     // The authored source of truth is `tier:` on the core .md; the packager's
     // frontmatter transform doesn't run against emit.ts (Codex reads directly
@@ -315,7 +321,7 @@ export default function emit(ctx: EmitContext): void {
     const tier = fm.tier?.trim();
     if (!tier) throw new Error(`${mdPath}: agent frontmatter has no tier: line.`);
     const proj = projectTier(tier, "codex", tierCap); // throws on unknown tier
-    const instructions = rewriteProse(body);
+    const instructions = rewriteProse(absorbedBody);
     const modelLines =
       (proj.model !== null ? `model = "${proj.model}"\n` : "") +
       (proj.effort !== null ? `model_reasoning_effort = "${proj.effort}"\n` : "");

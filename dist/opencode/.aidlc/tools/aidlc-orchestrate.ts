@@ -67,7 +67,20 @@
 // per the tool/agent/human split (routing string-building to an LLM would
 // invert the whole thesis).
 
-import { type Dirent, existsSync, readFileSync, readdirSync } from "node:fs";
+import {
+  createHash,
+  createHmac,
+  randomBytes,
+  timingSafeEqual,
+} from "node:crypto";
+import {
+  type Dirent,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -76,6 +89,7 @@ import {
   type ErrorDirective,
   GATE_UNRESOLVED,
   type GateValue,
+  type LoadSteeringDirective,
   type ParkedDirective,
   type PrintDirective,
   type RunStageDirective,
@@ -136,6 +150,11 @@ import {
 // and utility never imports this module - no cycle).
 import { inferScopeFromText } from "./aidlc-utility.ts";
 import { resolveHarnessPath, resolveHarnessRoot } from "./aidlc-runtime-paths.ts";
+import {
+  readRuleBundle,
+  rulesContentEntries,
+  type RuleContent,
+} from "./aidlc-steering.ts";
 
 // Read the workflow state file if it exists, else null. The engine's `next` is
 // a pure read: an absent state file is a legitimate branch (no workflow yet),
@@ -173,14 +192,25 @@ const DEFAULT_SCOPE = "feature";
 // boundaries), never a silent miss — we exit non-zero so a wiring bug surfaces
 // loudly rather than emitting a lie the conductor would act on.
 function emit(directive: Directive): void {
-  const result = validateDirective(directive);
+  const transported =
+    directive.kind === "run-stage" && runStageRoutes.has(directive)
+      ? transportRunStage(directive, runStageRoutes.get(directive)!)
+      : directive;
+  const result = validateDirective(transported);
   if (!result.valid) {
     console.error(
       `aidlc-orchestrate: refusing to emit a malformed directive: ${result.errors.join("; ")}`,
     );
     process.exit(1);
   }
-  console.log(JSON.stringify(result.data));
+  const serialized = JSON.stringify(result.data);
+  if (Buffer.byteLength(serialized, "utf-8") > DIRECTIVE_MAX_BYTES) {
+    console.error(
+      `aidlc-orchestrate: refusing to emit a directive larger than ${DIRECTIVE_MAX_BYTES} bytes`,
+    );
+    process.exit(1);
+  }
+  console.log(serialized);
 }
 
 // --- Composing sibling CLI tools ---
@@ -669,6 +699,53 @@ function readConductorPersona(): string | null {
     return null;
   }
 }
+
+// --- Deterministic rule delivery --------------------------------------------
+//
+// Rule paths are compile-time routing metadata; the text is required steering.
+// Before a run-stage is emitted, the engine reads the active-space files and
+// sends their content through one or more bounded load-steering directives.
+// The conductor immediately follows each opaque continuation token. No rule is
+// downgraded to a discretionary path read because it did not fit one tool
+// result. Every serialized directive stays below the common 28 KiB harness
+// floor; a fresh `next` deterministically restarts at part one.
+const DIRECTIVE_MAX_BYTES = 28 * 1024;
+const STEERING_TEXT_TARGET_BYTES = 20 * 1024;
+const CONTEXT_WARNINGS_MAX_BYTES = 6 * 1024;
+const INLINE_CONTEXT_PATHS_MAX_BYTES = 8 * 1024;
+
+type RunStageRoute = {
+  node: GraphStage;
+  scope: string;
+  stateAware: boolean;
+  stateHash: string | null;
+  codekbCtx: CodekbCtx;
+  unit: string;
+  unitKind: string | null;
+  forcePersona: boolean;
+};
+
+type SteeringTokenPayload = {
+  v: 1;
+  s: string;
+  c: string;
+  i: number;
+  b: string;
+  d: string;
+  r: string;
+  a: boolean;
+  u: string;
+  k: string | null;
+  f: boolean;
+  g: GateValue;
+  n: string | null | undefined;
+  x: boolean;
+  p: boolean;
+  h: string | null;
+};
+
+const runStageRoutes = new WeakMap<RunStageDirective, RunStageRoute>();
+let requestedSteeringContinuation: SteeringTokenPayload | null = null;
 
 // "First run-stage of the workflow" — the deterministic signal D-E delivery
 // keys on. The engine is stateless per call, so it cannot track a "session";
@@ -1208,40 +1285,89 @@ function computeGate(
   return true;
 }
 
-function markdownFilesUnder(absDir: string, relativeDir: string): string[] {
+// Walk a knowledge directory into path-roster entries. Knowledge remains
+// path-loaded until the future retrieval layer lands. We do a cheap read
+// preflight so an unreadable file produces an actionable warning instead of a
+// path the conductor cannot use.
+function assertReadableUtf8(path: string): void {
+  const bytes = readFileSync(path);
+  new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+}
+
+function markdownFilesUnder(
+  absDir: string,
+  relativeDir: string,
+  warnings: string[],
+): Array<{ abs: string; rel: string }> {
+  if (!existsSync(absDir)) return [];
   let entries: Dirent[];
   try {
     entries = readdirSync(absDir, { withFileTypes: true });
-  } catch {
+  } catch (e) {
+    warnings.push(
+      `Warning: optional persona/knowledge directory "${toPosix(relativeDir)}" is unreadable (${errorMessage(e)}). ` +
+        "Fix the directory or its permissions; this stage will continue without that context.",
+    );
     return [];
   }
-  const paths: string[] = [];
+  const files: Array<{ abs: string; rel: string }> = [];
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     const absPath = join(absDir, entry.name);
     const relativePath = toPosix(join(relativeDir, entry.name));
     if (entry.isDirectory()) {
-      paths.push(...markdownFilesUnder(absPath, relativePath));
-    } else if (entry.isFile() && entry.name.endsWith(".md")) {
-      paths.push(relativePath);
+      files.push(...markdownFilesUnder(absPath, relativePath, warnings));
+    } else if (
+      (entry.isFile() || entry.isSymbolicLink()) &&
+      entry.name.endsWith(".md")
+    ) {
+      try {
+        assertReadableUtf8(absPath);
+      } catch (e) {
+        warnings.push(
+          `Warning: optional persona/knowledge file "${relativePath}" is unreadable or invalid UTF-8 (${errorMessage(e)}). ` +
+            "Fix the file, encoding, or permissions; this stage will continue without that context.",
+        );
+        continue;
+      }
+      files.push({ abs: absPath, rel: relativePath });
     }
   }
-  return paths;
+  return files;
+}
+
+// The agents whose persona + knowledge the CONDUCTOR itself must hold for a
+// stage: lead + supports on inline stages, lead only on a mob (supports are
+// dispatched), none on fully-dispatched subagent/pipeline topologies. Shared
+// by the roster builder and the deliver-once derivation so both agree on
+// "who is inline here".
+function inlineAgentsFor(node: GraphStage): string[] {
+  const inlineAgents = node.mode === "inline"
+    ? [node.lead_agent, ...(node.support_agents ?? [])]
+    : node.mode === "mob"
+      ? [node.lead_agent]
+      : [];
+  return [...new Set(inlineAgents)].filter((agent) => agent !== "orchestrator");
 }
 
 // Conductor-owned context is a concrete file roster, not an instruction inferred
 // from lead/support names. Inline stages load lead + supports; mob stages keep the
 // lead inline but dispatch every support, so only the lead belongs in this roster.
 // Fully-dispatched subagent/pipeline stages carry no inline context.
-function inlineContextPaths(node: GraphStage, codekbCtx?: CodekbCtx): string[] {
-  const inlineAgents = node.mode === "inline"
-    ? [node.lead_agent, ...(node.support_agents ?? [])]
-    : node.mode === "mob"
-      ? [node.lead_agent]
-      : [];
-  if (inlineAgents.length === 0) return [];
+//
+// Returns {abs, rel, agent} entries: `rel` is the display path the directive
+// names, `abs` where the file lives, `agent` the roster member the file
+// belongs to (null for the aidlc-shared tree, which belongs to every agent) -
+// the deliver-once derivation filters on it. inlineContextPaths below is the
+// path-only projection the directive's roster field carries.
+type InlineContextEntry = { abs: string; rel: string; agent: string | null };
 
-  const agents = [...new Set(inlineAgents)]
-    .filter((agent) => agent !== "orchestrator");
+function inlineContextEntries(
+  node: GraphStage,
+  codekbCtx?: CodekbCtx,
+  warnings: string[] = [],
+): InlineContextEntry[] {
+  const agents = inlineAgentsFor(node);
+  if (agents.length === 0) return [];
   // The resolver ladder, not raw import.meta.url: in a compiled binary this
   // module's URL is inside the bundle (/$bunfs), where no markdown ships —
   // a raw derivation returns [] and inline stages silently lose persona +
@@ -1249,26 +1375,47 @@ function inlineContextPaths(node: GraphStage, codekbCtx?: CodekbCtx): string[] {
   // distribution the same way readConductorPersona resolves conductor.md.
   const harnessRoot = resolveHarnessRoot();
   const harnessPrefix = harnessDir();
-  const paths: string[] = [];
+  const entries: InlineContextEntry[] = [];
 
   for (const agent of agents) {
     const persona = join(harnessRoot, "agents", `${agent}.md`);
-    if (existsSync(persona)) {
-      paths.push(toPosix(join(harnessPrefix, "agents", `${agent}.md`)));
+    const rel = toPosix(join(harnessPrefix, "agents", `${agent}.md`));
+    if (!existsSync(persona)) {
+      warnings.push(
+        `Warning: optional persona/knowledge file "${rel}" is missing. ` +
+          "Restore the file; this stage will continue without that context.",
+      );
+      continue;
     }
+    try {
+      assertReadableUtf8(persona);
+    } catch (e) {
+      warnings.push(
+        `Warning: optional persona/knowledge file "${rel}" is unreadable or invalid UTF-8 (${errorMessage(e)}). ` +
+          "Fix the file, encoding, or permissions; this stage will continue without that context.",
+      );
+      continue;
+    }
+    entries.push({
+      abs: persona,
+      rel,
+      agent,
+    });
   }
-  paths.push(
+  entries.push(
     ...markdownFilesUnder(
       join(harnessRoot, "knowledge", "aidlc-shared"),
       join(harnessPrefix, "knowledge", "aidlc-shared"),
-    ),
+      warnings,
+    ).map((f) => ({ ...f, agent: null })),
   );
   for (const agent of agents) {
-    paths.push(
+    entries.push(
       ...markdownFilesUnder(
         join(harnessRoot, "knowledge", agent),
         join(harnessPrefix, "knowledge", agent),
-      ),
+        warnings,
+      ).map((f) => ({ ...f, agent })),
     );
   }
 
@@ -1281,23 +1428,90 @@ function inlineContextPaths(node: GraphStage, codekbCtx?: CodekbCtx): string[] {
       "knowledge",
     );
     const customPrefix = join("aidlc", "spaces", codekbCtx.space, "knowledge");
-    paths.push(
+    entries.push(
       ...markdownFilesUnder(
         join(customRoot, "aidlc-shared"),
         join(customPrefix, "aidlc-shared"),
-      ),
+        warnings,
+      ).map((f) => ({ ...f, agent: null })),
     );
     for (const agent of agents) {
-      paths.push(
+      entries.push(
         ...markdownFilesUnder(
           join(customRoot, agent),
           join(customPrefix, agent),
-        ),
+          warnings,
+        ).map((f) => ({ ...f, agent })),
       );
     }
   }
 
-  return [...new Set(paths)];
+  // De-duplicate on rel (first wins), matching the old Set-of-paths shape.
+  const seen = new Set<string>();
+  return entries.filter((e) => {
+    if (seen.has(e.rel)) return false;
+    seen.add(e.rel);
+    return true;
+  });
+}
+
+function inlineContextRoster(
+  node: GraphStage,
+  codekbCtx?: CodekbCtx,
+): { paths: string[]; warnings: string[] } {
+  const warnings: string[] = [];
+  const allPaths = inlineContextEntries(node, codekbCtx, warnings).map((e) => e.rel);
+  const paths: string[] = [];
+  for (const path of allPaths) {
+    const candidate = [...paths, path];
+    if (
+      Buffer.byteLength(JSON.stringify(candidate), "utf-8") >
+        INLINE_CONTEXT_PATHS_MAX_BYTES
+    ) {
+      break;
+    }
+    paths.push(path);
+  }
+  const omitted = allPaths.length - paths.length;
+  if (omitted > 0) {
+    warnings.push(
+      `Warning: ${omitted} optional persona/knowledge path(s) were omitted because ` +
+        `inline_context_paths exceeded its ${INLINE_CONTEXT_PATHS_MAX_BYTES}-byte transport budget. ` +
+        "Reduce the configured knowledge file count; this stage will continue without the omitted optional context.",
+    );
+  }
+  return { paths, warnings: boundedContextWarnings(warnings) };
+}
+
+function boundedContextWarnings(warnings: string[]): string[] {
+  if (
+    Buffer.byteLength(JSON.stringify(warnings), "utf-8") <=
+      CONTEXT_WARNINGS_MAX_BYTES
+  ) {
+    return warnings;
+  }
+
+  const kept: string[] = [];
+  for (let i = 0; i < warnings.length; i++) {
+    const omitted = warnings.length - i - 1;
+    const summary = omitted > 0
+      ? `Warning: ${omitted} additional optional persona/knowledge warning(s) were omitted from this directive. Inspect the configured context directories and repair missing, unreadable, or invalid UTF-8 files.`
+      : null;
+    const candidate = [...kept, warnings[i], ...(summary ? [summary] : [])];
+    if (
+      Buffer.byteLength(JSON.stringify(candidate), "utf-8") >
+        CONTEXT_WARNINGS_MAX_BYTES
+    ) {
+      break;
+    }
+    kept.push(warnings[i]);
+  }
+
+  const omitted = warnings.length - kept.length;
+  return [
+    ...kept,
+    `Warning: ${omitted} additional optional persona/knowledge warning(s) were omitted from this directive. Inspect the configured context directories and repair missing, unreadable, or invalid UTF-8 files.`,
+  ];
 }
 
 // Build a run-stage directive by reading the routing fields straight off the
@@ -1319,11 +1533,16 @@ function buildRunStageDirective(
   recordPrefix: string | null = null,
   codekbCtx?: CodekbCtx,
   unitKind: string | null = null,
+  forcePersona = false,
 ): RunStageDirective {
   const resolvedConsumes = resolveConsumes(
     node.consumes ?? [], node, projectType, unit, recordPrefix, codekbCtx,
   );
   const { present, absent } = splitConsumesByPresence(resolvedConsumes, scope, codekbCtx);
+  const inlineContext = inlineContextRoster(node, codekbCtx);
+  const ruleEntries = codekbCtx
+    ? rulesContentEntries(node, codekbCtx.projectDir, codekbCtx.space)
+    : null;
   const directive: RunStageDirective = {
     kind: "run-stage",
     stage: node.slug,
@@ -1335,15 +1554,20 @@ function buildRunStageDirective(
     // agent-team. The node value always satisfies the contract; the validator
     // is the backstop if a future graph activates agent-team.
     mode: node.mode as RunStageDirective["mode"],
-    inline_context_paths: inlineContextPaths(node, codekbCtx),
+    inline_context_paths: inlineContext.paths,
     gate: computeGate(node, scope, stateContent),
     memory_path: memoryPathFor(node.phase, node.slug, recordPrefix),
     consumes: present,
     produces: resolveProduces(node, unit, recordPrefix, codekbCtx, unitKind),
-    rules_in_context: (node.rules_in_context ?? []).map((r) => r.path),
+    rules_in_context:
+      ruleEntries?.map((entry) => entry.rel) ??
+      (node.rules_in_context ?? []).map((r) => r.path),
     sensors_applicable: (node.sensors_applicable ?? []).map((s) => s.id),
     stage_file: stageFileFor(node.phase, node.slug),
   };
+  if (inlineContext.warnings.length > 0) {
+    directive.context_warnings = inlineContext.warnings;
+  }
   if (absent.length > 0) directive.consumes_absent = absent;
   // next_stage: the display name of the in-scope stage that follows this one, so
   // the approval gate's Approve option reads "Continue to <next_stage>" verbatim
@@ -1365,11 +1589,408 @@ function buildRunStageDirective(
   // workflow. The optional field is omitted on every later directive (the
   // persona persists in the session once delivered). A missing conductor.md is
   // best-effort — the directive stays well-formed without the field.
-  if (isFirstRunStageOfWorkflow(stateContent, node)) {
+  // `forcePersona` covers the isolated single-stage runner, whose directive is
+  // always the conductor's first of that run regardless of state - attached
+  // HERE (not by the caller after build) so the final run-stage is complete.
+  if (forcePersona || isFirstRunStageOfWorkflow(stateContent, node)) {
     const persona = readConductorPersona();
     if (persona !== null) directive.conductor_persona = persona;
   }
+  if (codekbCtx) {
+    runStageRoutes.set(directive, {
+      node,
+      scope,
+      stateAware: stateContent !== null,
+      stateHash: stateContent === null ? null : sha256(stateContent),
+      codekbCtx,
+      unit,
+      unitKind,
+      forcePersona,
+    });
+  }
   return directive;
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value, "utf-8").digest("hex");
+}
+
+// Split a rule at Markdown heading boundaries first. Oversized sections are
+// then divided at JavaScript code-point boundaries according to their actual
+// JSON wire size, so escaping control characters cannot overflow a directive
+// and no continuation can cut a multi-byte character.
+function markdownSections(text: string): string[] {
+  const lines = text.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  const sections: string[] = [];
+  let current = "";
+  for (const line of lines) {
+    if (/^#{1,6}\s/.test(line) && current.length > 0) {
+      sections.push(current);
+      current = "";
+    }
+    current += line;
+  }
+  if (current.length > 0) sections.push(current);
+  return sections.length > 0 ? sections : [text];
+}
+
+function ruleContentBytes(path: string, text: string): number {
+  return Buffer.byteLength(JSON.stringify([{ path, text }]), "utf-8");
+}
+
+function splitRuleText(
+  path: string,
+  text: string,
+  targetBytes: number,
+): string[] {
+  if (ruleContentBytes(path, text) <= targetBytes) return [text];
+
+  const codePoints = Array.from(text);
+  const parts: string[] = [];
+  let start = 0;
+  while (start < codePoints.length) {
+    let low = start + 1;
+    let high = codePoints.length;
+    let fit = start;
+    while (low <= high) {
+      const end = Math.floor((low + high) / 2);
+      const candidate = codePoints.slice(start, end).join("");
+      if (ruleContentBytes(path, candidate) <= targetBytes) {
+        fit = end;
+        low = end + 1;
+      } else {
+        high = end - 1;
+      }
+    }
+    if (fit === start) {
+      // A filesystem path large enough to make one code point exceed the
+      // target is not recoverable by text splitting. Preserve the character
+      // so transportRunStage emits the explicit size error.
+      fit = start + 1;
+    }
+    parts.push(codePoints.slice(start, fit).join(""));
+    start = fit;
+  }
+  return parts;
+}
+
+function steeringPieces(content: RuleContent[]): RuleContent[] {
+  const pieces: RuleContent[] = [];
+  for (const rule of content) {
+    for (const section of markdownSections(rule.text)) {
+      for (const text of splitRuleText(
+        rule.path,
+        section,
+        STEERING_TEXT_TARGET_BYTES,
+      )) {
+        pieces.push({ path: rule.path, text });
+      }
+    }
+  }
+  return pieces;
+}
+
+function steeringChunks(content: RuleContent[]): RuleContent[][] {
+  const chunks: RuleContent[][] = [];
+  let current: RuleContent[] = [];
+  for (const piece of steeringPieces(content)) {
+    const candidate = [...current, piece];
+    const bytes = Buffer.byteLength(JSON.stringify(candidate), "utf-8");
+    if (current.length > 0 && bytes > STEERING_TEXT_TARGET_BYTES) {
+      chunks.push(current);
+      current = [piece];
+    } else {
+      current = candidate;
+    }
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
+
+type SteeringTokenEnvelope = {
+  p: SteeringTokenPayload;
+  m: string;
+};
+
+const STEERING_TOKEN_KEY_BYTES = 32;
+const STEERING_TOKEN_KEY_FILE = ".aidlc-steering-token-key";
+
+type SteeringTokenKeyResult = {
+  key: Buffer | null;
+  error: string | null;
+};
+
+function steeringTokenKeyPath(projectDir: string): string {
+  const statePath = stateFilePath(projectDir);
+  if (existsSync(statePath)) {
+    return join(dirname(statePath), STEERING_TOKEN_KEY_FILE);
+  }
+  return join(
+    projectDir,
+    "aidlc",
+    ".aidlc-sessions",
+    STEERING_TOKEN_KEY_FILE,
+  );
+}
+
+// The MAC key is machine-local runtime state, not a project-derived value an
+// untrusted continuation can recompute. It lives under the active intent's
+// already-gitignored .aidlc-* family, or the clone-local session runtime before
+// an intent exists, and is minted without changing workflow state. Repeated
+// next calls in one checkout reuse the key, so their tokens remain deterministic.
+function steeringTokenKey(
+  projectDir: string,
+  create: boolean,
+): SteeringTokenKeyResult {
+  const path = steeringTokenKeyPath(projectDir);
+  const read = (): SteeringTokenKeyResult => {
+    try {
+      const encoded = readFileSync(path, "utf-8").trim();
+      const key = Buffer.from(encoded, "base64url");
+      if (
+        key.length !== STEERING_TOKEN_KEY_BYTES ||
+        key.toString("base64url") !== encoded
+      ) {
+        return {
+          key: null,
+          error:
+            `The machine-local steering token key at "${path}" is invalid. ` +
+            "Delete it and run a fresh `next` to mint a replacement.",
+        };
+      }
+      return { key, error: null };
+    } catch (error) {
+      return {
+        key: null,
+        error:
+          `Cannot read the machine-local steering token key at "${path}" ` +
+          `(${errorMessage(error)}).`,
+      };
+    }
+  };
+
+  if (existsSync(path)) return read();
+  if (!create) return { key: null, error: null };
+
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    const key = randomBytes(STEERING_TOKEN_KEY_BYTES);
+    writeFileSync(path, `${key.toString("base64url")}\n`, {
+      encoding: "utf-8",
+      flag: "wx",
+      mode: 0o600,
+    });
+    return { key, error: null };
+  } catch (error) {
+    // A concurrent first request may have won the exclusive create. Re-read
+    // that key so every process converges on the same continuation chain.
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return read();
+    return {
+      key: null,
+      error:
+        `Cannot create the machine-local steering token key at "${path}" ` +
+        `(${errorMessage(error)}). Fix the directory permissions, then run a fresh \`next\`.`,
+    };
+  }
+}
+
+function steeringTokenMac(
+  payload: SteeringTokenPayload,
+  key: Buffer,
+): string {
+  return createHmac("sha256", key)
+    .update(JSON.stringify(payload), "utf-8")
+    .digest("base64url");
+}
+
+function encodeSteeringToken(
+  payload: SteeringTokenPayload,
+  projectDir: string,
+): { token: string | null; error: string | null } {
+  const loaded = steeringTokenKey(projectDir, true);
+  if (!loaded.key) return { token: null, error: loaded.error };
+  const envelope: SteeringTokenEnvelope = {
+    p: payload,
+    m: steeringTokenMac(payload, loaded.key),
+  };
+  return {
+    token: Buffer.from(JSON.stringify(envelope), "utf-8").toString("base64url"),
+    error: null,
+  };
+}
+
+function decodeSteeringToken(
+  token: string,
+  projectDir: string,
+): SteeringTokenPayload | null {
+  try {
+    const loaded = steeringTokenKey(projectDir, false);
+    if (!loaded.key) return null;
+    const decoded: unknown = JSON.parse(
+      Buffer.from(token, "base64url").toString("utf-8"),
+    );
+    if (
+      decoded === null ||
+      typeof decoded !== "object" ||
+      !("p" in decoded) ||
+      !("m" in decoded) ||
+      typeof (decoded as { m?: unknown }).m !== "string"
+    ) {
+      return null;
+    }
+    const envelope = decoded as { p: unknown; m: string };
+    if (envelope.p === null || typeof envelope.p !== "object") return null;
+    const expected = Buffer.from(
+      steeringTokenMac(envelope.p as SteeringTokenPayload, loaded.key),
+      "base64url",
+    );
+    const actual = Buffer.from(envelope.m, "base64url");
+    if (
+      expected.length !== actual.length ||
+      !timingSafeEqual(expected, actual)
+    ) {
+      return null;
+    }
+    const value = envelope.p;
+    if (!("v" in value) || value.v !== 1) return null;
+    const p = value as Partial<SteeringTokenPayload>;
+    if (
+      typeof p.s !== "string" ||
+      typeof p.c !== "string" ||
+      typeof p.i !== "number" ||
+      !Number.isInteger(p.i) ||
+      p.i < 1 ||
+      typeof p.b !== "string" ||
+      typeof p.d !== "string" ||
+      typeof p.r !== "string" ||
+      typeof p.a !== "boolean" ||
+      typeof p.u !== "string" ||
+      (p.k !== null && typeof p.k !== "string") ||
+      typeof p.f !== "boolean" ||
+      (typeof p.g !== "boolean" && p.g !== GATE_UNRESOLVED) ||
+      (p.n !== undefined && p.n !== null && typeof p.n !== "string") ||
+      typeof p.x !== "boolean" ||
+      typeof p.p !== "boolean" ||
+      (p.h !== null && typeof p.h !== "string")
+    ) {
+      return null;
+    }
+    return p as SteeringTokenPayload;
+  } catch {
+    return null;
+  }
+}
+
+function steeringTokenPayload(
+  directive: RunStageDirective,
+  route: RunStageRoute,
+  bundle: string,
+  directiveHash: string,
+  nextPart: number,
+): SteeringTokenPayload {
+  return {
+    v: 1,
+    s: directive.stage,
+    c: route.scope,
+    i: nextPart,
+    b: bundle,
+    d: directiveHash,
+    r: steeringRouteHash(route.node, route.scope),
+    a: route.stateAware,
+    u: directive.unit ?? route.unit,
+    k: route.unitKind,
+    f: route.forcePersona,
+    g: directive.gate,
+    n: directive.next_stage,
+    x: directive.single === true,
+    p: directive.unit !== undefined,
+    h: route.stateHash,
+  };
+}
+
+function steeringRouteHash(node: GraphStage, scope: string): string {
+  return sha256(
+    JSON.stringify({
+      node,
+      scopeStages: subgraphForScope(scope).map((stage) => stage.slug),
+    }),
+  );
+}
+
+function transportRunStage(
+  directive: RunStageDirective,
+  route: RunStageRoute,
+): Directive {
+  const loaded = readRuleBundle(
+    rulesContentEntries(
+      route.node,
+      route.codekbCtx.projectDir,
+      route.codekbCtx.space,
+    ),
+  );
+  if (loaded.error) return errorDirective(loaded.error);
+
+  directive.rules_in_context = [
+    ...new Set(loaded.content.map((entry) => entry.path)),
+  ];
+  const bundle = `sha256:${sha256(JSON.stringify(loaded.content))}`;
+  const directiveHash = sha256(JSON.stringify(directive));
+  const chunks = steeringChunks(loaded.content);
+  const requested = requestedSteeringContinuation;
+
+  if (requested) {
+    if (
+      requested.s !== directive.stage ||
+      requested.b !== bundle ||
+      requested.d !== directiveHash
+    ) {
+      return errorDirective(
+        "The stage or its rules changed during steering delivery. Run a fresh `next` to restart delivery from part 1.",
+      );
+    }
+    if (requested.i > chunks.length) {
+      return errorDirective(
+        "The steering continuation token is out of range. Run a fresh `next` to restart delivery from part 1.",
+      );
+    }
+    if (requested.i === chunks.length) return directive;
+  } else if (chunks.length === 0) {
+    return directive;
+  }
+
+  const index = requested?.i ?? 0;
+  const payload = steeringTokenPayload(
+    directive,
+    route,
+    bundle,
+    directiveHash,
+    index + 1,
+  );
+  const encoded = encodeSteeringToken(
+    payload,
+    route.codekbCtx.projectDir,
+  );
+  if (!encoded.token) {
+    return errorDirective(
+      encoded.error ??
+        "Cannot protect the steering continuation token. Run a fresh `next` after repairing the machine-local runtime state.",
+    );
+  }
+  const load: LoadSteeringDirective = {
+    kind: "load-steering",
+    stage: directive.stage,
+    bundle,
+    part: index + 1,
+    parts: chunks.length,
+    rules_content: chunks[index],
+    continue_token: encoded.token,
+  };
+  if (Buffer.byteLength(JSON.stringify(load), "utf-8") > DIRECTIVE_MAX_BYTES) {
+    return errorDirective(
+      "A rule section could not be split below the directive transport limit. Shorten the affected heading section, then run a fresh `next`.",
+    );
+  }
+  return load;
 }
 
 // Find the graph node for a slug. Composes loadGraph() (the one cached read).
@@ -1377,7 +1998,9 @@ function nodeForSlug(slug: string): GraphStage | undefined {
   return loadGraph().find((s) => s.slug === slug);
 }
 
-// The `next` handler — pure read, emits exactly one directive.
+// The `next` handler reads workflow state and emits exactly one directive. Rule
+// transport may lazily mint its machine-local MAC key, but never mutates shared
+// workflow state.
 function handleNext(args: string[], projectDir: string | undefined): void {
   const flags = parseNextFlags(args);
 
@@ -2320,7 +2943,6 @@ function emitPerUnitRunStage(
     emit(directive);
     return;
   }
-
   const directive = buildRunStageDirective(
     node, projectType, pick.unit, scope, stateContent, recordPrefix, codekbCtx,
     kinds?.get(pick.unit) ?? null,
@@ -2562,9 +3184,10 @@ function emitSingleRunStage(
     return;
   }
   // Build the directive from the graph node alone (stateContent: null → no main
-  // state read, no skeleton round-trip, no main-pointer persona signal), then
-  // attach the persona explicitly: this is the conductor's first directive of the
-  // single run, so D-E delivery applies.
+  // state read, no skeleton round-trip, no main-pointer persona signal), with
+  // forcePersona: this is the conductor's first directive of the single run,
+  // so D-E delivery applies (attached inside the builder so the steering
+  // injection budgets around it).
   const directive = buildRunStageDirective(
     node,
     projectType,
@@ -2573,14 +3196,12 @@ function emitSingleRunStage(
     null,
     recordPrefix,
     codekbCtx,
+    null,
+    true, // forcePersona: the single run's first (and only) directive
   );
   directive.single = true;
   directive.gate = false;
   directive.next_stage = null;
-  if (directive.conductor_persona === undefined) {
-    const persona = readConductorPersona();
-    if (persona !== null) directive.conductor_persona = persona;
-  }
   emit(directive);
 }
 
@@ -3966,6 +4587,66 @@ function handlePark(_args: string[], projectDir: string | undefined): void {
   ));
 }
 
+// Resume deterministic rule delivery without mutating workflow state. The
+// token carries the route and hashes of both the run-stage directive and rule
+// bundle. Rebuilding from current disk state makes stale or mixed deliveries
+// fail with a restart instruction instead of combining old and new steering.
+function handleContinue(args: string[], projectDir: string | undefined): void {
+  const token = args[0] ?? "";
+  const pd = resolveProjectDir(projectDir);
+  const payload = decodeSteeringToken(token, pd);
+  if (!payload || args.length !== 1) {
+    emit(errorDirective(
+      "Invalid steering continuation token. Run a fresh `next` to restart delivery from part 1.",
+    ));
+    return;
+  }
+  const liveState = loadStateFileIfPresent(pd);
+  const liveStateHash = liveState === null ? null : sha256(liveState);
+  if (payload.a && payload.h !== liveStateHash) {
+    emit(errorDirective(
+      "The workflow state changed during steering delivery. Run a fresh `next` to restart delivery from part 1.",
+    ));
+    return;
+  }
+  const node = nodeForSlug(payload.s);
+  if (!node) {
+    emit(errorDirective(
+      `Stage "${payload.s}" no longer exists. Run a fresh \`next\` after recompiling the stage graph.`,
+    ));
+    return;
+  }
+  if (payload.r !== steeringRouteHash(node, payload.c)) {
+    emit(errorDirective(
+      "The stage route changed during steering delivery. Run a fresh `next` to restart delivery from part 1.",
+    ));
+    return;
+  }
+
+  const directive = buildRunStageDirective(
+    node,
+    projectTypeFrom(liveState),
+    payload.u,
+    payload.c,
+    payload.a ? liveState : null,
+    relativeRecordDir(pd),
+    codekbCtxFor(pd),
+    payload.k,
+    payload.f,
+  );
+  directive.gate = payload.g;
+  if (payload.p) directive.unit = payload.u;
+  if (payload.n === undefined) {
+    delete directive.next_stage;
+  } else {
+    directive.next_stage = payload.n;
+  }
+  if (payload.x) directive.single = true;
+
+  requestedSteeringContinuation = payload;
+  emit(directive);
+}
+
 // --- CLI entry point ---
 
 export function main(argv: string[]): void {
@@ -3990,6 +4671,9 @@ export function main(argv: string[]): void {
     case "next":
       handleNext(subArgs, projectDir);
       break;
+    case "continue":
+      handleContinue(subArgs, projectDir);
+      break;
     case "report":
       handleReport(subArgs, projectDir);
       break;
@@ -4000,7 +4684,7 @@ export function main(argv: string[]): void {
       // Unknown / missing subcommand — usage to stderr, exit 1. Matches the
       // stderr-only usage shape the sibling tools use for a bad subcommand.
       console.error(
-        `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: next, report, park`,
+        `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: next, continue, report, park`,
       );
       process.exit(1);
   }

@@ -552,20 +552,23 @@ dynamic per workflow position.
 
 ### Inline Stages and Inline Mob Leads
 
-1. Read **every** file in `directive.inline_context_paths` before doing stage
-   work. The engine expands exact persona and existing knowledge-file paths:
-   lead + supports for `inline`, and the lead only for `mob` because mob
-   supports are dispatched. Agent names alone are not loaded context.
-2. Preserve the directive's path order, which follows the 6-step knowledge
-   order. Do not omit support-agent entries on `inline` or the lead entries on
-   `mob`.
-3. Apply every loaded perspective during execution.
+1. Apply the ordered `load-steering` sequence before `run-stage`. It delivers
+   every substantive active-space rule as content and re-runs on every stage.
+2. Read every `inline_context_paths` entry: lead + supports for `inline`, and
+   the lead only for `mob` because mob supports are dispatched. Persona and
+   knowledge remain path-loaded. Show any `context_warnings` verbatim and
+   continue with the readable roster. Agent names alone are not loaded context.
+3. Apply every loaded perspective during execution. Do not omit support-agent
+   perspectives on `inline` or the lead's on `mob`.
 
 ### Subagent Stages
 
-1. Dispatch the named harness agent; its config loads the persona and knowledge.
-2. Pass exact rule paths, relevant prior-artifact paths, and task instructions
-   rather than copied persona or knowledge prose.
+1. Dispatch the named harness agent; its config loads the persona and
+   knowledge (reviewer checklists are absorbed into the reviewer agents'
+   bodies at build time).
+2. Paste the accumulated `load-steering` rule bundle verbatim into the brief;
+   pass relevant prior-artifact paths and task instructions rather than copied
+   persona or knowledge prose.
 3. Select the agent named by the stage metadata.
 
 ### Multi-Agent Stages (Ensemble Topologies)

@@ -102,6 +102,33 @@ describe("t148 dist/kiro file structure", () => {
     expect(existsSync(join(KIRO, "AGENTS.md"))).toBe(true);
   });
 
+  test("Kiro IDE ships always-included active-memory steering for delegates", () => {
+    const path = join(
+      REPO_ROOT,
+      "dist",
+      "kiro-ide",
+      ".kiro",
+      "steering",
+      "aidlc-active-memory.md",
+    );
+    expect(existsSync(path)).toBe(true);
+    const steering = readFileSync(path, "utf-8");
+    expect(steering).toMatch(/^---\ninclusion: always\n---/);
+    for (const file of [
+      "org.md",
+      "team.md",
+      "project.md",
+      "phases/ideation.md",
+      "phases/inception.md",
+      "phases/construction.md",
+      "phases/operation.md",
+    ]) {
+      expect(steering).toContain(
+        `#[[file:aidlc/spaces/default/memory/${file}]]`,
+      );
+    }
+  });
+
   test("conductor agent: allowedCommands-only shell grant (findings 0.9b)", () => {
     const a = readJson(join(K, "agents", "aidlc.json"));
     const allowed = (a.allowedTools as string[]) ?? [];
@@ -249,6 +276,11 @@ describe("t148 dist/kiro file structure", () => {
     for (const h of all) {
       expect(h.command).toContain("aidlc-kiro-adapter.ts");
     }
+    const preMatchers = (hooks.preToolUse ?? []).map((h) => h.matcher).sort();
+    expect(preMatchers).toEqual(["execute_bash", "execute_bash", "subagent"]);
+    expect(
+      (hooks.preToolUse ?? []).find((h) => h.matcher === "subagent")?.command,
+    ).toContain("aidlc-kiro-adapter.ts dispatch-rules");
     const matchers = (hooks.postToolUse ?? []).map((h) => h.matcher).sort();
     expect(matchers).toEqual(["execute_bash", "fs_write", "subagent", "todo_list"]);
   });

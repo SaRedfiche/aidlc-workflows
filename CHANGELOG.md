@@ -1,6 +1,16 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.33] - 2026-08-01
+
+Stage rules are now delivered deterministically instead of depending on the conductor choosing to read paths. The engine emits the active-space rule bundle as bounded `load-steering` directives before `run-stage`, and reviewer checklists are absorbed into reviewer agent bodies at build time - closing the observed skip where stages ran with none of their org/phase memory applied. **Upgrade:** re-copy your `dist/<harness>/` shell into the project so the updated engine, skills, agents, and hooks are installed.
+
+* `load-steering` delivers every substantive rule as ordered `{path, text}` content. Opaque `continue` tokens use a random machine-local MAC key and bind the stage, workflow state, bundle hash, directive hash, route, and next part; they cannot be re-signed from the public project path, and a fresh `next` restarts at part 1.
+* Every directive remains below the common 28 KiB output floor. Oversized rules split at Markdown headings and then UTF-8 boundaries, with no size-based path fallback. Missing, unreadable, or invalid UTF-8 required rules stop before stage work with repair guidance.
+* `run-stage.rules_in_context` now names the active-space files actually delivered. Persona and supplemental knowledge remain path-loaded pending a retrieval system; missing, unreadable, or invalid UTF-8 optional files produce actionable `context_warnings` and are omitted without blocking the stage. Large warning sets are summarized within the directive limit.
+* Dispatched briefs carry the exact delivered rule content, not legacy rule paths. Claude, Codex, and opencode append a digest-framed active-stage bundle at the subagent tool boundary for every installed core or plugin agent; markerless copies cannot suppress it, and unknown path-shaped stage references fall back to the live stage. Kiro CLI cannot rewrite tool input and its agents already preload the active memory tree natively, so an incomplete or valid oversized brief proceeds with an advisory warning instead of a block (an unloadable required rule file still stops the dispatch with repair guidance); Kiro IDE retains native memory-resource preload. Comment-only rule templates remain excluded until they contain an affirmed practice.
+* The two reviewer agents (`aidlc-product-lead-agent`, `aidlc-architecture-reviewer-agent`) now carry their `knowledge/<agent>/reviewing.md` checklist inside their generated agent bodies on every harness. The redundant per-agent knowledge globs were removed from the Kiro reviewer JSONs.
+
 ## [2.5.32] - 2026-07-31
 
 Closes a silent-failure trap in the plugin mechanism: a plugin that shipped a sensor manifest under any name other than `aidlc-<id>.md` (or nested it in a subdirectory) composed successfully but was never discovered by graph compile or sensor dispatch, giving the author no signal at all. The compose hook now validates a plugin's `sensors/` manifests against the discovery contract and records a degraded drop naming the file and the required shape when a manifest could never fire; `/aidlc --doctor` surfaces that drop. **Upgrade:** re-copy your `dist/<harness>/` shell so the updated plugin compose hook is installed; if you author a plugin sensor, name its manifest `sensors/aidlc-<id>.md` at the top of `sensors/`.
