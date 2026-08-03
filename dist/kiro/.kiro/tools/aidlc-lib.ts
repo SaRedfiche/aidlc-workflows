@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { accessSync, appendFileSync, constants as fsConstants, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, constants as fsConstants, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -2961,11 +2961,18 @@ function lockStaleMs(): number {
 // given, the space is default-resolved (a per-intent lock is meaningless without
 // its space) but activeIntent() is NEVER consulted here.
 export function auditLockIdentity(projectDir: string, intent?: string, space?: string): string {
+  let canonicalProjectDir = resolvePath(projectDir);
+  try {
+    canonicalProjectDir = realpathSync(canonicalProjectDir);
+  } catch {
+    // Birth and diagnostics can lock before the project exists. The absolute
+    // lexical path is stable until realpath can resolve filesystem aliases.
+  }
   if (intent === undefined) {
-    return `${projectDir}\x00${WORKSPACE_LOCK_SENTINEL}`;
+    return `${canonicalProjectDir}\x00${WORKSPACE_LOCK_SENTINEL}`;
   }
   const sp = space ?? activeSpace(projectDir);
-  return `${projectDir}\x00${sp}\x00${intent}`;
+  return `${canonicalProjectDir}\x00${sp}\x00${intent}`;
 }
 
 export function auditLockDir(projectDir: string, intent?: string, space?: string): string {
@@ -3242,6 +3249,20 @@ export function releaseAuditLock(projectDir: string, intent?: string, space?: st
   }
 }
 
+/** True only while `ownerPid` is the live process stamped into this lock.
+ *  Used by synchronous child tools whose parent deliberately keeps the
+ *  workspace lock held across the child's work. */
+export function auditLockOwnedByProcess(
+  projectDir: string,
+  ownerPid: number,
+  intent?: string,
+  space?: string,
+): boolean {
+  if (!Number.isInteger(ownerPid) || ownerPid <= 0) return false;
+  const owner = readOwnerStamp(auditLockDir(projectDir, intent, space));
+  return owner?.pid === ownerPid && ownerAlive(owner);
+}
+
 // Tracks per-identity exit handlers that release the audit lock if a caller
 // process.exit()s while still holding it. Bun's process.exit skips `finally`
 // blocks, so a tool that wraps locked work in try/finally and then calls
@@ -3301,11 +3322,17 @@ export function withAuditLock<T>(
   fn: () => T extends Promise<unknown> ? never : T,
   intent?: string,
   space?: string,
+  // Acquire budget (default ~5s). A caller that legitimately waits behind a
+  // long-lived holder (select-plugins behind a full plugin compose: compile +
+  // runner regeneration) passes a larger budget; dead holders are reaped
+  // immediately regardless, so a big budget only ever waits on live work.
+  maxRetries = 50,
+  retryMs = 100,
 ): T extends Promise<unknown> ? never : T {
   const key = auditLockIdentity(projectDir, intent, space);
   const currentDepth = AUDIT_LOCK_DEPTH.get(key) ?? 0;
   if (currentDepth === 0) {
-    if (!acquireAuditLock(projectDir, 50, 100, intent, space)) {
+    if (!acquireAuditLock(projectDir, maxRetries, retryMs, intent, space)) {
       throw new Error(`Failed to acquire audit lock for ${key} after retries`);
     }
     // Safety net: if the body calls process.exit (Bun skips `finally` in that

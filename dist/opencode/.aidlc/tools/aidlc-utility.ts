@@ -137,6 +137,9 @@ const VALID_TEST_STRATEGIES: Record<string, string> = {
 };
 
 const CONFIG_KEYS = ["depth", "test-strategy"] as const;
+// These workspace transactions can legitimately queue behind a full plugin
+// compose (compile + runner regeneration), so they share its ~60s lock budget.
+const WORKSPACE_MUTATION_LOCK_RETRIES = 600;
 const NO_STATE_FILE_MESSAGE =
   "No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").";
 const INIT_TRANSITION_MESSAGE =
@@ -434,6 +437,9 @@ function runBunTool(projectDir: string, rel: string, args: string[], label: stri
       ...process.env,
       AIDLC_HARNESS_DIR: harnessDir(),
       AIDLC_PROJECT_DIR: projectDir,
+      ...(holdsAuditLock(projectDir)
+        ? { AIDLC_WORKSPACE_LOCK_OWNER_PID: String(process.pid) }
+        : {}),
     },
   });
   if (result.exitCode !== 0) {
@@ -521,7 +527,7 @@ function regenerateSelectionSurfaces(projectDir: string): void {
 // --- disable-time contribution strip -----------------------------------------
 //
 // Compose merges a plugin's structural adds (produces/sensors/consumes/
-// required_sections) into CORE stage source, where no selection filter
+// scopes/required_sections) into CORE stage source, where no selection filter
 // reaches, and records what it actually added in a per-plugin sidecar
 // (tools/data/plugin-contrib-<key>.json). Prose fragments carry their own
 // sentinel markers. On disable, select-plugins strips both, so a disabled
@@ -532,6 +538,7 @@ interface StageContribRecord {
   produces?: string[];
   sensors?: string[];
   consumes?: string[];
+  scopes?: string[];
   required_sections?: string[];
   required_sections_created?: boolean;
 }
@@ -554,12 +561,26 @@ function removeListValues(content: string, field: string, values: ReadonlySet<st
   const blockRe = new RegExp(`^${field}:\\n((?:  - .+\\n)*)`, "m");
   const m = content.match(blockRe);
   if (!m) return content;
-  const kept = [...m[1].matchAll(/^ {2}- (.+)$/gm)]
-    .map((x) => x[1])
-    .filter((v) => {
-      const bare = v.trim().replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1");
-      return !values.has(bare) && !values.has(v.trim());
+  const entries = [...m[1].matchAll(/^ {2}- (.+)$/gm)].map((x) => x[1]);
+  const removeIndexes = new Set<number>();
+  const remaining = new Set(values);
+  // Compose renders ordinary structural additions unquoted. Prefer that exact
+  // spelling so a legacy sidecar cannot remove an equivalent quoted membership
+  // that predated the plugin.
+  for (let i = 0; i < entries.length; i++) {
+    if (remaining.delete(entries[i].trim())) removeIndexes.add(i);
+  }
+  // required_sections are rendered quoted while their sidecar values are bare.
+  // Remove at most one canonical match for each recorded addition.
+  for (const value of remaining) {
+    const index = entries.findIndex((entry, i) => {
+      if (removeIndexes.has(i)) return false;
+      const bare = entry.trim().replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1");
+      return bare === value;
     });
+    if (index !== -1) removeIndexes.add(index);
+  }
+  const kept = entries.filter((_, i) => !removeIndexes.has(i));
   const replacement = kept.length > 0
     ? `${field}:\n${kept.map((v) => `  - ${v}`).join("\n")}\n`
     : dropEmptyField ? "" : `${field}: []\n`;
@@ -637,6 +658,7 @@ function stripDisabledPluginContributions(
         if (record) {
           if (record.produces?.length) content = removeListValues(content, "produces", new Set(record.produces), false);
           if (record.sensors?.length) content = removeListValues(content, "sensors", new Set(record.sensors), false);
+          if (record.scopes?.length) content = removeListValues(content, "scopes", new Set(record.scopes), false);
           if (record.consumes?.length) content = removeConsumesEntries(content, new Set(record.consumes));
           if (record.required_sections?.length) {
             content = removeListValues(content, "required_sections", new Set(record.required_sections), record.required_sections_created === true);
@@ -727,71 +749,79 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
   if (parsedSelection.hasEmpty || parsedSelection.names.length === 0) {
     die("select-plugins requires at least one non-empty plugin name, or no arguments to print the current selection.");
   }
-  const known = knownPluginNames();
-  const knownSet = new Set(known);
-  const unknown = parsedSelection.names.filter((name) => !knownSet.has(name));
-  if (unknown.length > 0) {
-    die(`Unknown plugin name(s): ${unknown.join(", ")}. Valid plugins: ${known.join(", ")}.`);
-  }
   const names = [...new Set(parsedSelection.names)].sort();
   requireInstalledHarness(projectDir);
 
-  const violations = activeWorkflowDependencyViolations(projectDir, new Set(names));
-  if (violations.length > 0) {
-    die(
-      `select-plugins refused: the new selection would strand ${violations.length} active workflow dependency(ies):\n` +
-        violations.map((v) => `  - ${v}`).join("\n") +
-        `\nComplete or park the workflow(s) first (or keep the plugin enabled), then re-run select-plugins.`,
-    );
-  }
-
-  const previousSelection = renderPluginSelection(pluginsEnabled());
-  const newSelection = names.join(", ");
-  const nameSet = new Set(names);
-  // Plugins this change DISABLES (known but not selected; the implicit core
-  // plugin has no composed contributions to strip).
-  const disabling = known.filter((n) => n !== "aidlc" && !nameSet.has(n));
-
-  const snapshots = [
-    snapshotFile(mutableHarnessDataPath(projectDir)),
-    snapshotFile(stageGraphDataPath(projectDir)),
-    snapshotFile(scopeGridDataPath(projectDir)),
-  ];
-
-  try {
-    // Strip disabled plugins' merged contributions BEFORE recompiling, so the
-    // regenerated graph no longer carries their produces/sensors/consumes on
-    // core stages. Mutated stage files join `snapshots`, so the catch-side
-    // rollback restores them too. Re-enabling restores contributions on the
-    // next session start (the plugin's own compose hook re-merges).
-    const strippedPlugins = stripDisabledPluginContributions(disabling, snapshots);
-    writePluginSelection(projectDir, names);
-    regenerateSelectionSurfaces(projectDir);
-    appendAuditEvent(projectDir, "PLUGIN_SELECTION_CHANGED", {
-      "Previous Selection": previousSelection,
-      "New Selection": newSelection,
-    });
-    if (strippedPlugins.length > 0) {
-      process.stdout.write(
-        `Stripped merged contributions of disabled plugin(s): ${strippedPlugins.join(", ")} (re-enabling restores them on the next session start)\n`,
+  // A plugin compose holds the workspace lock across compile + runner
+  // regeneration (can exceed the default ~5s acquire budget on a loaded
+  // machine), and select-plugins legitimately queues behind it - so wait up
+  // to ~60s. Dead holders are reaped immediately regardless of budget.
+  withAuditLock(projectDir, () => {
+    // Compose can install a plugin while this command waits for the lock, so
+    // discover and validate identities only after entering the transaction.
+    const known = knownPluginNames();
+    const knownSet = new Set(known);
+    const unknown = names.filter((name) => !knownSet.has(name));
+    if (unknown.length > 0) {
+      die(`Unknown plugin name(s): ${unknown.join(", ")}. Valid plugins: ${known.join(", ")}.`);
+    }
+    const violations = activeWorkflowDependencyViolations(projectDir, new Set(names));
+    if (violations.length > 0) {
+      die(
+        `select-plugins refused: the new selection would strand ${violations.length} active workflow dependency(ies):\n` +
+          violations.map((v) => `  - ${v}`).join("\n") +
+          `\nComplete or park the workflow(s) first (or keep the plugin enabled), then re-run select-plugins.`,
       );
     }
-    process.stdout.write(`Enabled plugins: ${names.join(", ")}\n`);
-  } catch (err) {
-    const original = errorMessage(err);
-    let recoveryMessage = "";
+
+    const previousSelection = renderPluginSelection(pluginsEnabled());
+    const newSelection = names.join(", ");
+    const nameSet = new Set(names);
+    // Plugins this change DISABLES (known but not selected; the implicit core
+    // plugin has no composed contributions to strip).
+    const disabling = known.filter((n) => n !== "aidlc" && !nameSet.has(n));
+
+    const snapshots = [
+      snapshotFile(mutableHarnessDataPath(projectDir)),
+      snapshotFile(stageGraphDataPath(projectDir)),
+      snapshotFile(scopeGridDataPath(projectDir)),
+    ];
+
     try {
-      for (const snapshot of snapshots) restoreSnapshot(snapshot);
-      resetSelectionSensitiveCaches();
+      // Strip disabled plugins' merged contributions BEFORE recompiling, so the
+      // regenerated graph no longer carries their produces/sensors/consumes/
+      // scopes on core stages. Mutated stage files join `snapshots`, so the catch-side
+      // rollback restores them too. Re-enabling restores contributions on the
+      // next session start (the plugin's own compose hook re-merges).
+      const strippedPlugins = stripDisabledPluginContributions(disabling, snapshots);
+      writePluginSelection(projectDir, names);
       regenerateSelectionSurfaces(projectDir);
-      recoveryMessage =
-        " Restored harness.json, stage-graph.json, scope-grid.json, and any stripped stage files, then re-ran the regeneration chain against the restored selection.";
-    } catch (recoveryErr) {
-      recoveryMessage =
-        ` Restore was attempted, but regeneration against the restored selection also failed: ${errorMessage(recoveryErr)}.`;
+      appendAuditEvent(projectDir, "PLUGIN_SELECTION_CHANGED", {
+        "Previous Selection": previousSelection,
+        "New Selection": newSelection,
+      });
+      if (strippedPlugins.length > 0) {
+        process.stdout.write(
+          `Stripped merged contributions of disabled plugin(s): ${strippedPlugins.join(", ")} (re-enabling restores them on the next session start)\n`,
+        );
+      }
+      process.stdout.write(`Enabled plugins: ${names.join(", ")}\n`);
+    } catch (err) {
+      const original = errorMessage(err);
+      let recoveryMessage = "";
+      try {
+        for (const snapshot of snapshots) restoreSnapshot(snapshot);
+        resetSelectionSensitiveCaches();
+        regenerateSelectionSurfaces(projectDir);
+        recoveryMessage =
+          " Restored harness.json, stage-graph.json, scope-grid.json, and any stripped stage files, then re-ran the regeneration chain against the restored selection.";
+      } catch (recoveryErr) {
+        recoveryMessage =
+          ` Restore was attempted, but regeneration against the restored selection also failed: ${errorMessage(recoveryErr)}.`;
+      }
+      die(`select-plugins failed: ${original}.${recoveryMessage}`);
     }
-    die(`select-plugins failed: ${original}.${recoveryMessage}`);
-  }
+  }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
 
 function pluginListRows(): Array<{ name: string; enabled: boolean }> {
@@ -3641,7 +3671,7 @@ function handleIntentBirth(projectDir: string, flags: Record<string, string>): v
     });
 
     handleIntentBirthStateBuild(projectDir, flags, scope, ts);
-  });
+  }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
 
 // The scope→stage state-build half of birth: the workspace detection + state
@@ -4763,7 +4793,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>): voi
         `Stages in scope: ${executeStages.length}\n` +
         `Completed: ${completedCount}/${executeStages.length}\n`,
     );
-  });
+  }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
 
 // ---------------------------------------------------------------------------
