@@ -2,6 +2,14 @@
 
 This chapter walks through a complete AI-DLC workflow run, explaining what you see at each step and what decisions you make. The example uses a `feature`-scoped workflow to build a REST API.
 
+> **Note**: The transcripts in this chapter show **Claude Code**. On Kiro CLI,
+> Kiro IDE, Codex CLI, and opencode the workflow - stages, agents, gates,
+> artifacts - is identical, but the Claude-only welcome banner and custom
+> AI-DLC statusline do not appear. Use `/aidlc --status` on Kiro and opencode;
+> Codex uses `$aidlc --status` and its built-in `update_plan` progress display.
+> Your harness's chapter under
+> [Running on other harnesses](harnesses/README.md) lists every difference.
+
 ---
 
 ## Starting the Workflow
@@ -10,7 +18,7 @@ This chapter walks through a complete AI-DLC workflow run, explaining what you s
 /aidlc Build a REST API for inventory management
 ```
 
-At session start, Claude Code renders the AI-DLC welcome message via the `companyAnnouncements` entry in `settings.json`. It explains how AI-DLC works, and shows the stage map and scope options.
+At session start, Claude Code renders the AI-DLC welcome message via the `companyAnnouncements` entry in `settings.json`. It explains how AI-DLC works, and shows the stage map and scope options. (`companyAnnouncements` is a Claude Code setting with no equivalent on the other harnesses - there, no banner appears and the workflow begins directly with the initialization below.)
 
 ```
 # Welcome to AI-DLC
@@ -71,7 +79,7 @@ After Initialization, the workflow enters Ideation. Each stage from here on runs
 
 ### Stage 1.1: Intent Capture (aidlc-product-agent)
 
-The status line at the bottom of your terminal updates:
+On Claude Code, the custom AI-DLC status line at the bottom of your terminal updates (Kiro and opencode use `/aidlc --status`; Codex uses `$aidlc --status` and its built-in `update_plan` progress display):
 
 ```
 [AIDLC] IDEATION > Intent Capture [▓▓▓▓▓░░░░░] 4/7 -- product
@@ -253,7 +261,7 @@ aidlc/spaces/<space>/intents/<YYMMDD>-<label>/
 
 ## Status Line
 
-Throughout the workflow, the terminal status line shows your current position:
+Throughout the workflow on Claude Code, the custom AI-DLC status line shows your current position (Kiro and opencode use `/aidlc --status` and the progress line at each gate; Codex uses `$aidlc --status` and its built-in `update_plan` progress display):
 
 ```
 [AIDLC] IDEATION > Intent Capture [▓▓▓▓▓░░░░░] 4/7 -- product
