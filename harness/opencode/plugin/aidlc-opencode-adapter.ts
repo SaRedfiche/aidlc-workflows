@@ -419,6 +419,47 @@ export default async ({
         }
       }
 
+      // Review-freeze (§12a terminal-receipt write-freeze): runs for EVERY
+      // agent - unlike reviewer-scope there is no identity gate, because any
+      // produces[] write voids a fresh READY receipt regardless of who makes
+      // it. The core hook self-filters to write tools and fails open.
+      if (
+        input.tool === "bash" ||
+        input.tool === "write" ||
+        input.tool === "edit" ||
+        input.tool === "apply_patch"
+      ) {
+        const freezeCalls =
+          input.tool === "bash"
+            ? [{ toolName: "Bash", toolInput: { command: (args.command as string) ?? "" } }]
+            : (input.tool === "apply_patch" ? applyPatchPaths(args) : [
+                (args.filePath as string) ?? (args.path as string) ?? "",
+              ])
+                .filter((filePath) => filePath.length > 0)
+                .map((filePath) => ({
+                  toolName: input.tool === "edit" ? "Edit" : "Write",
+                  toolInput: { file_path: filePath },
+                }));
+        for (const call of freezeCalls) {
+          const freeze = await runCore(
+            "aidlc-review-freeze.ts",
+            {
+              hook_event_name: "PreToolUse",
+              tool_name: call.toolName,
+              tool_input: call.toolInput,
+              cwd: directory,
+            },
+            directory,
+          );
+          if (freeze.code === 2) {
+            throw new Error(
+              freeze.stderr.trim() ||
+                "review-freeze: this write would invalidate a fresh READY review receipt",
+            );
+          }
+        }
+      }
+
       const calls = reviewerCalls(input.tool, args);
       if (calls.length === 0) return;
 

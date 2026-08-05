@@ -453,6 +453,46 @@ switch (target) {
     return 0;
   }
 
+  case "review-freeze": {
+    // PreToolUse: the §12a terminal-receipt write-freeze. Bash already carries
+    // the core hook's command shape, while apply_patch fans out one Write per
+    // touched path (Delete File / Move to included). Block contract: exit 2 +
+    // stderr; the response cache replays the block on duplicate delivery.
+    const tool = codex.tool_name ?? "";
+    if (tool === "Bash") {
+      const r = runCoreWithStderr("aidlc-review-freeze.ts", rawInput);
+      persistResponse(r.stdout, r.code === 2 ? 2 : 0, r.stderr);
+      if (r.code === 2) {
+        process.stderr.write(r.stderr);
+        return 2;
+      }
+      return 0;
+    }
+    if (tool === "apply_patch") {
+      const command = (codex.tool_input?.command as string) ?? "";
+      const targets: Array<{ path: string; tool: string }> = patchedFiles(command);
+      for (const m of command.matchAll(/^\*\*\* (?:Delete File|Move to): (.+)$/gm)) {
+        const rel = m[1].trim();
+        targets.push({ path: isAbsolute(rel) ? rel : join(projectDir, rel), tool: "Edit" });
+      }
+      for (const f of targets) {
+        const fwd = JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: f.tool,
+          tool_input: { file_path: f.path },
+        });
+        const r = runCoreWithStderr("aidlc-review-freeze.ts", fwd);
+        if (r.code === 2) {
+          persistResponse("", 2, r.stderr);
+          process.stderr.write(r.stderr);
+          return 2;
+        }
+      }
+    }
+    persistResponse("", 0);
+    return 0;
+  }
+
   case "dispatch-rules": {
     // Codex 0.145 consumes the same PreToolUse hookSpecificOutput.updatedInput
     // contract as Claude. The core hook recognizes spawn_agent and appends the
