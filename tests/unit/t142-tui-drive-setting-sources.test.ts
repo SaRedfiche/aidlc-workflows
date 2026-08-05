@@ -19,6 +19,7 @@ import {
   SNAPSHOT_STAGE_SLUG,
 } from "../harness/custom-harness.ts";
 import {
+  gridHasOption,
   gridIsApprovalGate,
   normalizeTuiCommand,
   pickRevisionOption,
@@ -183,6 +184,8 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
 `;
 
     expect(gridIsApprovalGate(summaryConfirmation)).toBe(false);
+    expect(gridHasOption(summaryConfirmation, "Looks correct")).toBe(true);
+    expect(gridHasOption(summaryConfirmation, "Approve")).toBe(false);
   });
 
   test("does not treat a pending multi-tab learnings tab as revision feedback", () => {
@@ -241,6 +244,21 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
 });
 
 describe("Kiro numbered-prose answer classification", () => {
+  test("recognizes observed guide-mode prompt phrasings", () => {
+    for (const prompt of [
+      "How would you like to answer these?\n1. Guide me\n2. Edit",
+      "How would you like to\n  provide your answers?\n1. Guide Me\n2. Edit File",
+      "How would you like to proceed?\n1. Guide Me\n2. Edit File",
+    ]) {
+      expect(
+        nextKiroNumberedProseAnswer(
+          prompt,
+          createKiroNumberedProseAnswerState(),
+        ),
+      ).toBe("1");
+    }
+  });
+
   test("answers guide batches, summary, learnings, and approval in order", () => {
     const state = createKiroNumberedProseAnswerState();
     expect(
@@ -340,6 +358,20 @@ describe("Kiro numbered-prose answer classification", () => {
       "- A. Browser localStorage\n" +
       "- B. A server with accounts";
     expect(nextKiroNumberedProseAnswer(second, state)).toBe("A");
+  });
+
+  test("accepts a surfaced assumption menu once", () => {
+    const state = createKiroNumberedProseAnswerState();
+    const assumptionConfirmation =
+      "Assumption Confirmation:\n" +
+      "1. Accept assumptions - keep these open for later stages\n" +
+      "2. Convert to follow-up questions - answer these now";
+    expect(nextKiroNumberedProseAnswer(assumptionConfirmation, state)).toBe(
+      "Accept assumptions",
+    );
+    expect(
+      nextKiroNumberedProseAnswer(assumptionConfirmation, state),
+    ).toBeNull();
   });
 
   test("answers a new learning prompt when an older approval remains visible", () => {

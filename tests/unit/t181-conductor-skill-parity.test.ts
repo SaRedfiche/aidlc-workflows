@@ -41,6 +41,16 @@ function harnessSkills(): string[] {
     .sort();
 }
 
+/** Authored question-rendering annexes for every shipped distribution. */
+function harnessQuestionAnnexes(): string[] {
+  return HARNESS_MATRIX
+    .map(
+      (harness) =>
+        `harness/${harness.name}/skills/aidlc/question-rendering.md`,
+    )
+    .sort();
+}
+
 // A bare `--init` flag token: `--init` not preceded by another flag char — the
 // retired aidlc command. NOT `git init`/`npm init` (no leading hyphen). Same
 // predicate as t174's `--init` scan.
@@ -82,6 +92,32 @@ const KIRO_TASK_LIST_TOKEN =
 
 const KIRO_SUBAGENT_TOKEN =
   '{mode:"blocking", task:"...", stages:[{name:"...", role:"aidlc-...", prompt_template:"..."}]}';
+
+const SUMMARY_STOP_SKILL_TOKENS = [
+  "before running the stage body or writing `produces`",
+  "checkpoint-specific `aidlc-log.ts decision` / `answer` pair with `--single`",
+  "only after that separate human turn and receipt",
+  "PRE-GENERATION SUMMARY STOP",
+  "before artifact generation, reviewer, learnings, or approval",
+  "--checkpoint summary-confirmation --questions-file",
+  '`--unit "<directive.unit>"`',
+  "`--single`",
+  '**"What should change?"**',
+];
+
+const SUMMARY_STOP_ANNEX_TOKENS = [
+  "## Mandatory consolidated-summary checkpoint",
+  "both options without A/B file-letter prefixes",
+  "and a blank",
+  "END THE TURN",
+  "`[Answer]: Looks correct`",
+  "`[Answer]: A. Looks correct`, `[Answer]: 1. Looks correct`",
+  "a self-selected answer",
+  "receipt command succeeds",
+  "checkpoint-specific `aidlc-log.ts decision`",
+  "checkpoint-specific `aidlc-log.ts answer`",
+  '**"What should change?"**',
+];
 
 function stageTableRows(body: string): string[] {
   const lines = body.split(/\r?\n/);
@@ -212,7 +248,33 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
-  test("Kiro file-backed questions are presented as numbered prose", () => {
+  test("every conductor stops for summary confirmation before artifact work", () => {
+    const missing: string[] = [];
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const token of SUMMARY_STOP_SKILL_TOKENS) {
+        if (!body.includes(token)) {
+          missing.push(`${rel}  missing: ${token}`);
+        }
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  test("every question renderer pins the mandatory summary checkpoint", () => {
+    const missing: string[] = [];
+    for (const rel of harnessQuestionAnnexes()) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const token of SUMMARY_STOP_ANNEX_TOKENS) {
+        if (!body.includes(token)) {
+          missing.push(`${rel}  missing: ${token}`);
+        }
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  test("Kiro file-backed questions remap source letters to numbered prose", () => {
     const missing: string[] = [];
     for (const harness of ["kiro", "kiro-ide"]) {
       const skillRel = `harness/${harness}/skills/aidlc/SKILL.md`;
@@ -231,6 +293,12 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       }
       if (!annex.includes("Never present file letters as response keys")) {
         missing.push(`${annexRel}  missing no-letter response rule`);
+      }
+      if (!annex.includes("1. **Looks correct**")) {
+        missing.push(`${annexRel}  missing numbered Looks correct option`);
+      }
+      if (!annex.includes("options have no source letters")) {
+        missing.push(`${annexRel}  missing file-label exception`);
       }
     }
     expect(missing).toEqual([]);

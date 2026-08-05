@@ -72,6 +72,41 @@ becomes:
 Reply with a number (or just tell me).
 ```
 
+## Mandatory consolidated-summary checkpoint
+
+After guided or chat file-backed Q&A (and whenever a stage definition requires
+it explicitly, such as Requirements Analysis), the stage protocol requires a
+separate confirmation before any stage artifact is generated. Append or update
+`## Consolidated Summary Confirmation` in the questions file with the summary,
+the prompt, both options without A/B file-letter prefixes, and a blank
+`[Answer]:` tag, then render this numbered question in chat:
+
+```
+**Confirm** — Does this all look correct before I generate the artifact?
+
+1. **Looks correct** — Generate the artifact from these answers
+2. **Request changes** — Revise one or more answers before generation
+3. **Other** — describe what you want instead
+
+Reply with a number (or just tell me).
+```
+
+This is a mandatory human checkpoint, not the stage approval gate. Before
+rendering it, run the checkpoint-specific `aidlc-log.ts decision` command from
+`SKILL.md`, including the exact `--questions-file` and any `--unit` / `--single`
+identity. END THE TURN after presenting it and wait for the user's response.
+Then map the response back to the exact option label, persist `[Answer]: Looks
+correct` or `[Answer]: Request changes`, and run the matching checkpoint-specific `aidlc-log.ts answer`
+command. Strip any source letter, numbered-prose index, punctuation, and option
+description before writing. `[Answer]: A. Looks correct`, `[Answer]: 1. Looks correct`,
+and a self-selected answer are invalid. On Request changes, ask
+**"What should change?"** and END THE TURN again; do not update any answer
+until that feedback arrives. Then record the feedback, update the affected
+answers, reset this tag to blank, and present the consolidated summary again.
+Do not generate the artifact until the file contains the human's explicit
+`[Answer]: Looks correct` and the receipt command succeeds. Never merge this
+checkpoint with the later reviewer, learnings, or approval steps.
+
 Rules:
 
 - **Approval gate `[next stage]`**: on an approval question, render the
@@ -93,6 +128,9 @@ Rules:
 - **File-backed questions**: retain A-E and X labels in the markdown source,
   but remap those choices to numbered prose when presenting them in chat.
   Preserve source order and map the selected number back to the stored label.
+  The consolidated-summary checkpoint above is the explicit exception: its
+  options have no source letters and its `[Answer]:` stores the exact semantic
+  label, not a source letter, chat number, prefix, or description.
   Never present file letters as response keys or ask the user to answer with
   file letters.
 - **Batching**: no harness limit on options per question, but keep batches
