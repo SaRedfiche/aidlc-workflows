@@ -27,6 +27,7 @@ import { repointHarnessIncludes } from "../tools/aidlc-includes.ts";
 import {
   activeIntentUuid,
   activeSpace,
+  clearSessionIntentUuid,
   errorMessage,
   findIntentByUuid,
   getField,
@@ -42,6 +43,7 @@ import {
   writeCurrentSessionId,
   writeSessionIntentUuid,
 } from "../tools/aidlc-lib.ts";
+import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
 
 export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
@@ -84,6 +86,10 @@ let source = "startup";
 // per-session→intent record (resume rebind below); "" when absent (a TTY/empty
 // invocation) — the rebind logic no-ops without it.
 let sessionId = "";
+// The live transcript path, if the host pipes it on SessionStart. Persisted
+// below so the statusline/state tools can find the transcript even before the
+// first Stop/PostToolUse fold writes the pointer. "" when absent.
+let transcriptPath = "";
 if (!process.stdin.isTTY) {
   try {
     if (input.length > 0) {
@@ -92,6 +98,10 @@ if (!process.stdin.isTTY) {
         if (isClaudeCodeHookInput(raw)) {
           source = raw.source ? String(raw.source) : "unknown";
           if (typeof raw.session_id === "string") sessionId = raw.session_id;
+          const rawObj = raw as Record<string, unknown>;
+          if (typeof rawObj.transcript_path === "string") {
+            transcriptPath = rawObj.transcript_path;
+          }
         } else {
           source = "unknown";
         }
@@ -102,6 +112,17 @@ if (!process.stdin.isTTY) {
   } catch {
     // stdin read itself failed — treat as startup (no payload available)
   }
+}
+
+// Persist the transcript path (best-effort; the usage helper swallows write
+// errors and no-ops on an empty path). Lets the statusline resolve the live
+// transcript on a fresh session before any fold has written the pointer. Only
+// the Claude harness pipes transcript_path here; elsewhere transcriptPath stays
+// "" and this is a no-op.
+try {
+  writeCurrentTranscriptPath(projectDir, sessionId, transcriptPath);
+} catch {
+  // never break session startup on a usage-bookkeeping failure
 }
 
 // Record the live conversation as the "current session" on EVERY fire (startup /
@@ -173,6 +194,19 @@ if (sessionId) {
           `INTENT REBIND OFFER: This conversation was working ${was.slug}, but the active intent is ${liveSlug}. ` +
           `Switch back to ${was.slug}? [Y/n] — on Yes, run \`${switchCmd}\` to move the cursor; ` +
           `on No, keep working ${liveSlug}. This corrects the per-user cursor only; it never rebuilds the conversation.\n`;
+        // Until the user accepts the offered switch, this resumed conversation
+        // is operating on the live intent. Stamp that ownership now so a
+        // decline cannot leave usage attached to the old workflow. A Yes path
+        // runs the switch command above, whose utility handler re-stamps the
+        // session back to `was`.
+      }
+      // Whether the previous intent still resolves or was deleted, this resumed
+      // conversation now operates on the live target. Normalize ownership even
+      // when no rebind offer can be shown for a stale/deleted prior UUID.
+      if (liveUuid) {
+        writeSessionIntentUuid(projectDir, sessionId, liveUuid);
+      } else {
+        clearSessionIntentUuid(projectDir, sessionId);
       }
     }
   }

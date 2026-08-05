@@ -20,22 +20,22 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 498,
+    "total": 502,
     "enumeratedByClass": {
-      "function": 261,
+      "function": 264,
       "audit": 76,
       "scope": 9,
       "stage": 32,
-      "hook": 15,
+      "hook": 16,
       "subcommand": 98,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 113,
+      "function": 117,
       "audit": 35,
       "scope": 9,
       "stage": 9,
-      "hook": 15,
+      "hook": 16,
       "subcommand": 86,
       "render-surface": 7
     }
@@ -1180,6 +1180,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:clearSessionIntentUuid",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t167-session-intent-helpers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:CLONE_ID_FILE",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2179,6 +2191,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:modelRatesPath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t267-usage.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:mustGet",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2931,6 +2955,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:sessionsDir",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t267-usage.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:setActiveIntentCursor",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3406,8 +3442,13 @@
       "unitClass": "function",
       "unitId": "function:writeFileAtomic",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t270-metrics-transport.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3467,6 +3508,18 @@
         },
         {
           "file": "tests/unit/t248-steering-content-delivery.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "hook",
+      "unitId": "aidlc-fold-usage",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t267-usage.test.ts",
           "mechanism": "cli"
         }
       ],
