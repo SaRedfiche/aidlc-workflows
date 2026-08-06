@@ -19,7 +19,8 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { discoverSiblingRepos, errorMessage, harnessDir } from "./aidlc-lib.ts";
+import { discoverSiblingRepos, errorMessage } from "./aidlc-lib.ts";
+import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 import {
   parseWorkspaceManifest,
   WORKSPACE_GITIGNORE_GATE_BEGIN as GATE_BEGIN,
@@ -44,7 +45,7 @@ export interface DoctorCheck {
  */
 export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
   const results: DoctorCheck[] = [];
-  const syncCmd = `bun ${harnessDir()}/tools/aidlc-workspace-sync.ts`;
+  const syncCmd = aidlcToolInvocation("workspace-sync");
 
   // W1 - Uncommitted records. Any git workspace: surface uncommitted changes
   // under aidlc/ so the shared records get committed and pushed to teammates.

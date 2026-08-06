@@ -25,6 +25,15 @@
         "hooks": [
           {
             "type": "command",
+            "command": "aidlc adapter codex dispatch-rules"
+          }
+        ],
+        "matcher": "spawn_agent"
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
             "command": "aidlc adapter codex state-transition-guard"
           }
         ]
@@ -34,6 +43,22 @@
           {
             "type": "command",
             "command": "aidlc adapter codex reviewer-scope"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "aidlc adapter codex review-freeze"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "aidlc adapter codex plan-approval-guard"
           }
         ]
       }
@@ -73,16 +98,6 @@
           {
             "type": "command",
             "command": "aidlc adapter codex validate-state"
-          }
-        ]
-      }
-    ],
-    "PostCompact": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "aidlc adapter codex post-compact"
           }
         ]
       }

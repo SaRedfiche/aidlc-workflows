@@ -3,6 +3,7 @@ import {
   cpSync,
   existsSync,
   lstatSync,
+  mkdtempSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -12,10 +13,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { basename, dirname, join } from "node:path";
+import { tmpdir } from "node:os";
+import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
-import { adaptLegacyResult, buildBundle, mergeFindings, runDoctorAnalysis } from "./aidlc-doctor-bundle.ts";
 import {
   artifactsRegistryFor,
   findCycles,
@@ -121,8 +122,15 @@ import {
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
+  copyProjectSurfaces,
+  projectDiffPlan,
+} from "./aidlc-plugin.ts";
+import { executePlan } from "./aidlc-transaction.ts";
+import {
+  aidlcDispatcherInvocation,
   aidlcToolInvocation,
   compiledExecutable,
+  discoverProjectHarnesses,
   isCompiledExecutable,
   resolveHarnessPath,
   resolveSkillsPath,
@@ -133,6 +141,7 @@ import {
   commandPath,
   inspectInstalledVersion,
   installRoot,
+  readActiveExecutable,
   rollbackVersionPath,
   versionRoot as installedVersionRoot,
 } from "./aidlc-install-paths.ts";
@@ -301,29 +310,6 @@ function handleVersion(): void {
 // select-plugins
 // ---------------------------------------------------------------------------
 
-interface FileSnapshot {
-  path: string;
-  exists: boolean;
-  bytes: string;
-}
-
-function snapshotFile(path: string): FileSnapshot {
-  return {
-    path,
-    exists: existsSync(path),
-    bytes: existsSync(path) ? readFileSync(path, "utf-8") : "",
-  };
-}
-
-function restoreSnapshot(snapshot: FileSnapshot): void {
-  if (snapshot.exists) {
-    mkdirSync(dirname(snapshot.path), { recursive: true });
-    writeFileSync(snapshot.path, snapshot.bytes, "utf-8");
-  } else if (existsSync(snapshot.path)) {
-    rmSync(snapshot.path, { force: true });
-  }
-}
-
 function resetSelectionSensitiveCaches(): void {
   _resetHarnessDataForTests();
   _resetStageGraphForTests();
@@ -333,20 +319,6 @@ function resetSelectionSensitiveCaches(): void {
 function mutableHarnessDataPath(projectDir: string): string {
   return resolveHarnessPath(
     ["tools", "data", "harness.json"],
-    { mutable: true, projectDir },
-  );
-}
-
-function stageGraphDataPath(projectDir: string): string {
-  return resolveHarnessPath(
-    ["tools", "data", "stage-graph.json"],
-    { mutable: true, projectDir },
-  );
-}
-
-function scopeGridDataPath(projectDir: string): string {
-  return resolveHarnessPath(
-    ["tools", "data", "scope-grid.json"],
     { mutable: true, projectDir },
   );
 }
@@ -514,7 +486,10 @@ function replaceGeneratedRegion(
   if (after !== before) writeFileSync(path, after, "utf-8");
 }
 
-function regenerateSelectionSurfaces(projectDir: string): void {
+function regenerateSelectionSurfaces(
+  projectDir: string,
+  displayProjectDir = projectDir,
+): void {
   runBunTool(projectDir, "aidlc-graph.ts", ["compile"], "aidlc-graph compile");
   resetSelectionSensitiveCaches();
   const skillsDir = resolveSkillsPath([], { mutable: true, projectDir });
@@ -523,7 +498,9 @@ function regenerateSelectionSurfaces(projectDir: string): void {
     runBunTool(projectDir, "aidlc-runner-gen.ts", ["scopes"], "aidlc-runner-gen scopes");
   } else {
     process.stdout.write(
-      `note: runner regeneration skipped: ${skillsDir} not present in this install\n`,
+      `note: runner regeneration skipped: ${
+        resolveSkillsPath([], { mutable: true, projectDir: displayProjectDir })
+      } not present in this install\n`,
     );
   }
   resetSelectionSensitiveCaches();
@@ -636,21 +613,14 @@ function removePluginFragments(content: string, plugin: string): string {
   return out;
 }
 
-// Strip the merged contributions of every named plugin from installed stage
-// source. Mutated stage files are snapshotted into `snapshots` FIRST so the
-// caller's rollback restores them; consumed sidecars are snapshotted then
-// deleted (compose re-records on re-enable).
+// Strip the merged contributions of every named plugin from staged stage
+// source. The caller commits the resulting staged-project diff through the
+// shared transaction engine; consumed sidecars are deleted in staging and
+// compose recreates them when the plugin is re-enabled.
 function stripDisabledPluginContributions(
   plugins: readonly string[],
-  snapshots: FileSnapshot[],
 ): string[] {
   const stagesRoot = installedStagesRoot();
-  const touched = new Set<string>();
-  const snapshotOnce = (path: string): void => {
-    if (touched.has(path)) return;
-    snapshots.push(snapshotFile(path));
-    touched.add(path);
-  };
   const stripped: string[] = [];
   for (const plugin of plugins) {
     const sidecar = pluginContribSidecarPath(plugin);
@@ -683,14 +653,12 @@ function stripDisabledPluginContributions(
         }
         content = removePluginFragments(content, plugin);
         if (content !== before) {
-          snapshotOnce(path);
           writeFileSync(path, content, "utf-8");
           pluginTouched = true;
         }
       }
     }
     if (existsSync(sidecar)) {
-      snapshotOnce(sidecar);
       rmSync(sidecar, { force: true });
       pluginTouched = true;
     }
@@ -798,25 +766,52 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
     // plugin has no composed contributions to strip).
     const disabling = known.filter((n) => n !== "aidlc" && !nameSet.has(n));
 
-    const snapshots = [
-      snapshotFile(mutableHarnessDataPath(projectDir)),
-      snapshotFile(stageGraphDataPath(projectDir)),
-      snapshotFile(scopeGridDataPath(projectDir)),
-    ];
-
+    const stagingRoot = mkdtempSync(join(tmpdir(), "aidlc-plugin-select-"));
+    const stagedProject = join(stagingRoot, "project");
     try {
-      // Strip disabled plugins' merged contributions BEFORE recompiling, so the
-      // regenerated graph no longer carries their produces/sensors/consumes/
-      // scopes on core stages. Mutated stage files join `snapshots`, so the catch-side
-      // rollback restores them too. Re-enabling restores contributions on the
-      // next session start (the plugin's own compose hook re-merges).
-      const strippedPlugins = stripDisabledPluginContributions(disabling, snapshots);
-      writePluginSelection(projectDir, names);
-      regenerateSelectionSurfaces(projectDir);
-      appendAuditEvent(projectDir, "PLUGIN_SELECTION_CHANGED", {
-        "Previous Selection": previousSelection,
-        "New Selection": newSelection,
+      const selectedHarness = harnessDir();
+      copyProjectSurfaces(projectDir, stagedProject, selectedHarness);
+      const envKeys = [
+        "AIDLC_RUNTIME_PROJECT_DIR",
+        "AIDLC_PROJECT_DIR",
+        "AIDLC_HARNESS_DIR",
+        "AIDLC_RUNTIME_HARNESS_ROOT",
+      ] as const;
+      const saved = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+      let strippedPlugins: string[] = [];
+      try {
+        process.env.AIDLC_RUNTIME_PROJECT_DIR = stagedProject;
+        process.env.AIDLC_PROJECT_DIR = stagedProject;
+        process.env.AIDLC_HARNESS_DIR = selectedHarness;
+        process.env.AIDLC_RUNTIME_HARNESS_ROOT = join(stagedProject, selectedHarness);
+        resetSelectionSensitiveCaches();
+        // Strip disabled contributions in staging before recompiling. The live
+        // project remains byte-untouched until the shared transaction commits.
+        strippedPlugins = stripDisabledPluginContributions(disabling);
+        writePluginSelection(stagedProject, names);
+        regenerateSelectionSurfaces(stagedProject, projectDir);
+      } finally {
+        for (const key of envKeys) {
+          const value = saved[key];
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+        resetSelectionSensitiveCaches();
+      }
+      const plan = projectDiffPlan(projectDir, stagedProject, selectedHarness);
+      const failAfter = Number(process.env.AIDLC_PLUGIN_SELECT_FAIL_AFTER ?? "0");
+      executePlan(plan, {
+        failAfter: Number.isInteger(failAfter) && failAfter > 0
+          ? failAfter
+          : undefined,
+        validateCommitted: () => {
+          appendAuditEvent(projectDir, "PLUGIN_SELECTION_CHANGED", {
+            "Previous Selection": previousSelection,
+            "New Selection": newSelection,
+          });
+        },
       });
+      resetSelectionSensitiveCaches();
       if (strippedPlugins.length > 0) {
         process.stdout.write(
           `Stripped merged contributions of disabled plugin(s): ${strippedPlugins.join(", ")} (re-enabling restores them on the next session start)\n`,
@@ -824,19 +819,10 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
       }
       process.stdout.write(`Enabled plugins: ${names.join(", ")}\n`);
     } catch (err) {
-      const original = errorMessage(err);
-      let recoveryMessage = "";
-      try {
-        for (const snapshot of snapshots) restoreSnapshot(snapshot);
-        resetSelectionSensitiveCaches();
-        regenerateSelectionSurfaces(projectDir);
-        recoveryMessage =
-          " Restored harness.json, stage-graph.json, scope-grid.json, and any stripped stage files, then re-ran the regeneration chain against the restored selection.";
-      } catch (recoveryErr) {
-        recoveryMessage =
-          ` Restore was attempted, but regeneration against the restored selection also failed: ${errorMessage(recoveryErr)}.`;
-      }
-      die(`select-plugins failed: ${original}.${recoveryMessage}`);
+      resetSelectionSensitiveCaches();
+      die(`select-plugins failed: ${errorMessage(err)}`);
+    } finally {
+      rmSync(stagingRoot, { recursive: true, force: true });
     }
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
@@ -1221,16 +1207,28 @@ function codexNativeTrustHashes(hooksPath: string): string[] {
   return hashes;
 }
 
-function handleDoctor(projectDir: string, flags: Record<string, string | boolean> = {}): void {
-  const results: Array<{
-    pass: boolean;
-    severity?: "warn";
-    label: string;
-    fix?: string;
-  }> = [];
+export type DoctorCheck = {
+  pass: boolean;
+  severity?: "warn";
+  label: string;
+  fix?: string;
+};
+
+export type DoctorReport = {
+  checks: DoctorCheck[];
+  passed: number;
+  warnings: number;
+  failed: number;
+};
+
+export async function collectDoctorReport(
+  projectDir: string,
+  extraChecks: readonly DoctorCheck[] = [],
+): Promise<DoctorReport> {
+  const results: DoctorCheck[] = [];
   const isWindows = process.platform === "win32";
 
-  // 1. bun installed — check PATH (Bun.which handles Windows .exe suffix automatically)
+  // Compiled installs carry their runtime; direct source execution requires Bun.
   const bunHome = process.env.HOME ? join(process.env.HOME, ".bun", "bin", "bun") : "";
   const bunFound = Bun.which("bun") !== null || (bunHome !== "" && existsSync(bunHome));
   const compiled = isCompiledExecutable();
@@ -1238,7 +1236,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string | boolean
     pass: compiled || bunFound,
     label: compiled
       ? "Self-contained binary runtime (bun is not required)"
-      : "bun installed (required for copy-install CLI tools and hooks)",
+      : "Source execution runtime: bun is available",
     fix: isWindows
       ? "install via `npm install -g bun` or `powershell -c \"irm bun.sh/install.ps1 | iex\"`"
       : "install via `curl -fsSL https://bun.sh/install | bash`",
@@ -1250,14 +1248,19 @@ function handleDoctor(projectDir: string, flags: Record<string, string | boolean
       ? inspectInstalledVersion(installedVersion)
       : { complete: false, distributions: [], reason: "active version marker unavailable" };
     const distributions = installedState.distributions;
+    const runtimeReady = installedState.complete && distributions.length > 0;
     results.push({
-      pass: installedVersion !== null && installedState.complete,
-      label: installedVersion && installedState.complete
+      pass: installedVersion !== null && runtimeReady,
+      label: installedVersion && runtimeReady
         ? `Installed runtime: ${installedVersion} [${distributions.join(", ")}]`
+        : installedVersion && installedState.complete
+        ? `Installed runtime ${installedVersion} has no harness installed`
         : installedVersion
         ? `Installed runtime ${installedVersion} is incomplete: ${installedState.reason ?? "unknown reason"}`
         : "Installed runtime: active version marker unavailable",
-      fix: "re-run the installer with --harness <name>",
+      fix: installedState.complete
+        ? "run `aidlc harness add <name>`"
+        : "re-run the installer with --harness <name>",
     });
     const command = commandPath();
     const expectedExecutable = installedVersion
@@ -1266,7 +1269,10 @@ function handleDoctor(projectDir: string, flags: Record<string, string | boolean
     let pointerValid = false;
     try {
       pointerValid = Boolean(expectedExecutable) &&
-        realpathSync(command) === realpathSync(expectedExecutable);
+        (isWindows
+          ? existsSync(command) &&
+            readActiveExecutable() === resolve(expectedExecutable)
+          : realpathSync(command) === realpathSync(expectedExecutable));
     } catch {
       pointerValid = false;
     }
@@ -1425,7 +1431,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string | boolean
   } else {
     results.push({
       pass: true,
-      label: "Install channel: legacy copy-install (no machine runtime expected)",
+      label: "Execution mode: source checkout (no machine runtime expected)",
     });
   }
 
@@ -1531,8 +1537,8 @@ function handleDoctor(projectDir: string, flags: Record<string, string | boolean
     }
   }
 
-  // 2. Hook presence. Copy installs invoke the TypeScript files through Bun;
-  // native installs route the same hook targets through the compiled command.
+  // 2. Hook presence. Shipped projects route hook targets through the native
+  // command; direct source execution may still invoke these TypeScript files.
   // The Kiro and Codex trees also carry the authored host adapter.
   const harness = harnessDir();
   if (harness === ".claude") {
@@ -1573,13 +1579,19 @@ function handleDoctor(projectDir: string, flags: Record<string, string | boolean
       };
       collectCommands(parsed);
       const refs = new Set<string>();
+      const dispatcher =
+        '(?:\\baidlc|\\bbun\\s+(?:"[^"]*[\\\\/]aidlc\\.ts"|\'[^\']*[\\\\/]aidlc\\.ts\'|[^\\s"\']*[\\\\/]aidlc\\.ts))';
       for (const command of commands) {
         for (const match of command.matchAll(/aidlc-[A-Za-z0-9_-]+\.ts/g)) {
           refs.add(match[0]);
         }
-        const binaryHook = /\baidlc\s+hook\s+([A-Za-z0-9_-]+)\b/.exec(command);
-        if (binaryHook) refs.add(`aidlc-${binaryHook[1]}.ts`);
-        if (/\baidlc\s+statusline\b/.test(command)) refs.add("aidlc-statusline.ts");
+        const dispatcherHook = new RegExp(
+          `${dispatcher}\\s+hook\\s+([A-Za-z0-9_-]+)\\b`,
+        ).exec(command);
+        if (dispatcherHook) refs.add(`aidlc-${dispatcherHook[1]}.ts`);
+        if (new RegExp(`${dispatcher}\\s+statusline\\b`).test(command)) {
+          refs.add("aidlc-statusline.ts");
+        }
       }
       expectedHooks = [...refs].sort();
     } catch {
@@ -1739,9 +1751,13 @@ function handleDoctor(projectDir: string, flags: Record<string, string | boolean
   // 4b. Dual-harness coexistence (D-11): another harness tree installed AND a
   // workflow active is supported-but-untested — warn (advisory pass with a
   // visible label), never block.
-  const otherTrees = [".claude", ".kiro", ".codex", ".aidlc"].filter(
-    (h) => h !== harness && existsSync(join(projectDir, h, "tools", "aidlc-lib.ts")),
-  );
+  const otherTrees = discoverProjectHarnesses(projectDir)
+    .map((candidate) => candidate.harnessDir)
+    .filter(
+      (candidate) =>
+        candidate !== harness &&
+        existsSync(join(projectDir, candidate, "tools", "aidlc-lib.ts")),
+    );
   if (
     otherTrees.length > 0 &&
     existsSync(join(projectDir, harness, "tools", "aidlc-lib.ts")) &&
@@ -1908,7 +1924,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string | boolean
 
   // 5. Workspace shell ready (P4: no --init artifact to check). With auto-birth
   // there is no scaffolded aidlc-docs/ to verify; readiness is the SHIPPED SHELL
-  // the user copies from dist/: the harness engine dir (.claude/.kiro/.codex)
+  // the user copies from dist/: the metadata-declared harness engine directory
   // present AND the default space's memory dir present (the source of truth the
   // native include resolves). When both are present the first /aidlc auto-births
   // with no ceremony; a missing piece means the dist/ copy was incomplete.
@@ -3181,6 +3197,8 @@ function handleDoctor(projectDir: string, flags: Record<string, string | boolean
     // Advisory only; a scan failure must not hide the main doctor report.
   }
 
+  results.push(...extraChecks);
+
   // Cold-safe gate: only emit audit when an audit trail already exists. On a
   // pristine project (no audit shard / flat audit.md) doctor prints its health
   // report and creates NOTHING — it stays a pure read-only diagnostic. On an
@@ -3195,80 +3213,17 @@ function handleDoctor(projectDir: string, flags: Record<string, string | boolean
     });
   }
 
-  // One fresh analysis, shared by the live report AND the --export writer
-  // (issue #575, Arden #3): the structured condition->remedy findings and the
-  // reconstructed timeline are computed ONCE here. A plain --doctor renders
-  // these findings alongside the legacy check rows, so gate-unresolved /
-  // runtime-graph-stale / cold-hook and the rest surface live too - the live
-  // output and the export can never diverge. The analysis performs no writes.
-  const analysis = runDoctorAnalysis(projectDir);
-
-  // Print report
-  let output = "AI-DLC Health Check\n";
-  output += `${"\u2500".repeat(37)}\n`;
   let passed = 0;
   let warnings = 0;
   let failed = 0;
   for (const r of results) {
     if (r.severity === "warn") {
-      output += `!  ${r.label}`;
-      if (r.fix) output += ` — ${r.fix}`;
-      output += "\n";
       warnings++;
     } else if (r.pass) {
-      output += `\u2713  ${r.label}\n`;
       passed++;
     } else {
-      output += `\u2717  ${r.label}`;
-      if (r.fix) output += ` — ${r.fix}`;
-      output += "\n";
       failed++;
     }
-  }
-  // Structured diagnosis findings (workflow timeline analysis) are ADVISORY and
-  // never change doctor's exit code: they render for visibility but do not count
-  // toward `failed`. Only the legacy environment/config checks above drive the
-  // exit status, so a plain `/aidlc --doctor` keeps its pre-existing contract \u2014
-  // a workflow-level diagnosis (which can be a soft, workflow-in-progress signal)
-  // must not flip the exit code that CI and scripts gate on. Info is omitted from
-  // the live view to keep it terse; the export carries the full set.
-  const diagErrors = analysis.findings.filter((f) => f.severity === "error");
-  const diagWarnings = analysis.findings.filter((f) => f.severity === "warning");
-  if (diagErrors.length > 0 || diagWarnings.length > 0) {
-    output += `${"\u2500".repeat(37)}\n`;
-    output += "Workflow diagnosis (advisory):\n";
-    for (const f of diagErrors) {
-      output += `\u2717  [${f.id}] ${f.summary}`;
-      if (f.remedy) output += ` (${f.remedy})`;
-      output += "\n";
-    }
-    for (const f of diagWarnings) {
-      output += `!  [${f.id}] ${f.summary}\n`;
-    }
-  }
-
-  output += `${"\u2500".repeat(37)}\n`;
-  output += `${passed} passed, ${warnings} warnings, ${failed} failed\n`;
-
-  if (flags.json) {
-    const code = failed > 0 ? 1 : 0;
-    process.stdout.write(`${JSON.stringify({
-      schemaVersion: 1,
-      ok: code === 0,
-      code,
-      status: failed > 0 ? "failed" : warnings > 0 ? "warning" : "ok",
-      message: `${passed} passed, ${warnings} warnings, ${failed} failed`,
-      data: {
-        passed,
-        warnings,
-        failed,
-        checks: results,
-      },
-    })}\n`);
-  } else if (flags.quiet) {
-    process.stdout.write(`${passed} passed, ${warnings} warnings, ${failed} failed\n`);
-  } else {
-    process.stdout.write(output);
   }
 
   // Audit only if audit.md already existed when doctor started (cold-safe —
@@ -3281,64 +3236,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string | boolean
     });
   }
 
-  // --export: after the live report, write a redacted diagnostic report from
-  // the SAME analysis this run already computed (issue #575). No second read,
-  // no cached diagnosis. The export write never changes doctor's exit code.
-  // `--export` is a bare boolean flag; accept it whether the arg parser recorded
-  // it as "true" (bare) or a stray token followed it, so a trailing word can
-  // never silently disable the export.
-  if ("export" in flags) {
-    try {
-      const tsToken = fsSafeTimestamp();
-      // A bare `--output` (no value) parses to "true"; treat that as an error
-      // rather than creating a directory literally named "true".
-      if (flags.output === "true") {
-        throw new Error("--output requires a directory path (e.g. --output /tmp/aidlc-report)");
-      }
-      const outParent = flags.output
-        ? flags.output
-        : join(projectDir, "aidlc", "diagnostics");
-      mkdirSync(outParent, { recursive: true });
-      // Merge the legacy environment/config checks (bun present, hooks wired,
-      // settings intact) into the exported analysis so report.md/report.json
-      // carry the SAME findings the live report shows — the bundle exists so
-      // the maintainer does NOT need the user's project, so a failing env check
-      // must reach it. The live render (above) and the exit code are untouched;
-      // this only enriches what buildBundle serializes. (Arden round-3 #1.)
-      const analysisForExport = {
-        ...analysis,
-        findings: mergeFindings(results.map(adaptLegacyResult), analysis.findings),
-      };
-      const report = buildBundle(outParent, analysisForExport, tsToken);
-      let out = "\nDiagnostic report created:\n";
-      out += `  ${report.archivePath ?? report.bundleDir}\n\n`;
-      out += "Findings:\n";
-      const topFindings = report.findings.filter((f) => f.severity !== "info").slice(0, 20);
-      if (topFindings.length === 0) {
-        out += "  (no errors or warnings)\n";
-      } else {
-        for (const f of topFindings) out += `  ${f.severity.toUpperCase()} ${f.id}\n`;
-      }
-      out += "\nNo source files or artifact bodies were included.\n";
-      if (report.manualShareNote) out += `\n${report.manualShareNote}\n`;
-      process.stdout.write(out);
-    } catch (e) {
-      // Export failure must not mask the live doctor result; report and go on.
-      process.stdout.write(`\nDiagnostic report could not be created: ${errorMessage(e)}\n`);
-    }
-  }
-
-  // Exit non-zero on any check failure so CI and scripts get a clear
-  // signal. Doctor's stdout carries the diagnostic regardless of exit
-  // code — the orchestrator's tool-failure handler was updated in this
-  // same change to print stdout (not stderr) for doctor.
-  process.exit(failed > 0 ? 1 : 0);
-}
-
-// A filesystem-safe UTC timestamp token (isoTimestamp has colons that some
-// filesystems reject in names): 2026-07-14T15:26:31Z → 20260714T152631Z.
-function fsSafeTimestamp(): string {
-  return isoTimestamp().replace(/[-:]/g, "").replace(/\.\d+/, "");
+  return { checks: results, passed, warnings, failed };
 }
 
 // ---------------------------------------------------------------------------
@@ -5518,8 +5416,6 @@ export function setStatus(
 }
 
 function handleSetStatus(projectDir: string, flags: Record<string, string>): void {
-  // Status synchronization is owned by the sync-statusline hook, which calls
-  // setStatus() in-process; the CLI surface stays blocked for everyone else.
   if (
     process.env.AIDLC_STATUSLINE_OWNER !== `statusline:${process.ppid}`
   ) {
@@ -5624,7 +5520,7 @@ export function findScopeByKeyword(kw: string): string[] {
 // fixture SKILL.md (so drift tests never mutate the real file).
 
 const SCOPE_TABLE_BEGIN =
-  `<!-- BEGIN: compiled scope grid via \`${aidlcToolInvocation("utility", undefined, false)} scope-table\` - do NOT hand-edit -->`;
+  `<!-- BEGIN: compiled scope grid via \`${aidlcDispatcherInvocation("utility")} scope-table\` - do NOT hand-edit -->`;
 const SCOPE_TABLE_END =
   "<!-- END: compiled scope grid -->";
 
@@ -5745,7 +5641,7 @@ function handleScopeTable(
 // fixture SKILL.md (so drift tests never mutate the real file).
 
 const STAGE_TABLE_BEGIN =
-  `<!-- BEGIN: compiled stage graph via \`${aidlcToolInvocation("utility", undefined, false)} stage-table\` - do NOT hand-edit -->`;
+  `<!-- BEGIN: compiled stage graph via \`${aidlcDispatcherInvocation("utility")} stage-table\` - do NOT hand-edit -->`;
 const STAGE_TABLE_END =
   "<!-- END: compiled stage graph -->";
 
@@ -5980,7 +5876,7 @@ export async function main(argv: string[]): Promise<void> {
       handleStatus(projectDir, flags);
       break;
     case "doctor":
-      handleDoctor(projectDir, flags);
+      await (await import("./aidlc-doctor.ts")).main(rawArgs);
       break;
     case "intent-birth":
       handleIntentBirth(projectDir, flags);

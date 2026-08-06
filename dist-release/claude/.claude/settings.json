@@ -7,11 +7,11 @@
       "Read",
       "Edit",
       "Write",
-      "Bash(aidlc *)",
       "Glob",
       "Grep",
       "Task",
-      "WebSearch"
+      "WebSearch",
+      "Bash(aidlc *)"
     ]
   },
   "statusLine": {
@@ -32,6 +32,24 @@
   "hooks": {
     "PreToolUse": [
       {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "aidlc hook fold-usage"
+          }
+        ]
+      },
+      {
+        "matcher": "Task|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "aidlc hook dispatch-rules"
+          }
+        ]
+      },
+      {
         "matcher": "Read|NotebookRead|Edit|MultiEdit|Write|NotebookEdit|LS|Glob|Grep|Bash",
         "hooks": [
           {
@@ -41,6 +59,19 @@
           {
             "type": "command",
             "command": "aidlc hook reviewer-scope"
+          },
+          {
+            "type": "command",
+            "command": "aidlc hook review-freeze"
+          }
+        ]
+      },
+      {
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "aidlc hook plan-approval-guard"
           }
         ]
       }
@@ -116,6 +147,15 @@
           {
             "type": "command",
             "command": "aidlc hook runtime-compile"
+          }
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "aidlc hook fold-usage"
           }
         ]
       }

@@ -1,5 +1,5 @@
 // covers: tool:aidlc-lifecycle, tool:aidlc-machine-config, tool:aidlc-update
-// covers: tool:aidlc-completions, file:scripts/install.ps1
+// covers: tool:aidlc-completions, file:scripts/install.sh, file:scripts/install.ps1
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -45,6 +45,7 @@ import {
 const REPO_ROOT = join(fileURLToPath(new URL("../..", import.meta.url)));
 const DISPATCHER = join(REPO_ROOT, "core", "tools", "aidlc.ts");
 const LIFECYCLE = join(REPO_ROOT, "core", "tools", "aidlc-lifecycle.ts");
+const INSTALL_SH = join(REPO_ROOT, "scripts", "install.sh");
 const INSTALL_PS1 = join(REPO_ROOT, "scripts", "install.ps1");
 const temporary: string[] = [];
 function patchVersion(offset: number): string {
@@ -804,6 +805,162 @@ describe("t244 management lifecycle", () => {
   }, 60_000);
 });
 
+describe("t244 installer harness selection", () => {
+  test("Unix automation modes require literal --harness before release access", () => {
+    const script = readFileSync(INSTALL_SH, "utf-8");
+    expect(script).toContain("has_controlling_terminal");
+    expect(script).toContain("read -r choice </dev/tty");
+    expect(script).not.toContain("[ -t 0 ]");
+
+    for (const args of [["--yes"], ["--quiet"], ["--json"]]) {
+      const result = spawnSync("sh", [INSTALL_SH, ...args], {
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          AIDLC_RELEASE_BASE_URL: "http://non-loopback.invalid/releases",
+        },
+      });
+      const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+      expect(result.status, output).toBe(2);
+      expect(output).toContain("--harness <name>");
+      expect(output).not.toContain("release URL must use HTTPS");
+    }
+
+    const json = spawnSync("sh", [INSTALL_SH, "--json"], {
+      cwd: REPO_ROOT,
+      encoding: "utf-8",
+      timeout: 10_000,
+    });
+    expect(JSON.parse(json.stdout ?? "")).toEqual(expect.objectContaining({
+      ok: false,
+      code: 2,
+      status: "usage",
+      message: expect.stringContaining("--harness <name>"),
+    }));
+  });
+
+  test.skipIf(process.platform !== "linux")(
+    "Unix install without a controlling terminal requires literal --harness",
+    () => {
+      const result = spawnSync("setsid", ["-w", "sh", INSTALL_SH], {
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          AIDLC_RELEASE_BASE_URL: "http://non-loopback.invalid/releases",
+        },
+      });
+      const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+      expect(result.status, output).toBe(2);
+      expect(output).toContain("--harness <name>");
+      expect(output).not.toContain("release URL must use HTTPS");
+    },
+  );
+
+  test.skipIf(process.platform !== "linux")(
+    "piped Unix installer reads its picker response from the controlling terminal",
+    () => {
+      const release = fixture();
+      const machine = temp("aidlc-t244-piped-picker-");
+      const transcript = join(machine, "transcript.log");
+      const result = spawnSync("script", [
+        "-qec",
+        'cat "$AIDLC_TEST_INSTALLER" | sh -s -- --from "$AIDLC_TEST_RELEASE" --offline',
+        transcript,
+      ], {
+        cwd: REPO_ROOT,
+        input: "not-a-number\n",
+        encoding: "utf-8",
+        timeout: 60_000,
+        env: {
+          ...process.env,
+          AIDLC_TEST_INSTALLER: INSTALL_SH,
+          AIDLC_TEST_RELEASE: release,
+          AIDLC_INSTALL_ROOT: join(machine, "install"),
+          AIDLC_BIN_DIR: join(machine, "bin"),
+        },
+      });
+      const output = `${result.stdout ?? ""}${result.stderr ?? ""}${
+        readFileSync(transcript, "utf-8")
+      }`;
+      expect(result.status, output).toBe(2);
+      expect(output).toContain("Select the harness distribution to install:");
+      expect(output).toContain("Harness [1-2]:");
+      expect(output).toContain("invalid harness selection");
+      expect(output).not.toContain("a harness is required in non-interactive installs");
+    },
+    60_000,
+  );
+
+  test("PowerShell advertises and binds the literal --harness spelling", () => {
+    const script = readFileSync(INSTALL_PS1, "utf-8");
+    expect(script).toContain("[Alias('-harness')]");
+    expect(script).toContain("[CmdletBinding(PositionalBinding = $false)]");
+    expect(script).toContain("[Parameter(ValueFromRemainingArguments = $true)]");
+    expect(script).toContain("$LiteralArguments[$index] -ne '--harness'");
+    expect(script).toContain("$HostNonInteractive");
+    expect(script).toContain(
+      "a harness is required in non-interactive installs; pass --harness <name>",
+    );
+    expect(script).not.toContain("pass -Harness <name>");
+    expect(script).toContain("Select the harness distribution to install:");
+  });
+
+  test.skipIf(process.platform !== "win32")(
+    "PowerShell executes literal --harness and rejects automation without it",
+    () => {
+      const env = { ...process.env, AIDLC_ALLOW_ADMIN_INSTALL: "1" };
+      const literal = spawnSync("pwsh", [
+        "-NoProfile",
+        "-File",
+        INSTALL_PS1,
+        "--harness",
+        "claude",
+        "-Offline",
+        "-Quiet",
+      ], { cwd: REPO_ROOT, encoding: "utf-8", timeout: 30_000, env });
+      expect(
+        literal.status,
+        `${literal.stdout ?? ""}${literal.stderr ?? ""}`,
+      ).toBe(3);
+      expect(`${literal.stdout ?? ""}${literal.stderr ?? ""}`).toContain(
+        "--Offline requires --From <release-directory>",
+      );
+
+      const missing = spawnSync("pwsh", [
+        "-NoProfile",
+        "-File",
+        INSTALL_PS1,
+        "-Yes",
+        "-Json",
+      ], { cwd: REPO_ROOT, encoding: "utf-8", timeout: 30_000, env });
+      expect(missing.status, `${missing.stdout ?? ""}${missing.stderr ?? ""}`).toBe(2);
+      expect(JSON.parse(missing.stdout ?? "")).toEqual(expect.objectContaining({
+        code: 2,
+        message: expect.stringContaining("--harness <name>"),
+      }));
+
+      const hostNonInteractive = spawnSync("pwsh", [
+        "-NoProfile",
+        "-NonInteractive",
+        "-File",
+        INSTALL_PS1,
+      ], { cwd: REPO_ROOT, encoding: "utf-8", timeout: 30_000, env });
+      expect(
+        hostNonInteractive.status,
+        `${hostNonInteractive.stdout ?? ""}${hostNonInteractive.stderr ?? ""}`,
+      ).toBe(2);
+      expect(
+        `${hostNonInteractive.stdout ?? ""}${hostNonInteractive.stderr ?? ""}`,
+      ).toContain("--harness <name>");
+    },
+    60_000,
+  );
+});
+
 describe("t244 Windows and completion release surfaces", () => {
   test("strict Windows pointer accepts one versioned executable and rejects extra lines", () => {
     const machine = temp("aidlc-t241-pointer-");
@@ -1064,9 +1221,12 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(workflow).toContain("shellcheck scripts/install.sh");
     expect(workflow).toContain("Invoke-ScriptAnalyzer -Path scripts/install.ps1");
     expect(workflow).toContain("unix-lifecycle:");
-    expect(workflow).toContain("Exercise the interactive harness picker through a PTY");
+    expect(workflow).toContain("Exercise the piped interactive harness picker through a PTY");
+    expect(workflow).toContain("install.ps1 -ReleaseBaseUrl");
+    expect(workflow).toContain("--harness claude -Quiet");
+    expect(workflow).not.toMatch(/install\.ps1[^\n]*-Harness/);
     expect(workflow).toContain("name: release-candidate");
-    expect(workflow).toContain("build-results-${{ matrix.directory }}.json");
+    expect(workflow).toContain(`build-results-\${{ matrix.directory }}.json`);
     const publish = workflow.slice(workflow.indexOf("  publish:"));
     expect(publish).toContain("name: release-candidate");
     expect(publish).toContain("sha256sum -c checksums.txt");

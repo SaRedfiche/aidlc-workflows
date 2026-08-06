@@ -296,6 +296,7 @@ async function download(
   caBundle?: string,
   maxBytes = MAX_ASSET_BYTES,
   contentTypes: readonly string[] = [],
+  reportedTimeoutMs = timeoutMs,
 ): Promise<void> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -319,7 +320,9 @@ async function download(
           error instanceof DOMException && error.name === "AbortError" ||
           error instanceof Error && error.name === "TimeoutError"
         ) {
-          throw new ReleaseUnavailableError(`${redact(current)} timed out after ${timeoutMs}ms`);
+          throw new ReleaseUnavailableError(
+            `${redact(current)} timed out after ${reportedTimeoutMs}ms`,
+          );
         }
         throw new ReleaseUnavailableError(`${redact(current)} transport failure`);
       }
@@ -385,7 +388,9 @@ async function download(
       error instanceof DOMException && error.name === "AbortError" ||
       error instanceof Error && error.name === "TimeoutError"
     ) {
-      throw new ReleaseUnavailableError(`${redact(url)} timed out after ${timeoutMs}ms`);
+      throw new ReleaseUnavailableError(
+        `${redact(url)} timed out after ${reportedTimeoutMs}ms`,
+      );
     }
     throw error;
   } finally {
@@ -425,6 +430,7 @@ export async function fetchReleaseMetadata(options: {
       settings.caBundle,
       MAX_METADATA_BYTES,
       ["application/json", "text/json", "application/octet-stream", "binary/octet-stream", "text/plain"],
+      metadataTimeoutMs,
     );
     await download(
       releaseUrl(baseUrl, version, "checksums.txt"),
@@ -433,6 +439,7 @@ export async function fetchReleaseMetadata(options: {
       settings.caBundle,
       MAX_METADATA_BYTES,
       ["text/plain", "application/octet-stream", "binary/octet-stream"],
+      metadataTimeoutMs,
     );
     verifiedChecksums(temporary);
     const manifest = readReleaseManifest(temporary);

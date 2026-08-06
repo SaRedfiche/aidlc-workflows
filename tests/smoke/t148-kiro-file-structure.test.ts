@@ -96,7 +96,6 @@ describe("t148 dist/kiro file structure", () => {
       "agents/aidlc-developer-agent.json",
       "agents/aidlc-architect-agent.json",
       "settings/cli.json",
-      "settings/mcp.json",
     ]) {
       expect(existsSync(join(K, f))).toBe(true);
     }
@@ -187,7 +186,7 @@ describe("t148 dist/kiro file structure", () => {
     }
   });
 
-  test("Kiro CLI and IDE agent JSON stay equivalent outside host hooks and CLI-only MCP fields", () => {
+  test("shared Kiro CLI and IDE agent JSON sources differ only by CLI hooks", () => {
     const cliDir = join(REPO_ROOT, "harness", "kiro", "agents");
     const ideDir = join(REPO_ROOT, "harness", "kiro-ide", "agents");
     const shared = readdirSync(cliDir)
@@ -203,29 +202,7 @@ describe("t148 dist/kiro file structure", () => {
       const ide = readJson(join(ideDir, name));
       delete cli.hooks;
       delete ide.hooks;
-      delete cli.includeMcpJson;
-      delete cli.$schema;
-      delete ide.$schema;
-      cli.tools = ((cli.tools as string[]) ?? []).filter(
-        (tool) => !tool.startsWith("@"),
-      );
-      expect(ide, name).toEqual(cli);
-    }
-  });
-
-  test("worker lifecycle hooks ship only where Kiro exposes command arguments", () => {
-    const cliDir = join(REPO_ROOT, "harness", "kiro", "agents");
-    const ideDir = join(REPO_ROOT, "harness", "kiro-ide", "agents");
-    const names = readdirSync(cliDir)
-      .filter((name) => name.endsWith("-agent.json"))
-      .sort();
-    for (const name of names) {
-      const cli = readJson(join(cliDir, name));
-      const ide = readJson(join(ideDir, name));
-      const cliHooks = JSON.stringify(cli.hooks ?? {});
-      const ideHooks = JSON.stringify(ide.hooks ?? {});
-      expect(cliHooks, name).toContain("state-transition-guard");
-      expect(ideHooks, name).not.toContain("state-transition-guard");
+      expect(cli).toEqual(ide);
     }
   });
 
@@ -293,7 +270,7 @@ describe("t148 dist/kiro file structure", () => {
     ]);
     const all = Object.values(hooks).flat();
     for (const h of all) {
-      expect(h.command).toContain("aidlc-kiro-adapter.ts");
+      expect(h.command).toContain("aidlc.ts adapter kiro");
     }
     const preMatchers = (hooks.preToolUse ?? []).map((h) => h.matcher).sort();
     expect(preMatchers).toEqual([
@@ -306,18 +283,18 @@ describe("t148 dist/kiro file structure", () => {
     ]);
     expect(
       (hooks.preToolUse ?? []).find((h) => h.matcher === "fs_write")?.command,
-    ).toContain("aidlc-kiro-adapter.ts review-freeze");
+    ).toContain("aidlc.ts adapter kiro review-freeze");
     expect(
       (hooks.preToolUse ?? []).filter((h) => h.matcher === "execute_bash")
-        .some((h) => h.command.includes("aidlc-kiro-adapter.ts review-freeze")),
+        .some((h) => h.command.includes("aidlc.ts adapter kiro review-freeze")),
     ).toBe(true);
     const subagentCommands = (hooks.preToolUse ?? [])
       .filter((h) => h.matcher === "subagent")
       .map((h) => h.command)
       .sort();
     expect(subagentCommands).toEqual([
-      "bun .kiro/hooks/aidlc-kiro-adapter.ts deliver-stage-rules",
-      "bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard",
+      "bun .kiro/tools/aidlc.ts adapter kiro dispatch-rules",
+      "bun .kiro/tools/aidlc.ts adapter kiro plan-approval-guard",
     ]);
     const matchers = (hooks.postToolUse ?? []).map((h) => h.matcher).sort();
     expect(matchers).toEqual(["execute_bash", "fs_write", "subagent", "todo_list"]);

@@ -62,6 +62,7 @@ import {
   readMemoryCap,
 } from "../core/tools/aidlc-tiers.ts";
 import { AIDLC_VERSION } from "../core/tools/aidlc-version.ts";
+import { sha256Bytes } from "../core/tools/aidlc-distribution.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CORE_ROOT = join(REPO_ROOT, "core");
@@ -114,6 +115,7 @@ const GENERATED_SKILL_REGIONS = [
   },
 ] as const;
 const INVOKE_TOKEN = /\{\{INVOKE\}\}/g;
+const TOOL_PREFIX_TOKEN = /\{\{TOOL_PREFIX\}\}/g;
 
 // Harnesses the packager builds = every harness/<name>/ that carries a
 // manifest.ts. DISCOVERED, not hardcoded: adding harness #N is one harness/<n>/
@@ -131,8 +133,21 @@ function discoverHarnessNames(): string[] {
 // Transform: the ONE class. Token substitution on authored prose and the
 // TypeScript invocation seam; compiled JSON is regenerated per tree.
 // ---------------------------------------------------------------------------
-function substituteToken(s: string, harnessDir: string, invoke = `bun ${harnessDir}/tools/aidlc.ts`): string {
-  return s.replace(HARNESS_TOKEN, harnessDir).replace(INVOKE_TOKEN, invoke);
+function substituteInvocationTokens(
+  s: string,
+  harnessDir: string,
+  invoke = `bun ${harnessDir}/tools/aidlc.ts`,
+): string {
+  const toolPrefix = invoke === "aidlc" ? "aidlc " : `bun ${harnessDir}/tools/`;
+  return s.replace(INVOKE_TOKEN, invoke).replace(TOOL_PREFIX_TOKEN, toolPrefix);
+}
+
+function substituteToken(
+  s: string,
+  harnessDir: string,
+  invoke = `bun ${harnessDir}/tools/aidlc.ts`,
+): string {
+  return substituteInvocationTokens(s.replace(HARNESS_TOKEN, harnessDir), harnessDir, invoke);
 }
 
 // Rewrite in-prose `<harnessDir>/rules/` → `<harnessDir>/<rulesRename>/` for a
@@ -298,7 +313,13 @@ function transform(
   }
   if (srcPath.endsWith(".ts")) {
     return Buffer.from(
-      content.toString("utf-8").replace(INVOKE_TOKEN, invoke),
+      substituteInvocationTokens(content.toString("utf-8"), harnessDir, invoke),
+      "utf-8",
+    );
+  }
+  if (/\.(?:hook|json|toml)$/.test(srcPath)) {
+    return Buffer.from(
+      substituteToken(content.toString("utf-8"), harnessDir, invoke),
       "utf-8",
     );
   }
@@ -485,6 +506,27 @@ function writeProjectionData(outRoot: string, treeRoot: string, m: HarnessManife
   if (unclassified.length > 0) {
     throw new Error(`[${m.name}] unclassified projection entries: ${unclassified.join(", ")}`);
   }
+  const rootIntegrations = m.rootIntegrations.map((integration) => {
+    if (integration.policy !== "managed-block") return integration;
+    const currentHash = sha256Bytes(readFileSync(join(outRoot, integration.path)));
+    const copyPath = join(REPO_ROOT, "dist", m.name, integration.path);
+    const copyHash = existsSync(copyPath)
+      ? sha256Bytes(readFileSync(copyPath))
+      : currentHash;
+    return {
+      ...integration,
+      legacySignatures: {
+        ...integration.legacySignatures,
+        wholeFileHashes: [
+          ...new Set([
+            ...(integration.legacySignatures?.wholeFileHashes ?? []),
+            copyHash,
+            currentHash,
+          ]),
+        ],
+      },
+    };
+  });
   const projection = {
     schemaVersion: 1,
     distribution: m.name,
@@ -492,7 +534,7 @@ function writeProjectionData(outRoot: string, treeRoot: string, m: HarnessManife
     initNextStep: m.initNextStep,
     harnessDir: m.harnessDir,
     managedDirectories,
-    rootIntegrations: m.rootIntegrations,
+    rootIntegrations,
   };
   const stamp = {
     schemaVersion: 1,
@@ -771,6 +813,7 @@ function buildTree(
       repoRoot: REPO_ROOT,
       coreRoot: CORE_ROOT,
       harnessRoot: harnessSrcRoot,
+      harnessName: m.name,
       distRoot: outRoot,
       harnessDir,
       substituteToken: (s: string) => substituteToken(s, harnessDir, invoke),
@@ -838,11 +881,15 @@ function rewriteNativeOnboarding(value: string): string {
   return value
     .replace(
       /^- \*\*bun\*\*:.*$/gm,
-      "- **Runtime**: Native installs use the self-contained `aidlc` binary; Bun is not required.",
+      "- **Runtime**: Framework commands run through `aidlc`; keep that command and its runtime available.",
     )
     .replace(
       /^- \*\*Hook permissions\*\*:.*$/gm,
       "- **Hook permissions**: Framework hooks run through the self-contained `aidlc` binary. No separate script runtime or executable bits are required.",
+    )
+    .replace(
+      /^- \*\*Permissions\*\*:.*$/gm,
+      "- **Permissions**: the `aidlc` agent pre-approves only the native `aidlc` command prefix and its listed read-only tools; everything else prompts.",
     )
     .replace(
       /TypeScript, run via bun/g,
@@ -903,6 +950,7 @@ function rewriteNativeInvocations(outRoot: string, m: HarnessManifest): void {
     "runner-gen",
     "runtime",
     "sensor",
+    "sensor-claim-sources",
     "sensor-linter",
     "sensor-required-sections",
     "sensor-type-check",
@@ -912,6 +960,7 @@ function rewriteNativeInvocations(outRoot: string, m: HarnessManifest): void {
     "utility",
     "validate",
     "worktree",
+    "workspace-sync",
   ].join("|");
   const projectPrefix = String.raw`(?:"?(?:\$\{?CLAUDE_PROJECT_DIR\}?/)?`;
   const suffix = `"?)`;
@@ -960,7 +1009,7 @@ function rewriteNativeInvocations(outRoot: string, m: HarnessManifest): void {
       `"bun \\\\$\\\\{?KIRO_PROJECT_DIR\\\\}?/${m.harnessDir}/tools/.*"`,
       `"aidlc .*"`,
     );
-    value = value.replace(INVOKE_TOKEN, "aidlc");
+    value = substituteInvocationTokens(value, m.harnessDir, "aidlc");
     value = rewriteNativeOnboarding(value);
     writeFileSync(file, value);
   }
@@ -970,25 +1019,63 @@ function rewriteNativeInvocations(outRoot: string, m: HarnessManifest): void {
     const { emitDefaultRules, emitTrustSeed } = require(
       join(HARNESS_ROOT, m.name, "emit.ts"),
     ) as {
-      emitDefaultRules: (harnessDir: string, release?: boolean) => string;
-      emitTrustSeed: (harnessDir: string, release?: boolean) => string;
+      emitDefaultRules: (harnessDir: string, invoke?: string) => string;
+      emitTrustSeed: (
+        harnessDir: string,
+        harnessName?: string,
+        invoke?: string,
+      ) => string;
     };
     writeFileSync(
       join(outRoot, m.harnessDir, "rules", "default.rules"),
-      emitDefaultRules(m.harnessDir, true),
+      emitDefaultRules(m.harnessDir, "aidlc"),
     );
     writeFileSync(
       join(outRoot, m.harnessDir, "trust-seed.toml"),
-      emitTrustSeed(m.harnessDir, true),
+      emitTrustSeed(m.harnessDir, m.name, "aidlc"),
     );
   }
+  const descriptorPath = join(outRoot, m.harnessDir, PROJECTION_DATA);
+  const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8")) as {
+    managedDirectories: string[];
+    legacyManagedFileHashes?: Record<string, string[]>;
+  };
+  const copyRoot = join(REPO_ROOT, "dist", m.name);
+  const legacyManagedFileHashes: Record<string, string[]> = {};
+  for (const directory of descriptor.managedDirectories) {
+    const releaseDirectory = join(outRoot, directory);
+    if (!existsSync(releaseDirectory)) continue;
+    for (const file of walk(releaseDirectory)) {
+      const rel = relative(outRoot, file).split(sep).join("/");
+      const copy = join(copyRoot, rel);
+      if (!existsSync(copy) || !lstatSync(copy).isFile()) continue;
+      const releaseHash = sha256Bytes(readFileSync(file));
+      const copyHash = sha256Bytes(readFileSync(copy));
+      if (releaseHash !== copyHash) legacyManagedFileHashes[rel] = [copyHash];
+    }
+  }
+  const descriptorRel = `${m.harnessDir}/${PROJECTION_DATA}`.split(sep).join("/");
+  const copyDescriptor = join(copyRoot, descriptorRel);
+  if (existsSync(copyDescriptor)) {
+    legacyManagedFileHashes[descriptorRel] = [
+      sha256Bytes(readFileSync(copyDescriptor)),
+    ];
+  }
+  if (Object.keys(legacyManagedFileHashes).length > 0) {
+    descriptor.legacyManagedFileHashes = legacyManagedFileHashes;
+  } else {
+    delete descriptor.legacyManagedFileHashes;
+  }
+  writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
 
   const leftovers: string[] = [];
   for (const file of walk(outRoot)) {
     if (!/\.(?:md|json|toml|hook|ts)$/.test(file)) continue;
     const value = readFileSync(file, "utf-8");
-    if (value.includes("{{INVOKE}}")) {
-      leftovers.push(`${relative(outRoot, file)}: unexpanded {{INVOKE}}`);
+    for (const token of ["{{INVOKE}}", "{{TOOL_PREFIX}}"]) {
+      if (value.includes(token)) {
+        leftovers.push(`${relative(outRoot, file)}: unexpanded ${token}`);
+      }
     }
     if (new RegExp(String.raw`\bbun\s+[^\n]*${harnessDir}/(?:tools|hooks)/aidlc`).test(value)) {
       leftovers.push(`${relative(outRoot, file)}: bun invocation survived native projection`);
@@ -1154,8 +1241,7 @@ function writeHarness(name: string): void {
     // Siblings at dist/ (plugins, specifications, and unrelated assets) remain
     // outside this harness-owned boundary.
     if (existsSync(distDir)) rmSync(distDir, { recursive: true, force: true });
-    buildTree(m, distDir, seedStash, "aidlc");
-    rewriteNativeInvocations(distDir, m);
+    buildTree(m, distDir, seedStash);
     console.log(`[${name}] regenerated dist/${name}/${m.harnessDir}`);
   } finally {
     rmSync(seedStash, { recursive: true, force: true });
@@ -1173,8 +1259,7 @@ function checkHarness(name: string): string[] {
   let problems: string[] = [];
   try {
     // Seed compile from the committed tree (untouched under --check).
-    buildTree(m, tmp, committedTreeRoot, "aidlc");
-    rewriteNativeInvocations(tmp, m);
+    buildTree(m, tmp, committedTreeRoot);
     // The whole harness distribution is generated, not just <harnessDir>.
     // Diffing its root makes every generated file part of the same
     // bidirectional contract: missing/modified root onboarding and config are

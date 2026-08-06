@@ -23,11 +23,12 @@
 //   - stop emits {"decision":"block","reason":"..."} — Kiro's stop contract
 //     is IDENTICAL (verified live), so it passes through verbatim.
 //
-// Usage (registered in .kiro/agents/aidlc.json):
+// Usage (registered in the conductor and delegated .kiro/agents/*.json configs):
 //   aidlc adapter kiro <target>
 // where <target> ∈ session-start | audit-and-sensors | runtime-compile |
 //                  state-sync | log-subagent | stop | verb-intercept |
 //                  pretool-block | state-transition-guard | reviewer-scope
+//                  | review-freeze | dispatch-rules
 
 import {
   existsSync,
@@ -109,7 +110,7 @@ const childCwd = process.env.AIDLC_PROJECT_DIR ? projectDir : process.cwd();
 // WHY the args are recovered from the EXPANDED body: Kiro fires userPromptSubmit
 // with `prompt` = the fully-expanded skill body (the raw `/aidlc …` literal is
 // gone), but it SUBSTITUTES the user's post-/aidlc text ($ARGUMENTS) into the
-// forwarding-loop anchor `aidlc __delegate orchestrate next <ARGS>`. We read the args
+// forwarding-loop anchor `aidlc-orchestrate.ts next <ARGS>`. We read the args
 // back from that anchor — the same text the conductor would forward.
 function shellWords(input: string): string[] {
   const words: string[] = [];
@@ -157,7 +158,7 @@ function shellWords(input: string): string[] {
 function extractNextInvocation(
   expandedPrompt: string,
 ): { raw: string; args: string[] } {
-  // Match the FIRST `… aidlc __delegate orchestrate next <ARGS>` occurrence (the loop's
+  // Match the FIRST `… aidlc-orchestrate.ts next <ARGS>` occurrence (the loop's
   // step-1 anchor) and take the tokens up to the closing backtick. The anchor is
   // inside a markdown code span, so the args end at the backtick.
   // Accept the native dispatcher anchor and the legacy filename shape so the
@@ -344,7 +345,7 @@ if (target === "verb-intercept") {
     ? `--${cmd.subcommand}`
     : (cmd.display ?? [cmd.subcommand, ...forwarded].join(" "));
   process.stdout.write(
-    `SYSTEM (deterministic harness dispatch): The command \`/aidlc ${typed}\` has ALREADY been run by the harness — it is a read-only/navigation command that carries NO workflow work. Its verbatim output is below. Your ONLY action this turn: relay that output to the user, then STOP. Do NOT run \`aidlc __delegate orchestrate next\`. Do NOT advance, resume, or run any workflow stage.\n\n--- OUTPUT ---\n${out}\n--- END OUTPUT ---\n`,
+    `SYSTEM (deterministic harness dispatch): The command \`/aidlc ${typed}\` has ALREADY been run by the harness — it is a read-only/navigation command that carries NO workflow work. Its verbatim output is below. Your ONLY action this turn: relay that output to the user, then STOP. Do NOT run \`aidlc-orchestrate.ts next\`. Do NOT advance, resume, or run any workflow stage.\n\n--- OUTPUT ---\n${out}\n--- END OUTPUT ---\n`,
   );
   return 0;
 }
@@ -357,9 +358,8 @@ if (target === "verb-intercept") {
 // advancing next this same turn. But Kiro's userPromptSubmit can only INJECT, not
 // block — so if the live conductor retries a bare `next` past the engine's `done`,
 // this preToolUse hook is the hard floor: when the latch is fresh-for-this-turn and
-// the attempted execute_bash command is a TRULY BARE advancing
-// `aidlc __delegate orchestrate next` (no advancing flag,
-// classifyTerminalCommand === null), exit 2 + stderr →
+// the attempted execute_bash command is a TRULY BARE advancing `aidlc-orchestrate.ts
+// next` (no advancing flag, classifyTerminalCommand === null), exit 2 + stderr →
 // Kiro BLOCKS the tool call (live-verified contract: only exit 2 blocks; exit 1 and
 // a JSON {"decision":...} on stdout do NOT). It does NOT consume the latch (the
 // conductor may retry within the turn; the next turn bumps the counter so the latch
@@ -478,8 +478,12 @@ if (target === "state-transition-guard") {
   const tool = kiro.tool_name ?? "";
   if (tool !== "shell" && tool !== "execute_bash") process.exit(0);
   const command = String(kiro.tool_input?.command ?? "");
+  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  const hookCommand = executable
+    ? [executable, "hook", "state-transition-guard"]
+    : [process.execPath, join(HOOKS_DIR, "aidlc-state-transition-guard.ts")];
   const r = Bun.spawnSync(
-    [process.execPath, join(HOOKS_DIR, "aidlc-state-transition-guard.ts")],
+    hookCommand,
     {
       stdin: Buffer.from(
         JSON.stringify({
@@ -489,9 +493,10 @@ if (target === "state-transition-guard") {
         }),
         "utf-8",
       ),
-      cwd: kiro.cwd ?? process.cwd(),
+      cwd: childCwd,
       stdout: "pipe",
       stderr: "pipe",
+      env: projectEnv,
     },
   );
   if (r.exitCode === 2) {
@@ -499,6 +504,56 @@ if (target === "state-transition-guard") {
     process.exit(2);
   }
   process.exit(0);
+}
+
+// --- plan-approval-guard: code-generation plan-before-generation (preToolUse) ---
+//
+// Kiro's delegation surface is the `subagent` tool: tool_input carries
+// {task, stages: [{name, role, prompt_template}]} (see
+// tests/fixtures/kiro-hook-payloads/payloads.json postToolUse_subagent).
+// The shim forwards one Task-shaped payload to the core hook when any
+// pipeline stage's role is the developer agent, joining the top-level task
+// and the developer stages' prompt templates as the prompt text from which the
+// core hook reads the explicit AIDLC-UNIT marker. Exit 2 + stderr is Kiro's
+// reject contract, forwarded verbatim. Fail-open: a different tool, no
+// developer role in the pipeline, or an unspawnable core hook allows the call.
+if (target === "plan-approval-guard") {
+  const tool = kiro.tool_name ?? "";
+  if (tool !== "subagent") return 0;
+  const ti = kiro.tool_input ?? {};
+  const stages = (ti.stages as Array<{ role?: string; prompt_template?: string }>) ?? [];
+  const devStages = stages.filter((s) => s.role === "aidlc-developer-agent");
+  if (devStages.length === 0) return 0;
+  const prompt = [
+    (ti.task as string) ?? "",
+    ...devStages.map((s) => s.prompt_template ?? ""),
+  ].filter((t) => t.length > 0).join("\n");
+  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  const command = executable
+    ? [executable, "hook", "plan-approval-guard"]
+    : [process.execPath, join(HOOKS_DIR, "aidlc-plan-approval-guard.ts")];
+  const r = Bun.spawnSync(
+    command,
+    {
+      stdin: Buffer.from(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Task",
+          tool_input: { subagent_type: "aidlc-developer-agent", prompt },
+        }),
+        "utf-8",
+      ),
+      cwd: childCwd,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: projectEnv,
+    },
+  );
+  if (r.exitCode === 2) {
+    process.stderr.write(r.stderr?.toString() ?? "");
+    return 2;
+  }
+  return 0;
 }
 
 // --- reviewer-scope: the per-unit reviewer read-scope bound (preToolUse) ---
@@ -568,6 +623,106 @@ if (target === "reviewer-scope") {
   if (r.exitCode === 2) {
     process.stderr.write(stderrText);
     return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
+  }
+  return 0;
+}
+
+// --- review-freeze: the §12a terminal-receipt write-freeze -------------------
+//
+// Registered on every mutation-capable conductor/delegate fs_write and
+// execute_bash surface. The shim normalizes writes to the core hook's Write
+// shape (top-level path plus batched operations[] paths) and shell calls to its
+// Bash shape, then forwards stderr + exit code verbatim. Fail-open: an
+// unspawnable core hook allows the call.
+if (target === "review-freeze") {
+  const tool = kiro.tool_name ?? "";
+  if (!["write", "fs_write", "shell", "execute_bash"].includes(tool)) return 0;
+  const ti = kiro.tool_input ?? {};
+  const shell = tool === "shell" || tool === "execute_bash";
+  const coreInput: Record<string, unknown> = shell
+    ? { command: (ti.command as string) ?? "" }
+    : { file_path: (ti.path as string) ?? (ti.file_path as string) ?? "" };
+  if (!shell) {
+    const wops = (ti.operations as Array<{ path?: string }>) ?? [];
+    coreInput.paths = wops.map((o) => o.path ?? "").filter((p) => p.length > 0);
+  }
+  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  const command = executable
+    ? [executable, "hook", "review-freeze"]
+    : [process.execPath, join(HOOKS_DIR, "aidlc-review-freeze.ts")];
+  const r = Bun.spawnSync(command, {
+    stdin: Buffer.from(
+      JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: shell ? "Bash" : "Write",
+        tool_input: coreInput,
+        cwd: projectDir,
+      }),
+      "utf-8",
+    ),
+    cwd: projectDir,
+    stdout: "pipe",
+    stderr: "pipe",
+    env: projectEnv,
+  });
+  const stderrText = r.stderr?.toString() ?? "";
+  if (r.exitCode === 2) {
+    process.stderr.write(stderrText);
+    return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
+  }
+  return 0;
+}
+
+// --- dispatch-rules: exact conductor-to-worker steering ---------------------
+//
+// Kiro exposes subagent arguments to preToolUse hooks but does not support
+// updated tool input, and a block-with-retry contract deadlocks live: the
+// conductor cannot reliably reproduce a multi-KB bundle byte-exactly, so
+// every retry re-blocks (observed on the ACP gate - zero dispatches
+// converged). Kiro is also the ONE harness where the rules invariant already
+// holds without the brief: every delegated agent's config preloads the full
+// active memory tree via its `resources` glob, so the worker holds the rules
+// before it reads the brief. Run the shared augmenter as an OBSERVER: a
+// complete brief passes silently; an incomplete one proceeds WITH a warning
+// (visible in the transcript and traces), never a block. The strict rewrite
+// path stays on the harnesses that support updatedInput (Claude, Codex,
+// opencode).
+if (target === "dispatch-rules") {
+  if ((kiro.tool_name ?? "") !== "subagent") return 0;
+  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  const command = executable
+    ? [executable, "hook", "dispatch-rules"]
+    : [process.execPath, join(HOOKS_DIR, "aidlc-dispatch-rules.ts")];
+  const r = Bun.spawnSync(command, {
+    stdin: Buffer.from(input, "utf-8"),
+    cwd: projectDir,
+    stdout: "pipe",
+    stderr: "pipe",
+    env: {
+      ...projectEnv,
+      AIDLC_DISPATCH_RULES_PRELOAD_FALLBACK: "1",
+    },
+  });
+  if (r.exitCode === 2) {
+    // A required rule file could not be loaded at all (missing/unreadable):
+    // that is real missing steering with no preload to fall back on - the
+    // one case that still blocks, with the core hook's repair guidance.
+    process.stderr.write(r.stderr?.toString() ?? "");
+    return 2;
+  }
+  if (r.exitCode === 3) {
+    // The bundle is valid but too large for the hook rewrite channel. Kiro's
+    // agent-v1 resources preload the same active memory files, so this is the
+    // advisory fallback case rather than an unloadable-rule block.
+    process.stderr.write(r.stderr?.toString() ?? "");
+    return 0;
+  }
+  if ((r.stdout?.toString().trim() ?? "") !== "") {
+    process.stderr.write(
+      "Advisory: the AIDLC subagent brief did not carry the active-stage rule bundle verbatim. " +
+        "The dispatch proceeded - Kiro agents preload the active memory tree natively - but keep " +
+        "briefs aligned with the delivered load-steering content.\n",
+    );
   }
   return 0;
 }

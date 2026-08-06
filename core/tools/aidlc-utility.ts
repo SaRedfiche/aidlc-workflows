@@ -3,6 +3,7 @@ import {
   cpSync,
   existsSync,
   lstatSync,
+  mkdtempSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -12,6 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
@@ -35,14 +37,12 @@ import {
   activeSpace,
   auditFilePath,
   auditShards,
-  createIntent,
+  birthIntent,
   composeMarkerPath,
   COMPOSE_MARKER_TTL_MS,
-  DEFAULT_SCOPE,
   DEFAULT_SPACE,
   detectLeakedLocks,
   docsDir,
-  envDefaultScope,
   knowledgeDir,
   agentsDir,
   emitError,
@@ -81,11 +81,8 @@ import {
   parseStageFrontmatter,
   parseStateStageSuffixes,
   readAllAuditShards,
-  readActiveDirectiveMarker,
-  recordHookDrop,
   readCurrentSessionId,
   readStateFile,
-  refreshActiveDirectiveMarker,
   resolveBirthRepoSet,
   resolveProjectDir,
   setActiveIntentCursor,
@@ -121,11 +118,14 @@ import {
   _resetHarnessDataForTests,
   _resetScopeMappingForTests,
   _resetStageGraphForTests,
-  classifyStateVersion,
-  CURRENT_STATE_VERSION,
 } from "./aidlc-lib.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
+import {
+  copyProjectSurfaces,
+  projectDiffPlan,
+} from "./aidlc-plugin.ts";
+import { executePlan } from "./aidlc-transaction.ts";
 import {
   aidlcDispatcherInvocation,
   aidlcToolInvocation,
@@ -134,7 +134,6 @@ import {
   isCompiledExecutable,
   resolveHarnessPath,
   resolveSkillsPath,
-  runtimeHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import {
   activeVersion,
@@ -163,74 +162,10 @@ const VALID_TEST_STRATEGIES: Record<string, string> = {
   comprehensive: "Comprehensive",
 };
 
-const CONFIG_KEYS = ["depth", "test-strategy", "review"] as const;
-type ReviewOverride = "adversarial" | "advisory" | "none";
-
-function parseReviewOverride(raw: string | undefined): ReviewOverride | undefined {
-  if (!raw) return undefined;
-  const value = raw.toLowerCase();
-  if (value !== "adversarial" && value !== "advisory" && value !== "none") {
-    die(`Unknown review class: "${raw}". Valid: adversarial, advisory, none.`);
-  }
-  return value;
-}
-
-function storedReviewOverride(value: ReviewOverride): string {
-  // "adversarial" means no per-run ceiling; stage declarations and scope caps
-  // still apply, so represent it with the same empty field as config-change.
-  return value === "adversarial" ? "" : value;
-}
-
-function applyReviewOverride(
-  content: string,
-  value: ReviewOverride | undefined,
-): {
-  content: string;
-  oldReview: string | null;
-  storedReview: string | undefined;
-  changed: boolean;
-} {
-  const oldReview = getField(content, "Review Override");
-  if (value === undefined) {
-    return { content, oldReview, storedReview: undefined, changed: false };
-  }
-  const storedReview = storedReviewOverride(value);
-  const changed = storedReview !== (oldReview ?? "");
-  if (!changed) return { content, oldReview, storedReview, changed };
-  if (oldReview === null) {
-    const beforeInsert = content;
-    content = content.replace(
-      /^(- \*\*Test Strategy\*\*:[^\n]*)$/m,
-      "$1\n- **Review Override**:",
-    );
-    if (content === beforeInsert) {
-      content = content.replace(
-        /^(- \*\*Scope\*\*:[^\n]*)$/m,
-        "$1\n- **Review Override**:",
-      );
-    }
-    if (content === beforeInsert) {
-      content = `${content.trimEnd()}\n- **Review Override**:\n`;
-    }
-  }
-  content = setField(content, "Review Override", storedReview);
-  return { content, oldReview, storedReview, changed };
-}
-
+const CONFIG_KEYS = ["depth", "test-strategy"] as const;
 // These workspace transactions can legitimately queue behind a full plugin
 // compose (compile + runner regeneration), so they share its ~60s lock budget.
 const WORKSPACE_MUTATION_LOCK_RETRIES = 600;
-const INTENT_CREATE_VALUE_FLAGS = [
-  "scope",
-  "arguments",
-  "label",
-  "depth",
-  "test-strategy",
-  "review",
-  "repos",
-  "project-dir",
-] as const;
-const INTENT_CREATE_DESCRIPTIVE_FLAGS = ["scope", "arguments", "label"] as const;
 const NO_STATE_FILE_MESSAGE =
   "No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").";
 const INIT_TRANSITION_MESSAGE =
@@ -251,31 +186,11 @@ function die(msg: string): never {
   emitError(pd, "aidlc-utility", command, msg);
 }
 
-function validateIntentCreateFlagValues(
-  flags: Record<string, string>,
-  missingValueFlags: ReadonlySet<string>,
-): void {
-  const invalid = INTENT_CREATE_VALUE_FLAGS.filter(
-    (name) =>
-      missingValueFlags.has(name) ||
-      (flags[name] !== undefined && flags[name].trim().length === 0),
-  );
-  if (invalid.length > 0) {
-    die(
-      `intent-create refused: ${invalid.map((name) => `--${name}`).join(", ")} ` +
-        `${invalid.length === 1 ? "requires" : "require"} a nonblank value.`,
-    );
-  }
-  for (const name of INTENT_CREATE_VALUE_FLAGS) {
-    if (flags[name] !== undefined) flags[name] = flags[name].trim();
-  }
-}
-
 // Thin wrapper around the canonical appendAuditEntry. All events must be in
 // aidlc-audit.ts VALID_EVENT_TYPES. Throws on invalid event or audit failure —
 // caller is expected to let that propagate (birth failures should stop birth).
 //
-// Lock-aware (mirrors aidlc-state.ts emitAudit): handleIntentCreate wraps the
+// Lock-aware (mirrors aidlc-state.ts emitAudit): handleIntentBirth wraps the
 // whole birth transaction in withAuditLock on the WORKSPACE sentinel bucket, so
 // this process already owns that OS lock. Routing through appendAuditEntry
 // (which calls the NON-reentrant acquireAuditLock keyed on the same sentinel
@@ -314,27 +229,19 @@ Scopes (set depth, test strategy, and stage count):
 const HELP_TEXT_TAIL = `
 Utilities:
   --status          Show current workflow progress (read-only)
-  compose "<task>"  Suggest a plan tailored to this task (mid-workflow: adjust the steps not yet run)
-  compose --report <path>  Build a plan from a scan report (sort findings into a fix-and-ship run)
-  --new-scope "<task>"  Build a custom plan even when a ready-made one matches
+  compose "<task>"  Propose a tailored EXECUTE/SKIP plan (mid-workflow: re-shape the pending stages)
+  compose --report <path>  Compose from a scan report (triage findings into a fix-and-ship run)
+  --new-scope "<task>"  Force the composer to synthesize a custom scope even when a stock scope matches
   intent list       List intents in the active space (read-only; --json for structured output)
   intent switch <name>  Switch the active intent (bare intent <name> still works)
   space list        List spaces (read-only; --json for structured output)
   space switch <name>  Switch the active space (bare space <name> still works)
   space create <name>  Create a new space (space-create <name> still works)
-  config get <key>  Show active workflow config (depth, test-strategy, review)
-  config set <key> <value>  Change active workflow config (depth, test-strategy, review)
+  config get <key>  Show active workflow config (depth, test-strategy)
+  config set <key> <value>  Change active workflow config (depth, test-strategy)
   config list       List active workflow config (--json for structured output)
-  plugin select [names]  Show or set the enabled plugin list
   plugin list       Legacy direct selection view (public route uses aidlc-plugin.ts)
   plugin sync       Legacy injected-root compose (public route uses aidlc-plugin.ts)
-  knowledge onboard [path]  Index customer documents into the space DocumentKB
-  knowledge sync    Reconcile the catalog with disk; retries extractor_unavailable rows
-  knowledge list    The DocumentKB catalog (--json for structured output)
-  knowledge show <id>  One document's record, plus its extracted text
-  knowledge associate <id> --intent [slug]   Scope a document to one intent
-  knowledge dissociate <id> --intent [slug]  Remove that scoping
-  knowledge rebind <id> --to <path>  Repair a row whose original moved AND changed
   --doctor          Run health check on hooks, settings, and directory structure
   --doctor --export Write a redacted diagnostic report (timeline + findings, no work product); --output <dir> to relocate
   --stage <id>      Jump to a specific stage (by slug or number, e.g., code-generation or 3.5)
@@ -342,7 +249,6 @@ Utilities:
   --scope <scope>   Set or change scope (standalone or with --stage/--phase)
   --depth <level>   Override depth (minimal, standard, comprehensive)
   --test-strategy <level>  Override test strategy (minimal, standard, comprehensive)
-  --review <class>  Cap stage reviews for this run (adversarial, advisory, none)
   --version         Show the framework version
   --help            Show this help message
 
@@ -354,15 +260,14 @@ Examples:
   /aidlc feature                                Start a feature workflow
   /aidlc Fix the login timeout bug              Auto-detected as bugfix scope
   /aidlc compose "harden the deploy pipeline"   Composer proposes a tailored plan
-  /aidlc config list                         Show depth, test strategy, and review override
+  /aidlc config list                         Show depth and test strategy
   /aidlc plugin list                         Compare installed and composed plugin state
   /aidlc                                        Resume or begin
   /aidlc --stage code-generation                Jump to code-generation stage
   /aidlc --phase construction --scope bugfix    Jump to construction with bugfix scope
   /aidlc --scope bugfix --depth comprehensive  Bugfix with comprehensive depth
   /aidlc --depth minimal                       Change depth of active workflow
-  /aidlc --depth standard --test-strategy minimal  Full artifacts, minimal tests
-  /aidlc --review advisory                     Single-pass reviews, findings at the gate`;
+  /aidlc --depth standard --test-strategy minimal  Full artifacts, minimal tests`;
 
 /** Exported for t67 unit tests. */
 export function renderHelpText(): string {
@@ -405,29 +310,6 @@ function handleVersion(): void {
 // select-plugins
 // ---------------------------------------------------------------------------
 
-interface FileSnapshot {
-  path: string;
-  exists: boolean;
-  bytes: string;
-}
-
-function snapshotFile(path: string): FileSnapshot {
-  return {
-    path,
-    exists: existsSync(path),
-    bytes: existsSync(path) ? readFileSync(path, "utf-8") : "",
-  };
-}
-
-function restoreSnapshot(snapshot: FileSnapshot): void {
-  if (snapshot.exists) {
-    mkdirSync(dirname(snapshot.path), { recursive: true });
-    writeFileSync(snapshot.path, snapshot.bytes, "utf-8");
-  } else if (existsSync(snapshot.path)) {
-    rmSync(snapshot.path, { force: true });
-  }
-}
-
 function resetSelectionSensitiveCaches(): void {
   _resetHarnessDataForTests();
   _resetStageGraphForTests();
@@ -437,20 +319,6 @@ function resetSelectionSensitiveCaches(): void {
 function mutableHarnessDataPath(projectDir: string): string {
   return resolveHarnessPath(
     ["tools", "data", "harness.json"],
-    { mutable: true, projectDir },
-  );
-}
-
-function stageGraphDataPath(projectDir: string): string {
-  return resolveHarnessPath(
-    ["tools", "data", "stage-graph.json"],
-    { mutable: true, projectDir },
-  );
-}
-
-function scopeGridDataPath(projectDir: string): string {
-  return resolveHarnessPath(
-    ["tools", "data", "scope-grid.json"],
     { mutable: true, projectDir },
   );
 }
@@ -557,7 +425,6 @@ function runBunTool(projectDir: string, rel: string, args: string[], label: stri
     env: {
       ...process.env,
       AIDLC_HARNESS_DIR: harnessDir(),
-      AIDLC_HARNESS_NAME: runtimeHarnessName(projectDir, harnessDir()),
       AIDLC_PROJECT_DIR: projectDir,
       ...(holdsAuditLock(projectDir)
         ? { AIDLC_WORKSPACE_LOCK_OWNER_PID: String(process.pid) }
@@ -619,7 +486,10 @@ function replaceGeneratedRegion(
   if (after !== before) writeFileSync(path, after, "utf-8");
 }
 
-export function regenerateSelectionSurfaces(projectDir: string): void {
+function regenerateSelectionSurfaces(
+  projectDir: string,
+  displayProjectDir = projectDir,
+): void {
   runBunTool(projectDir, "aidlc-graph.ts", ["compile"], "aidlc-graph compile");
   resetSelectionSensitiveCaches();
   const skillsDir = resolveSkillsPath([], { mutable: true, projectDir });
@@ -628,7 +498,9 @@ export function regenerateSelectionSurfaces(projectDir: string): void {
     runBunTool(projectDir, "aidlc-runner-gen.ts", ["scopes"], "aidlc-runner-gen scopes");
   } else {
     process.stdout.write(
-      `note: runner regeneration skipped: ${skillsDir} not present in this install\n`,
+      `note: runner regeneration skipped: ${
+        resolveSkillsPath([], { mutable: true, projectDir: displayProjectDir })
+      } not present in this install\n`,
     );
   }
   resetSelectionSensitiveCaches();
@@ -741,21 +613,14 @@ function removePluginFragments(content: string, plugin: string): string {
   return out;
 }
 
-// Strip the merged contributions of every named plugin from installed stage
-// source. Mutated stage files are snapshotted into `snapshots` FIRST so the
-// caller's rollback restores them; consumed sidecars are snapshotted then
-// deleted (compose re-records on re-enable).
+// Strip the merged contributions of every named plugin from staged stage
+// source. The caller commits the resulting staged-project diff through the
+// shared transaction engine; consumed sidecars are deleted in staging and
+// compose recreates them when the plugin is re-enabled.
 function stripDisabledPluginContributions(
   plugins: readonly string[],
-  snapshots: FileSnapshot[],
 ): string[] {
   const stagesRoot = installedStagesRoot();
-  const touched = new Set<string>();
-  const snapshotOnce = (path: string): void => {
-    if (touched.has(path)) return;
-    snapshots.push(snapshotFile(path));
-    touched.add(path);
-  };
   const stripped: string[] = [];
   for (const plugin of plugins) {
     const sidecar = pluginContribSidecarPath(plugin);
@@ -788,14 +653,12 @@ function stripDisabledPluginContributions(
         }
         content = removePluginFragments(content, plugin);
         if (content !== before) {
-          snapshotOnce(path);
           writeFileSync(path, content, "utf-8");
           pluginTouched = true;
         }
       }
     }
     if (existsSync(sidecar)) {
-      snapshotOnce(sidecar);
       rmSync(sidecar, { force: true });
       pluginTouched = true;
     }
@@ -903,25 +766,52 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
     // plugin has no composed contributions to strip).
     const disabling = known.filter((n) => n !== "aidlc" && !nameSet.has(n));
 
-    const snapshots = [
-      snapshotFile(mutableHarnessDataPath(projectDir)),
-      snapshotFile(stageGraphDataPath(projectDir)),
-      snapshotFile(scopeGridDataPath(projectDir)),
-    ];
-
+    const stagingRoot = mkdtempSync(join(tmpdir(), "aidlc-plugin-select-"));
+    const stagedProject = join(stagingRoot, "project");
     try {
-      // Strip disabled plugins' merged contributions BEFORE recompiling, so the
-      // regenerated graph no longer carries their produces/sensors/consumes/
-      // scopes on core stages. Mutated stage files join `snapshots`, so the catch-side
-      // rollback restores them too. Re-enabling restores contributions on the
-      // next session start (the plugin's own compose hook re-merges).
-      const strippedPlugins = stripDisabledPluginContributions(disabling, snapshots);
-      writePluginSelection(projectDir, names);
-      regenerateSelectionSurfaces(projectDir);
-      appendAuditEvent(projectDir, "PLUGIN_SELECTION_CHANGED", {
-        "Previous Selection": previousSelection,
-        "New Selection": newSelection,
+      const selectedHarness = harnessDir();
+      copyProjectSurfaces(projectDir, stagedProject, selectedHarness);
+      const envKeys = [
+        "AIDLC_RUNTIME_PROJECT_DIR",
+        "AIDLC_PROJECT_DIR",
+        "AIDLC_HARNESS_DIR",
+        "AIDLC_RUNTIME_HARNESS_ROOT",
+      ] as const;
+      const saved = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+      let strippedPlugins: string[] = [];
+      try {
+        process.env.AIDLC_RUNTIME_PROJECT_DIR = stagedProject;
+        process.env.AIDLC_PROJECT_DIR = stagedProject;
+        process.env.AIDLC_HARNESS_DIR = selectedHarness;
+        process.env.AIDLC_RUNTIME_HARNESS_ROOT = join(stagedProject, selectedHarness);
+        resetSelectionSensitiveCaches();
+        // Strip disabled contributions in staging before recompiling. The live
+        // project remains byte-untouched until the shared transaction commits.
+        strippedPlugins = stripDisabledPluginContributions(disabling);
+        writePluginSelection(stagedProject, names);
+        regenerateSelectionSurfaces(stagedProject, projectDir);
+      } finally {
+        for (const key of envKeys) {
+          const value = saved[key];
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+        resetSelectionSensitiveCaches();
+      }
+      const plan = projectDiffPlan(projectDir, stagedProject, selectedHarness);
+      const failAfter = Number(process.env.AIDLC_PLUGIN_SELECT_FAIL_AFTER ?? "0");
+      executePlan(plan, {
+        failAfter: Number.isInteger(failAfter) && failAfter > 0
+          ? failAfter
+          : undefined,
+        validateCommitted: () => {
+          appendAuditEvent(projectDir, "PLUGIN_SELECTION_CHANGED", {
+            "Previous Selection": previousSelection,
+            "New Selection": newSelection,
+          });
+        },
       });
+      resetSelectionSensitiveCaches();
       if (strippedPlugins.length > 0) {
         process.stdout.write(
           `Stripped merged contributions of disabled plugin(s): ${strippedPlugins.join(", ")} (re-enabling restores them on the next session start)\n`,
@@ -929,19 +819,10 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
       }
       process.stdout.write(`Enabled plugins: ${names.join(", ")}\n`);
     } catch (err) {
-      const original = errorMessage(err);
-      let recoveryMessage = "";
-      try {
-        for (const snapshot of snapshots) restoreSnapshot(snapshot);
-        resetSelectionSensitiveCaches();
-        regenerateSelectionSurfaces(projectDir);
-        recoveryMessage =
-          " Restored harness.json, stage-graph.json, scope-grid.json, and any stripped stage files, then re-ran the regeneration chain against the restored selection.";
-      } catch (recoveryErr) {
-        recoveryMessage =
-          ` Restore was attempted, but regeneration against the restored selection also failed: ${errorMessage(recoveryErr)}.`;
-      }
-      die(`select-plugins failed: ${original}.${recoveryMessage}`);
+      resetSelectionSensitiveCaches();
+      die(`select-plugins failed: ${errorMessage(err)}`);
+    } finally {
+      rmSync(stagingRoot, { recursive: true, force: true });
     }
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
@@ -1000,7 +881,6 @@ async function handlePluginSync(projectDir: string): Promise<void> {
     const composeEnv: NodeJS.ProcessEnv = {
       ...process.env,
       AIDLC_HARNESS_DIR: harnessDir(),
-      AIDLC_HARNESS_NAME: runtimeHarnessName(projectDir, harnessDir()),
       AIDLC_PROJECT_DIR: projectDir,
       AIDLC_PLUGIN_ROOT: item.root,
       CLAUDE_PLUGIN_ROOT: item.root,
@@ -1009,7 +889,6 @@ async function handlePluginSync(projectDir: string): Promise<void> {
     if (import.meta.url.includes("/$bunfs/")) {
       const envKeys = [
         "AIDLC_HARNESS_DIR",
-        "AIDLC_HARNESS_NAME",
         "AIDLC_PROJECT_DIR",
         "AIDLC_PLUGIN_ROOT",
         "CLAUDE_PLUGIN_ROOT",
@@ -1067,7 +946,7 @@ function handleStatus(projectDir: string, flags: Record<string, string>): void {
       `No active AI-DLC workflow found.
 
 To get started:
-  /aidlc "build the auth service"   Describe what to build (creates the workflow record automatically)
+  /aidlc "build the auth service"   Describe what to build (auto-births an intent)
   /aidlc <scope>      Start a workflow by scope (e.g., /aidlc feature)
   /aidlc --help       Show all commands and scopes
 `
@@ -1662,8 +1541,6 @@ export async function collectDoctorReport(
   // command; direct source execution may still invoke these TypeScript files.
   // The Kiro and Codex trees also carry the authored host adapter.
   const harness = harnessDir();
-  const harnessName = runtimeHarnessName(projectDir, harness);
-  const isCopilot = harnessName === "copilot";
   if (harness === ".claude") {
     // Claude Code: the EXPECTED roster is the set of aidlc-*.ts hooks that
     // settings.json actually wires (its `hooks` event blocks + the `statusLine`
@@ -1752,8 +1629,8 @@ export async function collectDoctorReport(
     // agents/aidlc.json / hooks.json — checked below). The core hook bodies
     // ship in every tree plus an authored adapter, so probe the explicit roster.
     const tsHooks = [
-      "aidlc-write-audit-log",
-      "aidlc-sync-workflow-state",
+      "aidlc-audit-logger",
+      "aidlc-sync-statusline",
       "aidlc-validate-state",
       "aidlc-log-subagent",
       "aidlc-session-start",
@@ -1762,19 +1639,6 @@ export async function collectDoctorReport(
     ];
     if (harness === ".kiro") tsHooks.push("aidlc-kiro-adapter");
     if (harness === ".codex") tsHooks.push("aidlc-codex-adapter");
-    if (isCopilot) {
-      tsHooks.push(
-        "aidlc-state-transition-guard",
-        "aidlc-reviewer-scope",
-        "aidlc-continue-workflow",
-        "aidlc-run-sensors",
-        "aidlc-rebuild-stage-graph",
-        "aidlc-deliver-stage-rules",
-        "aidlc-plan-approval-guard",
-        "aidlc-review-freeze",
-      );
-    }
-    if (harness === ".cursor") tsHooks.push("aidlc-cursor-adapter");
     for (const h of tsHooks) {
       const hookPath = join(projectDir, harness, "hooks", `${h}.ts`);
       results.push({
@@ -1784,24 +1648,14 @@ export async function collectDoctorReport(
       });
     }
     if (harness === ".aidlc") {
-      // Two harnesses ship the .aidlc engine dir; the adapter file names the
-      // flavor. Copilot: a hooks/ shim inside the engine dir (wired by
-      // .github/hooks/aidlc.json). opencode: a plugin in the .opencode shell.
-      const copilotAdapter = join(projectDir, harness, "hooks", "aidlc-copilot-adapter.ts");
-      if (isCopilot) {
-        results.push({
-          pass: existsSync(copilotAdapter),
-          label: "hooks/aidlc-copilot-adapter.ts present (hook shim)",
-          fix: "copy from `dist/copilot/.aidlc/hooks/aidlc-copilot-adapter.ts`",
-        });
-      } else {
-        const adapterPath = join(projectDir, ".opencode", "plugin", "aidlc-opencode-adapter.ts");
-        results.push({
-          pass: existsSync(adapterPath),
-          label: "plugin/aidlc-opencode-adapter.ts present (hook wiring)",
-          fix: "copy from `dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts`",
-        });
-      }
+      // opencode's adapter is a plugin (its hook seam) in the .opencode shell,
+      // not a hooks/ shim inside the engine dir.
+      const adapterPath = join(projectDir, ".opencode", "plugin", "aidlc-opencode-adapter.ts");
+      results.push({
+        pass: existsSync(adapterPath),
+        label: "plugin/aidlc-opencode-adapter.ts present (hook wiring)",
+        fix: "copy from `dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts`",
+      });
     }
   }
 
@@ -1869,129 +1723,6 @@ export async function collectDoctorReport(
         ? "hook trust: merge the shipped native trust-seed.toml entries into $CODEX_HOME/config.toml or run one TUI trust pass"
         : "hook trust: pre-seed [hooks.state] with `bun scripts/package.ts codex trust --project <dir>` or run one TUI trust pass",
     });
-  } else if (harness === ".aidlc" && isCopilot) {
-    // Copilot (CLI + VS Code, one install): the wiring config is
-    // .github/hooks/aidlc.json; skills and personas ride .github/{skills,agents}.
-    for (const [file, what, from] of [
-      [".github/hooks/aidlc.json", "hook wiring", "dist/copilot/.github/hooks/aidlc.json"],
-      [".github/skills/aidlc/SKILL.md", "/aidlc entry point", "dist/copilot/.github/skills/aidlc/SKILL.md"],
-      [".github/agents/aidlc-developer-agent.md", "persona custom agents", "dist/copilot/.github/agents/"],
-      ["AGENTS.md", "onboarding + method imports", "dist/copilot/AGENTS.md"],
-    ] as const) {
-      results.push({
-        pass: existsSync(join(projectDir, file)),
-        label: `${file} present (${what})`,
-        fix: `copy from \`${from}\``,
-      });
-    }
-    // Copilot CLI version floor: 1.0.74 is the line this port was verified
-    // against (PascalCase hook registration delivering snake_case payloads,
-    // hookSpecificOutput deny honored, SubagentStart/Stop events, and
-    // --output-format json). The CLI is optional when only VS Code
-    // drives the install, so a missing binary is advisory, not a failure.
-    const MIN_COPILOT = [1, 0, 74] as const;
-    // Bun.spawnSync THROWS (ENOENT) on a missing executable rather than
-    // returning - probe with Bun.which first so a VS Code-only install (no
-    // CLI) gets the advisory branch instead of aborting the whole doctor.
-    const copilotBin = Bun.which("copilot");
-    const copilotVer = copilotBin
-      ? Bun.spawnSync([copilotBin, "--version"], { stdout: "pipe", stderr: "ignore" })
-      : null;
-    const verText = (copilotVer?.stdout?.toString() ?? "").trim();
-    const verMatch = verText.match(/(\d+)\.(\d+)\.(\d+)/);
-    if (!verMatch) {
-      results.push({
-        pass: true,
-        label:
-          "copilot CLI not on PATH — fine when VS Code agent mode drives this install; for CLI use install @github/copilot >= 1.0.74",
-      });
-    } else {
-      const v = [Number(verMatch[1]), Number(verMatch[2]), Number(verMatch[3])];
-      const ok =
-        v[0] > MIN_COPILOT[0] ||
-        (v[0] === MIN_COPILOT[0] &&
-          (v[1] > MIN_COPILOT[1] || (v[1] === MIN_COPILOT[1] && v[2] >= MIN_COPILOT[2])));
-      results.push({
-        pass: ok,
-        label: `copilot CLI version ${verMatch[0]} >= 1.0.74 (PascalCase hook registration + deny/block channels verified on this line)`,
-        fix: "run `copilot update` or `npm i -g @github/copilot`",
-      });
-    }
-    // Folder trust: untrusted project hooks silently never fire (no warning
-    // anywhere on the Copilot side — the doctor is the only surface that says
-    // so). trustedFolders lives in ~/.copilot/config.json (COPILOT_HOME).
-    // Tolerances, all field-observed: the CLI writes JSONC (line/block/inline
-    // comments plus trailing commas), entries may carry trailing
-    // slashes, and the project may be reached via a symlink (compare
-    // realpath-normalized). An absent config is ADVISORY because a VS
-    // Code-only install has no CLI config; an existing unreadable or malformed
-    // config fails because CLI hook trust cannot be verified.
-    try {
-      const configPath = join(
-        process.env.COPILOT_HOME ?? join(process.env.HOME ?? "", ".copilot"),
-        "config.json",
-      );
-      if (!existsSync(configPath)) {
-        results.push({
-          pass: true,
-          label:
-            "~/.copilot/config.json absent — fine for VS Code-only installs; for the CLI, one interactive run records folder trust (hooks silently no-op untrusted)",
-        });
-      } else {
-        const raw = readFileSync(configPath, "utf-8");
-        const trusted =
-          (Bun.JSONC.parse(raw) as { trustedFolders?: string[] }).trustedFolders ?? [];
-        const norm = (p: string) => {
-          let out = p.replace(/[/\\]+$/, "");
-          try {
-            out = realpathSync(out);
-          } catch {
-            // keep the trimmed form — a recorded-but-deleted path never matches
-          }
-          return out;
-        };
-        const projectNorm = norm(projectDir);
-        results.push({
-          pass: trusted.some((t) => norm(t) === projectNorm),
-          label:
-            "project folder in ~/.copilot/config.json trustedFolders (CLI hooks silently no-op without it)",
-          fix: `add "${projectDir}" to trustedFolders in ~/.copilot/config.json (or accept the CLI's interactive trust prompt)`,
-        });
-      }
-    } catch {
-      results.push({
-        pass: false,
-        label:
-          "could not parse ~/.copilot/config.json to verify folder trust (CLI hooks silently no-op untrusted)",
-        fix:
-          "repair ~/.copilot/config.json as valid JSONC, then re-run doctor",
-      });
-    }
-    // Headless reminder (advisory pass-with-label): -p/prompt-mode runs skip
-    // repo hooks unless the env var opts in.
-    results.push({
-      pass: true,
-      label:
-        "headless runs: set GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1 for `copilot -p` sessions — repo hooks are off by default in prompt mode",
-    });
-  } else if (harness === ".cursor") {
-    // Cursor: hooks.json (the hook wiring), cli.json (permissions), and the
-    // standing + phase method rule pointers are all inside .cursor/.
-    for (const [file, what, from] of [
-      ["hooks.json", "hook wiring", "dist/cursor/.cursor/hooks.json"],
-      ["cli.json", "Shell(bun) permission pre-approval", "dist/cursor/.cursor/cli.json"],
-      ["rules/aidlc.mdc", "standing method rule (alwaysApply read instruction)", "dist/cursor/.cursor/rules/aidlc.mdc"],
-      ["rules/aidlc-phase-ideation.mdc", "Ideation phase rule (agent-decided read instruction)", "dist/cursor/.cursor/rules/aidlc-phase-ideation.mdc"],
-      ["rules/aidlc-phase-inception.mdc", "Inception phase rule (agent-decided read instruction)", "dist/cursor/.cursor/rules/aidlc-phase-inception.mdc"],
-      ["rules/aidlc-phase-construction.mdc", "Construction phase rule (agent-decided read instruction)", "dist/cursor/.cursor/rules/aidlc-phase-construction.mdc"],
-      ["rules/aidlc-phase-operation.mdc", "Operation phase rule (agent-decided read instruction)", "dist/cursor/.cursor/rules/aidlc-phase-operation.mdc"],
-    ] as const) {
-      results.push({
-        pass: existsSync(join(projectDir, harness, file)),
-        label: `${file} present (${what})`,
-        fix: `copy from \`${from}\``,
-      });
-    }
   } else if (harness === ".aidlc") {
     // opencode: the wiring config is the project-root opencode.json/jsonc
     // (permissions + the method-include instructions glob) plus the /aidlc
@@ -2290,7 +2021,7 @@ export async function collectDoctorReport(
   // "not yet fired" (state a), not drift (state b). Besides the `.last`
   // heartbeats, the dir may hold purely-diagnostic files that no hook firing
   // produced: `hook-debug.log` (written by hookDebug under AIDLC_HOOK_DEBUG) and
-  // `.first-fired` (the run-sensors banner marker). If ONLY those exist, treat
+  // `.first-fired` (the sensor-fire banner marker). If ONLY those exist, treat
   // it as fresh — otherwise enabling AIDLC_HOOK_DEBUG on a fresh install would
   // flip this check from PASS to a false drift FAIL for exactly the user trying
   // to diagnose hooks.
@@ -2447,22 +2178,13 @@ export async function collectDoctorReport(
   try {
     const leaks = detectLeakedLocks(projectDir, true);
     if (leaks.length === 0) {
-      results.push({ pass: true, label: "Runtime locks: none leaked" });
+      results.push({ pass: true, label: "Audit locks: none leaked" });
     } else {
       for (const leak of leaks) {
-        const subject = leak.kind === "audit" ? "audit lock"
-          : leak.kind === "active-directive" ? "active-directive lock"
-          : "legacy active-directive transaction";
-        const outcome = leak.cleared ? "cleared" : "not cleared";
-        const manual = leak.reason === "legacy-transaction";
         results.push({
           pass: false,
-          label: `Leaked ${subject} on bucket "${leak.bucket}" (${leak.reason}${leak.ownerPid !== null ? `, pid ${leak.ownerPid}` : ""}) — ${outcome}`,
-          fix: manual
-            ? `stop all AI-DLC processes, inspect ${leak.lockDir}, then remove or restore it under quiescence`
-            : leak.cleared
-              ? "the stale lock was cleared automatically; re-run your /aidlc command"
-              : "the lock owner changed during diagnosis; re-run doctor before manual action",
+          label: `Leaked audit lock on bucket "${leak.bucket}" (${leak.reason}${leak.ownerPid !== null ? `, pid ${leak.ownerPid}` : ""}) — cleared`,
+          fix: "the stale lock was cleared automatically; re-run your /aidlc command",
         });
       }
     }
@@ -2470,46 +2192,31 @@ export async function collectDoctorReport(
     // Lock-probe failure is non-fatal for the doctor report.
   }
 
-  // State version check — v8 reshapes the Inception design graph:
-  // `application-design` is renamed to `domain-design` and a new
-  // `contract-design` stage is inserted, so a pre-v8 state file carries
-  // stage-progress rows keyed by slugs that no longer exist in the graph.
-  // Advancing such a state hits `emitRunStageForSlug()` on a missing slug
-  // (or silently no-ops a checkbox while `Current Stage` moves on, then
-  // fails in `report`). The framework ships no user-visible migration
-  // pre-1.0, so fail loud here with archive-and-reinit guidance rather than
-  // let a stale-graph state look healthy.
+  // State version check — current template adds Worktree Path, Bolt
+  // Refs, and Practices Affirmed Timestamp fields. Older v6 state
+  // files lack them, so setFieldStrict writes would throw at runtime.
+  // Fail loud here with archive-and-reinit guidance per the framework's
+  // pre-1.0 no-migration policy.
   if (existsSync(stateMdPath)) {
     try {
       const stateContent = readFileSync(stateMdPath, "utf-8");
-      // Shared classifier (aidlc-lib.ts): the SAME parse + branch selection the
-      // runtime guard uses, so doctor and next/report never disagree on whether
-      // a state is unparseable / past / future / ok. Doctor's per-branch rows
-      // let a human see WHICH kind of incompatibility the state hit rather
-      // than routing everything through a generic "not current" line.
-      const verdict = classifyStateVersion(stateContent);
-      if (verdict.kind === "unparseable") {
+      const versionMatch = stateContent.match(/^- \*\*State Version\*\*:\s*(\S+)/m);
+      if (versionMatch === null) {
         results.push({
           pass: false,
           label: "state version readable",
-          fix: verdict.message,
+          fix: "State Version field missing or unparseable in aidlc-state.md. Archive your workspace ('mv aidlc-docs aidlc-docs.v6-archive') and start a fresh workflow (describe what to build).",
         });
-      } else if (verdict.kind === "past") {
+      } else if (versionMatch[1] !== "7") {
         results.push({
           pass: false,
           label: "state version current",
-          fix: verdict.message,
-        });
-      } else if (verdict.kind === "future") {
-        results.push({
-          pass: false,
-          label: "state version compatible",
-          fix: verdict.message,
+          fix: `v${versionMatch[1]} state detected. The framework does not ship user-visible migration support pre-1.0. Archive your workspace ('mv aidlc-docs aidlc-docs.v${versionMatch[1]}-archive') and start a fresh workflow (describe what to build) to get a current-template workspace. The current template adds Worktree Path, Bolt Refs, and Practices Affirmed Timestamp fields used by Construction worktrees and practices-discovery.`,
         });
       } else {
         results.push({
           pass: true,
-          label: `State Version: ${CURRENT_STATE_VERSION}`,
+          label: "State Version: 7",
         });
       }
     } catch {
@@ -3050,7 +2757,7 @@ export async function collectDoctorReport(
       pass: true,
       label: orphans === 0
         ? `MERGE_DISPATCH: 0 orphan INVOKED (${invokedRows.length} bracketed)`
-        : `MERGE_DISPATCH: ${orphans} orphan INVOKED (advisory - a merge started but no matching finish was recorded within ${MERGE_DISPATCH_TIMEOUT_SEC}s)`,
+        : `MERGE_DISPATCH: ${orphans} orphan INVOKED (advisory — LLM dispatch unmatched after ${MERGE_DISPATCH_TIMEOUT_SEC}s)`,
     });
   } catch {
     // MERGE_DISPATCH check failure is non-fatal for doctor report
@@ -3116,7 +2823,7 @@ export async function collectDoctorReport(
     });
   }
 
-  // Scope validation — run validateScope over all 11 scopes, tally errors
+  // Scope validation — run validateScope over all 9 scopes, tally errors
   // and advisories. Repo-level setup check, not workflow-state.
   try {
     const scopes = [...validScopes()];
@@ -3608,7 +3315,6 @@ const SCAN_EXCLUDE = new Set([
   ".codex",
   ".opencode",
   ".aidlc",
-  ".cursor",
   "aidlc-docs",
   "node_modules",
   ".git",
@@ -4020,7 +3726,7 @@ export function detectWorkspace(projectDir: string): ScanResult {
 }
 
 // ---------------------------------------------------------------------------
-// intent-create (0.1-0.3) — deterministic: mint intent + scan + state-init
+// intent-birth (0.1-0.3) — deterministic: mint intent + scan + state-init
 // ---------------------------------------------------------------------------
 
 // Deferred `git rm` of a migrated flat tree. migrateFlatLayout MOVED the data
@@ -4047,48 +3753,22 @@ function gitRmFlatTree(projectDir: string, flatTree: string): void {
   }
 }
 
-// The phases a scope actually runs: those holding at least one EXECUTE stage.
-// This is the SINGLE derivation behind two decisions that must never disagree:
-// which per-phase dirs a new record gets (ensureWorkspaceDirs) and which phases
-// report PHASE_SKIPPED at birth. Both read the compiled scope grid via
-// stagesInScope, so the folders on disk and the audit trail always tell the same
-// story, with no LLM input in the path. A phase whose stage set is empty under
-// the enabled bundle (plugin selection can empty one) has nothing to write and
-// is likewise out.
-function phasesWithExecuteStages(scope: string): Set<string> {
-  const stages = stagesInScope(scope);
-  return new Set(
-    PHASES.filter((phase) =>
-      stages.some((s) => s.phase === phase && s.action === "EXECUTE")
-    )
-  );
-}
-
-// Ensure the dirs a workflow writes into exist. Idempotent ensure-exists (SEED
-// ships the shell). Creates the active intent's record dir plus a per-phase
-// artifact dir for each phase the SCOPE RUNS, AND the SPACE-level domain
+// Ensure the dirs a workflow writes into exist. Idempotent ensure-exists (NOT
+// the old data/scaffold copy — SEED ships the shell). Creates the active intent's
+// record dir plus its per-phase artifact dirs, AND the SPACE-level domain
 // knowledge/ dir (a sibling of intents, not a record subdir); all skipped if
-// already present. The active-intent cursor must be set (createIntent/migration
+// already present. The active-intent cursor must be set (birthIntent/migration
 // did so) before this runs.
-//
-// Scope-excluded phases get NO folder: an empty `operation/` in a bugfix record
-// reads as work that was planned and skipped, when that phase was never in the
-// plan. Nothing depends on the folder pre-existing: a stage artifact is written
-// by the agent's own file tool, which creates its parent chain on first write,
-// and every deterministic reader of a phase dir guards on existence. This only
-// ever creates: an older record that already carries all five keeps them.
-function ensureWorkspaceDirs(projectDir: string, scope: string): void {
+function ensureWorkspaceDirs(projectDir: string): void {
   // docsDir() default-resolves the active intent's record dir (or the flat
-  // fallback when no intent resolves) — the cursor set by createIntent/migration
+  // fallback when no intent resolves) — the cursor set by birthIntent/migration
   // points it at the born intent.
   const record = docsDir(projectDir);
   mkdirSync(record, { recursive: true });
-  // Lazy per-phase artifact dirs, in-scope phases only (stages write reports here).
-  for (const phase of phasesWithExecuteStages(scope)) {
+  // Lazy per-phase artifact dirs (the engine/stages write reports here).
+  for (const phase of PHASES) {
     mkdirSync(join(record, phase), { recursive: true });
   }
-  // verification/ is scope-independent: sensor and gate verification can land
-  // for any phase, so every record gets it.
   mkdirSync(join(record, "verification"), { recursive: true });
   // SPACE-level domain knowledge dir (NOT per-intent): vision §"Spaces" makes
   // knowledge a sibling of memory/codekb/intents under spaces/<space>/, so team
@@ -4124,7 +3804,7 @@ function ensureWorkspaceDirs(projectDir: string, scope: string): void {
   repointHarnessIncludes(projectDir, activeSpace(projectDir));
 }
 
-// intent-create — the deterministic mutation behind the engine's birth
+// intent-birth — the deterministic mutation behind the engine's birth
 // directive (the engine NAMES the move read-only; this tool performs it).
 // Births the FIRST intent into the active space on a fresh workspace, OR a new
 // intent for new work alongside an active one. Crash-safe + concurrent-safe:
@@ -4134,35 +3814,18 @@ function ensureWorkspaceDirs(projectDir: string, scope: string): void {
 // bucket (invariant 2), so two concurrent first-runs are serialized and BOTH
 // births land distinct uuids/dirs/rows with no lost update.
 //
-// The directory-tree copy + knowledge READMEs that the old `--init` shipped are
-// gone: the workspace shell (spaces/default/memory, native includes) ships in
-// dist/ (SEED), and lazy per-intent/codekb/knowledge dirs are ensure-exists
+// The data/scaffold dir-copy + knowledge READMEs that the old `--init` shipped
+// are gone: the workspace shell (spaces/default/memory, native includes) ships
+// in dist/ (SEED), and lazy per-intent/codekb/knowledge dirs are ensure-exists
 // (created on demand). What stays is the scope→stage state-build that routes
 // the workflow to its first post-init stage — relocated here, now writing into
 // the BORN intent's record (the active-intent cursor set first makes the
 // default-resolving state/audit helpers resolve there).
-function handleIntentCreate(projectDir: string, flags: Record<string, string>): void {
-  // Creation mutates the registry and active cursor. Refuse an invocation that
-  // carries no meaningful scope or description instead of minting a default
-  // record from an accidental bare command.
-  if (!INTENT_CREATE_DESCRIPTIVE_FLAGS.some((name) => flags[name])) {
-    die(
-      "intent-create refused: no --scope, --arguments, or --label given. Creation " +
-        "is a mutation and a bare invocation mints a garbage default-scope " +
-        "intent. Start work via `/aidlc \"<what to build>\"` (the engine names " +
-        "the create move for you) or `/aidlc-init [--scope <name>] <description>`; " +
-        "to invoke this tool directly, pass at least `--scope <name>` (and " +
-        "ideally `--arguments \"<description>\" --label \"<2-3 word essence>\"`).",
-    );
-  }
-
-  // Default when --scope is omitted: AWS_AIDLC_DEFAULT_SCOPE overrides, then
-  // the framework's single hard-coded fallback (DEFAULT_SCOPE, "classic");
-  // selection-aware so a plugin-only install (where the core default is
-  // deselected) resolves to its nominated freeform default instead of
-  // crashing with "Unknown scope".
-  const scope = flags.scope || envDefaultScope() ||
-    resolveDefaultScope(DEFAULT_SCOPE);
+function handleIntentBirth(projectDir: string, flags: Record<string, string>): void {
+  // Default when --scope is omitted; selection-aware so a plugin-only install
+  // (where the core "poc" default is deselected) resolves to its nominated
+  // freeform default instead of crashing with "Unknown scope".
+  const scope = flags.scope || resolveDefaultScope("poc");
   if (!validScopes().has(scope)) {
     die(
       `Unknown scope: "${scope}". Valid scopes: ${[...validScopes()].join(", ")}.`
@@ -4178,7 +3841,6 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   if (testStrategyOverride && !VALID_TEST_STRATEGIES[testStrategyOverride.toLowerCase()]) {
     die(`Unknown test strategy: "${testStrategyOverride}". Valid: minimal, standard, comprehensive.`);
   }
-  const reviewOverride = parseReviewOverride(flags.review);
 
   // Resolve the repo set the intent touches (P7 multi-repo): an explicit
   // `--repos a,b` wins; absent it, sibling auto-discovery scans the workspace
@@ -4210,14 +3872,6 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     const migration = migrateFlatLayout(projectDir);
     if (migration) {
       gitRmFlatTree(projectDir, migration.movedFrom);
-      const migratedState = readStateFile(projectDir);
-      const reviewUpdate = applyReviewOverride(
-        migratedState,
-        reviewOverride,
-      );
-      if (reviewUpdate.changed) {
-        writeStateFile(projectDir, reviewUpdate.content);
-      }
       // The migrated record carries its prior state + audit history. Record that
       // the workspace was migrated into this intent (lands in the migrated
       // intent's audit shard — the cursor points there now). No state rebuild.
@@ -4225,20 +3879,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
         Request: `/aidlc ${flags.arguments || scope}`,
         Scope: scope,
         Details: `Migrated flat aidlc-docs/ into ${migration.intentDirName}`,
-        ...(reviewOverride !== undefined
-          ? {
-              "Review Override":
-                reviewUpdate.storedReview || "adversarial (stage defaults)",
-            }
-          : {}),
       });
-      if (reviewUpdate.changed) {
-        appendAuditEvent(projectDir, "REVIEW_CLASS_CHANGED", {
-          "Old Override": reviewUpdate.oldReview || "none set",
-          "New Override":
-            reviewUpdate.storedReview || "cleared (stage defaults apply)",
-        });
-      }
       process.stdout.write(
         `Migrated flat workspace into intent: ${migration.intentDirName} (space: ${DEFAULT_SPACE})\n`,
       );
@@ -4262,15 +3903,14 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     const slugSource = label || description || scope;
     const slug = slugify(slugSource, 24);
     // "help" is grammar (`intent help` prints help), so an intent slugged
-    // "help" would be unswitchable by name. createIntent throws on it too
+    // "help" would be unswitchable by name. birthIntent throws on it too
     // (library backstop); dying here keeps the clean JSON error shape.
     if (RESERVED_RECORD_NAMES.has(slug)) {
       die(
         `"${slug}" is a reserved name and cannot be an intent label. Pick a label that describes the work.`
       );
     }
-    const space = activeSpace(projectDir);
-    createIntent(projectDir, slug, space, scope, repos);
+    birthIntent(projectDir, slug, activeSpace(projectDir), scope, repos);
 
     const ts = isoTimestamp();
 
@@ -4291,12 +3931,6 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     appendAuditEvent(projectDir, "WORKFLOW_STARTED", {
       Scope: scope,
       Request: `/aidlc ${flags.arguments || scope}`,
-      ...(reviewOverride !== undefined
-        ? {
-            "Review Override":
-              storedReviewOverride(reviewOverride) || "adversarial (stage defaults)",
-          }
-        : {}),
       // Record the intent's repo span at birth (P7). Omitted when no repos were
       // captured (legacy single-repo / fresh greenfield → the lone repo is inferred).
       ...(repos.length > 0 ? { Repos: repos.join(", ") } : {}),
@@ -4316,14 +3950,12 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
 
     // PHASE_SKIPPED — one per phase the scope excludes entirely (no EXECUTE
     // stages in that phase). Captures the scope decision at workflow birth so
-    // you don't have to derive it later by diffing the stage list. Shares
-    // phasesWithExecuteStages with the folder creation below, so a phase that
-    // reports skipped here is exactly a phase that gets no folder.
-    const runningPhases = phasesWithExecuteStages(scope);
+    // you don't have to derive it later by diffing the stage list.
     for (const phase of PHASES) {
       if (phase === "initialization") continue;
       const inPhase = stagesInScope(scope).filter((s) => s.phase === phase);
-      if (!runningPhases.has(phase) && inPhase.length > 0) {
+      const anyExecute = inPhase.some((s) => s.action === "EXECUTE");
+      if (!anyExecute && inPhase.length > 0) {
         appendAuditEvent(projectDir, "PHASE_SKIPPED", {
           Phase: phase,
           Scope: scope,
@@ -4337,38 +3969,35 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       Agent: "orchestrator",
     });
 
-    // ---- Ensure-exists record dirs (lazy; SEED ships the shell) ----
+    // ---- Ensure-exists scaffold (lazy; SEED ships the shell) ----
     // The shipped shell already carries spaces/default/memory + native includes.
-    // Birth only ensures the dirs this workflow will write into: an artifact dir
-    // per IN-SCOPE phase (a scope-excluded phase gets none), verification/, and
-    // the space-level knowledge/ dir. All idempotent: skip any dir that already
-    // exists, and never remove one.
-    ensureWorkspaceDirs(projectDir, scope);
+    // Birth only ensures the per-intent artifact dirs + the space-level knowledge/
+    // dir the workflow will write into exist; it never re-copies the data/scaffold
+    // tree (SEED owns that). All idempotent — skip any dir that already exists.
+    ensureWorkspaceDirs(projectDir);
 
-    const phaseDirDetail = `${runningPhases.size} in-scope phase dirs + verification/ + space-level knowledge/ ensured`;
     appendAuditEvent(projectDir, "WORKSPACE_SCAFFOLDED", {
       Request: `/aidlc ${flags.arguments || scope}`,
-      Details: `${phaseDirDetail} (shell shipped by SEED)`,
+      Details: "Per-intent artifact dirs + space-level knowledge/ ensured (shell shipped by SEED)",
     });
     appendAuditEvent(projectDir, "STAGE_COMPLETED", {
       Stage: "workspace-scaffold",
-      Details: phaseDirDetail,
+      Details: "Per-intent artifact dirs + space-level knowledge/ ensured",
     });
 
-    handleIntentCreateStateBuild(projectDir, flags, scope, ts, reviewOverride);
+    handleIntentBirthStateBuild(projectDir, flags, scope, ts);
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
 
 // The scope→stage state-build half of birth: the workspace detection + state
 // file authoring + routing audit emits the old --init ran after scaffolding.
-// Split out only so handleIntentCreate's lock body stays readable; it is called
+// Split out only so handleIntentBirth's lock body stays readable; it is called
 // from inside that lock (every write here resolves the born intent's record).
-function handleIntentCreateStateBuild(
+function handleIntentBirthStateBuild(
   projectDir: string,
   flags: Record<string, string>,
   scope: string,
   ts: string,
-  reviewOverride: ReviewOverride | undefined,
 ): void {
   const depthOverride = flags.depth;
   const testStrategyOverride = flags["test-strategy"];
@@ -4549,7 +4178,7 @@ function handleIntentCreateStateBuild(
 - **Project Type**: ${scan.projectType}
 - **Scope**: ${scope}
 - **Start Date**: ${ts}
-- **State Version**: ${CURRENT_STATE_VERSION}
+- **State Version**: 7
 - **Active Agent**: ${firstPostInitAgent}
 - **Worktree Path**:
 - **Bolt Refs**:
@@ -4560,7 +4189,6 @@ function handleIntentCreateStateBuild(
 - **Stages to Skip**: ${skipStages.length > 0 ? skipStages.join(", ") : "none"}
 - **Depth**: ${effectiveDepth}
 - **Test Strategy**: ${effectiveTestStrategy}
-- **Review Override**: ${reviewOverride === undefined ? "" : storedReviewOverride(reviewOverride)}
 
 ## Workspace State
 - **Project Root**: ${projectDir}
@@ -4639,7 +4267,7 @@ ${stageProgress}
   }
 
   // Combined stdout summary (intent born + state-build). The active-intent
-  // cursor + the record dir were set by createIntent above; the state file lives
+  // cursor + the record dir were set by birthIntent above; the state file lives
   // under the born intent's record (resolved by writeStateFile's default).
   const bornDir = activeIntent(projectDir) ?? "(legacy flat record)";
   const submoduleWarningLine =
@@ -4647,7 +4275,7 @@ ${stageProgress}
       ? `Warning: ${uninitSubmodules.length} uninitialized git submodule path(s) (${enumerateSubmodulePaths(uninitSubmodules)}) - run '${SUBMODULE_INIT_REMEDY}' before proceeding so reverse-engineering can read the code.\n`
       : "";
   process.stdout.write(
-    `Intent created: ${bornDir} (space: ${activeSpace(projectDir)})
+    `Intent born: ${bornDir} (space: ${activeSpace(projectDir)})
 State initialized: ${scope} scope, ${totalInScope} stages, ${effectiveDepth} depth
 Project type: ${scan.projectType}
 Languages: ${scan.languages}
@@ -4668,7 +4296,7 @@ function handleInitTransition(): void {
 
 function handleStateInit(_projectDir: string, _flags: Record<string, string>): void {
   die(
-    "state-init is merged into intent-create. Just describe what you want to build (/aidlc \"build the auth service\") and the workflow record is created for you."
+    "state-init is merged into intent-birth. A workflow starts by describing what to build (/aidlc \"build the auth service\"); the engine auto-births the intent."
   );
 }
 
@@ -4749,19 +4377,15 @@ function printSpaceListing(projectDir: string, asJson: boolean): void {
 // include — only a space does). The <name> matches a record dir name exactly,
 // or a slug (when unambiguous within the space). --json on the bare list emits
 // the structured query shape.
-function handleIntent(
-  projectDir: string,
-  positional: string[],
-  flags: Record<string, string>,
-): void {
+function handleIntent(projectDir: string, positional: string[], flags: Record<string, string>): void {
   const asJson = flags.json === "true";
   const verbOrTarget = positional[1];
   if (verbOrTarget === "list") {
     printIntentListing(projectDir, asJson);
     return;
   }
-  if (verbOrTarget === "create") {
-    handleIntentCreate(projectDir, flags);
+  if (verbOrTarget === "birth") {
+    handleIntentBirth(projectDir, flags);
     return;
   }
   const target = verbOrTarget === "switch" ? positional[2] : verbOrTarget;
@@ -5111,7 +4735,7 @@ function handleDetect(projectDir: string, flags: Record<string, string>): void {
 // fresh empty team.md/project.md/phases stubs + the templates/ floor. A new team
 // starts at the framework baseline and earns its OWN practices — it does NOT
 // inherit another space's learnings. (A new INTENT, by contrast, seeds nothing:
-// it reads its space's live memory — handled in createIntent.)
+// it reads its space's live memory — handled in birthIntent.)
 function handleSpaceCreate(projectDir: string, positional: string[], _flags: Record<string, string>): void {
   const raw = positional[1];
   if (!raw) die("Usage: aidlc-utility space-create <name>");
@@ -5214,7 +4838,6 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
   if (testStrategyOverride && !VALID_TEST_STRATEGIES[testStrategyOverride.toLowerCase()]) {
     die(`Unknown test strategy: "${testStrategyOverride}". Valid: minimal, standard, comprehensive.`);
   }
-  const reviewOverride = parseReviewOverride(flags.review);
 
   const sp = stateFilePath(projectDir, flags.intent, flags.space);
   if (!existsSync(sp)) die("No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").");
@@ -5236,20 +4859,16 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
   // sites are grandfathered), so this site cannot drift from the others.
   if (isAutonomousMode(content)) {
     die(
-      "Cannot change scope while Construction is running unattended (Construction Autonomy Mode " +
-        "is autonomous). Changing the plan needs someone to approve it, and nobody is being asked " +
-        "right now. Either switch back to stopping for approval at each Bolt " +
-        "(aidlc-bolt set-autonomy --mode gated) or wait for the current build to finish, then change scope.",
+      "Cannot change scope: Construction Autonomy Mode is autonomous. Re-shaping the " +
+        "plan needs a human at the gate, and an unattended run has none. Switch to " +
+        "gated Construction first (aidlc-bolt set-autonomy --mode gated) or let the " +
+        "swarm finish, then change scope.",
     );
   }
   const oldScope = getField(content, "Scope");
   if (!oldScope) die("Cannot read current Scope from state file.");
 
   if (oldScope === newScope) {
-    if (depthOverride || testStrategyOverride || reviewOverride !== undefined) {
-      handleConfigChange(projectDir, flags);
-      return;
-    }
     process.stdout.write(`Scope is already ${newScope}\n`);
     return;
   }
@@ -5341,8 +4960,6 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     ? VALID_TEST_STRATEGIES[testStrategyOverride.toLowerCase()]
     : (newScopeDef.testStrategy ?? effectiveDepth);
   content = setField(content, "Test Strategy", effectiveTestStrategy);
-  const reviewUpdate = applyReviewOverride(content, reviewOverride);
-  content = reviewUpdate.content;
   content = setField(content, "Total Stages", String(executeStages.length));
 
   // Recount completed based on actual [x] count of in-scope EXECUTE stages
@@ -5398,22 +5015,13 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     "Approval Gates": String(gates),
     Depth: effectiveDepth,
   });
-  if (reviewUpdate.changed) {
-    appendAuditEvent(projectDir, "REVIEW_CLASS_CHANGED", {
-      "Old Override": reviewUpdate.oldReview || "none set",
-      "New Override":
-        reviewUpdate.storedReview || "cleared (stage defaults apply)",
-    });
-  }
 
   process.stdout.write(
     `Scope changed: ${oldScope} → ${newScope}
 Stages in scope: ${executeStages.length} (${deltaStr})
 Approval gates: ${gates}
 Depth: ${effectiveDepth}
-${reviewOverride === undefined
-      ? ""
-      : `Review override: ${reviewUpdate.storedReview || "adversarial (stage defaults)"}\n`}Completed: ${completedCount}/${executeStages.length}
+Completed: ${completedCount}/${executeStages.length}
 `
   );
 }
@@ -5458,10 +5066,10 @@ function handleRecompose(projectDir: string, flags: Record<string, string>): voi
     // explicit flag, not the default.
     if (getField(content, "Construction Autonomy Mode")?.trim() === "autonomous") {
       die(
-        "Cannot change the plan while Construction is running unattended (Construction Autonomy " +
-          "Mode is autonomous). Changing the plan needs someone to approve it, and nobody is being " +
-          "asked right now. Either switch back to stopping for approval at each Bolt " +
-          "(aidlc-bolt set-autonomy --mode gated) or wait for the current build to finish, then recompose.",
+        "Cannot recompose: Construction Autonomy Mode is autonomous. Re-shaping the " +
+          "plan needs a human at the gate, and an unattended run has none. Switch to " +
+          "gated Construction first (aidlc-bolt set-autonomy --mode gated) or let the " +
+          "swarm finish, then recompose.",
       );
     }
     // Only a RUNNING workflow has a live plan to re-shape. A Completed (or
@@ -5672,14 +5280,13 @@ function handleRecompose(projectDir: string, flags: Record<string, string>): voi
 // config get/list/set - read or update active workflow config
 // ---------------------------------------------------------------------------
 
-function configFieldForKey(key: string): "Depth" | "Test Strategy" | "Review Override" | null {
+function configFieldForKey(key: string): "Depth" | "Test Strategy" | null {
   if (key === "depth") return "Depth";
   if (key === "test-strategy") return "Test Strategy";
-  if (key === "review") return "Review Override";
   return null;
 }
 
-function readConfigField(projectDir: string, flags: Record<string, string>, field: "Depth" | "Test Strategy" | "Review Override"): string {
+function readConfigField(projectDir: string, flags: Record<string, string>, field: "Depth" | "Test Strategy"): string {
   const sp = stateFilePath(projectDir, flags.intent, flags.space);
   if (!existsSync(sp)) die(NO_STATE_FILE_MESSAGE);
   const content = readStateFile(projectDir, flags.intent, flags.space);
@@ -5696,21 +5303,19 @@ function handleConfigGet(projectDir: string, positional: string[], flags: Record
 function handleConfigList(projectDir: string, flags: Record<string, string>): void {
   const depth = readConfigField(projectDir, flags, "Depth");
   const testStrategy = readConfigField(projectDir, flags, "Test Strategy");
-  const review = readConfigField(projectDir, flags, "Review Override");
   if (flags.json === "true") {
-    process.stdout.write(`${JSON.stringify({ depth, "test-strategy": testStrategy, review })}\n`);
+    process.stdout.write(`${JSON.stringify({ depth, "test-strategy": testStrategy })}\n`);
     return;
   }
-  process.stdout.write(`depth: ${depth}\ntest-strategy: ${testStrategy}\nreview: ${review}\n`);
+  process.stdout.write(`depth: ${depth}\ntest-strategy: ${testStrategy}\n`);
 }
 
 function handleConfigChange(projectDir: string, flags: Record<string, string>): void {
   const rawDepth = flags.depth;
   const rawStrategy = flags["test-strategy"];
-  const rawReview = flags.review;
 
-  if (!rawDepth && !rawStrategy && !rawReview) {
-    die("config-change requires --depth, --test-strategy, and/or --review");
+  if (!rawDepth && !rawStrategy) {
+    die("config-change requires --depth and/or --test-strategy");
   }
 
   let newDepth: string | undefined;
@@ -5724,10 +5329,6 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
     newStrategy = VALID_TEST_STRATEGIES[rawStrategy.toLowerCase()];
     if (!newStrategy) die(`Unknown test strategy: "${rawStrategy}". Valid: minimal, standard, comprehensive.`);
   }
-
-  // --review sets the per-run Review Override (a CEILING on the effective
-  // review class, low-wins against stage declaration and scope review_cap).
-  const newReview = parseReviewOverride(rawReview);
 
   const sp = stateFilePath(projectDir, flags.intent, flags.space);
   if (!existsSync(sp)) die(NO_STATE_FILE_MESSAGE);
@@ -5744,14 +5345,10 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
   if (newStrategy !== undefined && newStrategy !== oldStrategy) {
     content = setField(content, "Test Strategy", newStrategy);
   }
-  const reviewUpdate = applyReviewOverride(content, newReview);
-  content = reviewUpdate.content;
-  const { oldReview, storedReview } = reviewUpdate;
   const depthChanging = newDepth !== undefined && newDepth !== oldDepth;
   const strategyChanging =
     newStrategy !== undefined && newStrategy !== oldStrategy;
-  const reviewChanging = reviewUpdate.changed;
-  if (depthChanging || strategyChanging || reviewChanging) {
+  if (depthChanging || strategyChanging) {
     content = setField(content, "Last Updated", isoTimestamp());
     writeStateFile(projectDir, content, flags.intent, flags.space);
   }
@@ -5766,12 +5363,6 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
     appendAuditEvent(projectDir, "TEST_STRATEGY_CHANGED", {
       "Old Strategy": oldStrategy || "unknown",
       "New Strategy": newStrategy,
-    });
-  }
-  if (reviewChanging) {
-    appendAuditEvent(projectDir, "REVIEW_CLASS_CHANGED", {
-      "Old Override": oldReview || "none set",
-      "New Override": storedReview || "cleared (stage defaults apply)",
     });
   }
 
@@ -5789,71 +5380,55 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
         : `Test strategy is already ${newStrategy}\n`
     );
   }
-  if (newReview !== undefined) {
-    const display = storedReview === "" ? "adversarial (stage defaults)" : storedReview;
-    process.stdout.write(
-      reviewChanging
-        ? `Review override changed: ${oldReview || "none"} → ${display}\n`
-        : `Review override is already ${display}\n`
-    );
-  }
 }
 
 // ---------------------------------------------------------------------------
 // set-status — atomically update statusline fields at stage start
 // ---------------------------------------------------------------------------
 
+export function setStatus(
+  projectDir: string,
+  flags: Record<string, string>,
+): { phase: string; stage: string; agent: string } {
+  const sp = stateFilePath(projectDir, flags.intent, flags.space);
+  if (!existsSync(sp)) throw new Error(NO_STATE_FILE_MESSAGE);
+
+  const stage = flags.stage;
+  if (!stage) throw new Error("--stage is required for set-status");
+
+  const entry = findStageBySlug(stage);
+  if (!entry) throw new Error(`Unknown stage: ${stage}`);
+
+  const phase = (flags.phase || entry.phase).toUpperCase();
+  const agent = flags.agent || entry.lead_agent;
+
+  let content = readStateFile(projectDir, flags.intent, flags.space);
+  content = setField(content, "Lifecycle Phase", phase);
+  content = setField(content, "Current Stage", stage);
+  content = setField(content, "Active Agent", agent);
+  content = setField(content, "In Progress", stage);
+  content = setField(content, "Status", "Running");
+  content = setField(content, "Last Updated", isoTimestamp());
+  content = setCheckbox(content, stage, "in-progress");
+  writeStateFile(projectDir, content, flags.intent, flags.space);
+
+  return { phase, stage, agent };
+}
+
 function handleSetStatus(projectDir: string, flags: Record<string, string>): void {
   if (
     process.env.AIDLC_STATUSLINE_OWNER !== `statusline:${process.ppid}`
   ) {
     die(
-      "Direct aidlc-utility set-status is blocked: there is nothing for you to do here. " +
-        "The workflow's position updates on its own as stages start and outcomes are reported. " +
-        "Run /aidlc --status to see where things stand. " +
-        "(status synchronization is owned by the sync-workflow-state hook.)",
+      "Direct aidlc-utility set-status is blocked: status synchronization is owned by the sync-statusline hook.",
     );
   }
-  const sp = stateFilePath(projectDir, flags.intent, flags.space);
-  if (!existsSync(sp)) die("No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").");
-
-  const stage = flags.stage;
-  if (!stage) die("--stage is required for set-status");
-
-  const entry = findStageBySlug(stage);
-  if (!entry) die(`Unknown stage: ${stage}`);
-
-  const phase = (flags.phase || entry.phase).toUpperCase();
-  const agent = flags.agent || entry.lead_agent;
-
-  const previousContent = readStateFile(projectDir, flags.intent, flags.space);
-  const currentStage = (getField(previousContent, "Current Stage") ?? "").trim();
-  const activeDirective = readActiveDirectiveMarker(projectDir, previousContent);
-  const preserveUnitMajorCursor =
-    getField(previousContent, "Construction Iteration")?.trim() === "unit-major" &&
-    phase === "CONSTRUCTION" &&
-    activeDirective?.stage === stage &&
-    activeDirective.unit !== undefined &&
-    currentStage.length > 0 &&
-    currentStage !== stage;
-  let content = previousContent;
-  content = setField(content, "Lifecycle Phase", phase);
-  content = setField(content, "Active Agent", agent);
-  content = setField(content, "Status", "Running");
-  content = setField(content, "Last Updated", isoTimestamp());
-  if (!preserveUnitMajorCursor) {
-    content = setField(content, "Current Stage", stage);
-    content = setField(content, "In Progress", stage);
-    content = setCheckbox(content, stage, "in-progress");
-  }
-  writeStateFile(projectDir, content, flags.intent, flags.space);
   try {
-    refreshActiveDirectiveMarker(projectDir, stage, previousContent, content);
-  } catch (e) {
-    recordHookDrop(projectDir, "active-directive", errorMessage(e));
+    const result = setStatus(projectDir, flags);
+    process.stdout.write(`${JSON.stringify({ updated: true, ...result })}\n`);
+  } catch (error) {
+    die(errorMessage(error));
   }
-
-  process.stdout.write(`${JSON.stringify({ updated: true, phase, stage, agent })}\n`);
 }
 
 // ---------------------------------------------------------------------------
@@ -6273,30 +5848,20 @@ function handleResolveEnvScope(): void {
 export async function main(argv: string[]): Promise<void> {
   const rawArgs = argv;
   errorArgs = [...rawArgs];
-  const { positional, flags, bareFlags, blankFlags } = parseArgs(rawArgs);
+  const { positional, flags } = parseArgs(rawArgs);
   const subcommand = positional[0];
+  errorProjectDirArg = flags["project-dir"];
   if (
-    (subcommand === "intent-create" || subcommand === "init") &&
+    (subcommand === "intent-birth" || subcommand === "init") &&
     (flags.help === "true" || rawArgs.includes("-h"))
   ) {
     process.stdout.write(
-      "Usage: aidlc-utility intent-create --scope <scope> " +
+      "Usage: aidlc-utility intent-birth --scope <scope> " +
         '[--arguments "<description>"] [--label "<short label>"] ' +
-        "[--depth <level>] [--test-strategy <level>] [--review <class>] [--repos <name,...>] " +
+        "[--depth <level>] [--test-strategy <level>] [--repos <name,...>] " +
         "[--project-dir <path>]\n",
     );
     return;
-  }
-  const isIntentCreate =
-    subcommand === "intent-create" ||
-    subcommand === "init" ||
-    (subcommand === "intent" && positional[1] === "create");
-  const missingValueFlags = new Set([...bareFlags, ...blankFlags]);
-  errorProjectDirArg = missingValueFlags.has("project-dir")
-    ? undefined
-    : flags["project-dir"];
-  if (isIntentCreate) {
-    validateIntentCreateFlagValues(flags, missingValueFlags);
   }
   const projectDir = resolveProjectDir(flags["project-dir"]);
 
@@ -6313,8 +5878,8 @@ export async function main(argv: string[]): Promise<void> {
     case "doctor":
       await (await import("./aidlc-doctor.ts")).main(rawArgs);
       break;
-    case "intent-create":
-      handleIntentCreate(projectDir, flags);
+    case "intent-birth":
+      handleIntentBirth(projectDir, flags);
       break;
     case "intent":
       handleIntent(projectDir, positional, flags);
@@ -6354,7 +5919,7 @@ export async function main(argv: string[]): Promise<void> {
       break;
     // init / state-init are transition-only and intentionally absent from help.
     // Stale init callers get a loud error for this release; workflow start is
-    // still intent-create through the orchestrator.
+    // still intent-birth through the orchestrator.
     case "init":
       handleInitTransition();
       break;
@@ -6398,21 +5963,8 @@ export async function main(argv: string[]): Promise<void> {
       handleStageTable(projectDir, flags, rawArgs);
       break;
     default:
-      // `intent-birth` was renamed to `intent-create`; point the old name at
-      // the new one rather than burying it in the verb list.
-      if (subcommand === "intent-birth") {
-        die(
-          "`intent-birth` was renamed to `intent-create`. Run the same command with " +
-            "`intent-create` instead (flags are unchanged)."
-        );
-      }
       die(
-        `Unknown command "${subcommand}". Run \`aidlc-utility help\` for what this tool can do.\n\n` +
-          "Available commands: help, version, status, doctor, intent-create, intent, space, " +
-          "space-create, codekb-path, codekb-scope-diff, detect, select-plugins, plugin-list, plugin-sync, " +
-          "recompose, scope-change, config-change, config-get, config-list, set-status, " +
-          "detect-scope, resolve-env-scope, scope-table, stage-table, upgrade\n" +
-          "Common options: [--project-dir <path>] [--scope <scope>] [--json]"
+        `Usage: aidlc-utility <help|version|status|doctor|intent-birth|intent|space|space-create|codekb-path|codekb-scope-diff|detect|select-plugins|plugin-list|plugin-sync|recompose|scope-change|config-change|config-get|config-list|set-status|detect-scope|resolve-env-scope|scope-table|stage-table|upgrade> [--project-dir <path>] [--scope <scope>] [--json]`
       );
   }
 }

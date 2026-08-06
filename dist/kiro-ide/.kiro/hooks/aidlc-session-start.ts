@@ -37,7 +37,6 @@ import {
   errorMessage,
   findIntentByUuid,
   getField,
-  harnessDir,
   hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
@@ -50,6 +49,7 @@ import {
   writeSessionIntentUuid,
 } from "../tools/aidlc-lib.ts";
 import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
+import { aidlcToolInvocation } from "../tools/aidlc-runtime-paths.ts";
 
 export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
@@ -263,7 +263,7 @@ try {
   if (uncompiledStages.length > 0) {
     driftNote =
       `NOTE: ${uncompiledStages.length} stage file(s) on disk are not in the compiled stage graph and will NOT execute: ${uncompiledStages.join(", ")}. ` +
-      `Run \`bun ${harnessDir()}/tools/aidlc-graph.ts compile\` to include them, then start a fresh workflow (an in-flight workflow keeps its original stage set).\n`;
+      `Run \`${aidlcToolInvocation("graph")} compile\` to include them, then start a fresh workflow (an in-flight workflow keeps its original stage set).\n`;
   }
 } catch {
   // Drift check failed, never block startup over an advisory.

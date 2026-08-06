@@ -674,13 +674,13 @@ describe("t265c registrations", () => {
     const taskGroup = settings.hooks.PreToolUse.find((g) => g.matcher === "Task");
     expect(taskGroup).toBeDefined();
     expect(
-      taskGroup?.hooks.some((h) => h.command.includes("aidlc-plan-approval-guard.ts")),
+      taskGroup?.hooks.some((h) => h.command.includes("hook plan-approval-guard")),
     ).toBe(true);
   });
 
   test("codex: hooks.json wires the plan-approval-guard adapter target", () => {
     const hooksJson = readFileSync(join(REPO_ROOT, "dist", "codex", ".codex", "hooks.json"), "utf-8");
-    expect(hooksJson).toContain("aidlc-codex-adapter.ts plan-approval-guard");
+    expect(hooksJson).toContain("adapter codex plan-approval-guard");
   });
 
   test("copilot: the shared tool guard invokes the plan-approval guard", () => {

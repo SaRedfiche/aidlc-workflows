@@ -29,7 +29,7 @@
 //      their predecessor — correct, since none of them can emit an end.
 //
 // Output contracts:
-//   - session-start / post-compact: the core hook prints
+//   - session-start: the core hook prints
 //     {"additionalContext": "..."}; Codex expects the hookSpecificOutput
 //     wrapper (verified live, findings E1) — the shim re-wraps.
 //   - stop: {"decision":"block","reason"} passes through VERBATIM — the
@@ -39,9 +39,9 @@
 // Usage (wired in .codex/hooks.json):
 //   aidlc adapter codex <target>
 // where <target> ∈ session-start | audit-and-sensors | state-sync |
-//                  runtime-compile | validate-state | post-compact |
-//                  log-subagent | stop | mint | state-transition-guard |
-//                  reviewer-scope
+//                  runtime-compile | validate-state | log-subagent | stop |
+//                  mint | state-transition-guard | reviewer-scope |
+//                  dispatch-rules | plan-approval-guard
 
 import { createHash } from "node:crypto";
 import {
@@ -74,6 +74,26 @@ interface CodexHookInput {
   agent_type?: string;
   agent_id?: string;
   stop_hook_active?: boolean;
+}
+
+interface CodexSpawnAgentInput {
+  agent_type?: unknown;
+  message?: unknown;
+  items?: unknown;
+}
+
+function spawnAgentPrompt(input: CodexSpawnAgentInput): string {
+  const parts: string[] = [];
+  if (typeof input.message === "string") parts.push(input.message);
+  if (Array.isArray(input.items)) {
+    for (const item of input.items) {
+      if (item !== null && typeof item === "object") {
+        const text = (item as Record<string, unknown>).text;
+        if (typeof text === "string") parts.push(text);
+      }
+    }
+  }
+  return parts.join("\n");
 }
 
 export async function run(
@@ -112,6 +132,13 @@ const projectEnv = {
 // the duplicate waits briefly for that response and replays it byte-for-byte.
 // Entries are pruned after 30 minutes. Failure anywhere → fail open (run or
 // allow), never trap the turn.
+//
+// Compact-source SessionStart is EXEMPT: Codex SessionStart input carries no
+// turn_id, so two DISTINCT compactions in one session produce byte-identical
+// stdin and would replay the FIRST compaction's (stale) workflow context.
+// The compact render is read-only (source=compact emits no audit row), so
+// re-running a true duplicate is harmless while replaying a stale one is not.
+const bypassReplay = target === "session-start" && codex.source === "compact";
 
 const DEDUPE_ROOT = join(
   tmpdir(),
@@ -158,6 +185,7 @@ function replayResponse(): { stdout: string; code: number; stderr?: string } {
 }
 
 function persistResponse(stdout: string, code: number, stderr?: string): void {
+  if (bypassReplay) return;
   try {
     writeFileSync(responseFile, JSON.stringify({ stdout, code, ...(stderr ? { stderr } : {}) }), "utf-8");
   } catch {
@@ -165,15 +193,17 @@ function persistResponse(stdout: string, code: number, stderr?: string): void {
   }
 }
 
-try {
-  mkdirSync(DEDUPE_ROOT, { recursive: true });
-  pruneStale();
-  mkdirSync(slotDir); // atomic claim — throws EEXIST for the duplicate
-} catch {
-  const replay = replayResponse();
-  if (replay.stdout) process.stdout.write(replay.stdout);
-  if (replay.stderr) process.stderr.write(replay.stderr);
-  return replay.code;
+if (!bypassReplay) {
+  try {
+    mkdirSync(DEDUPE_ROOT, { recursive: true });
+    pruneStale();
+    mkdirSync(slotDir); // atomic claim — throws EEXIST for the duplicate
+  } catch {
+    const replay = replayResponse();
+    if (replay.stdout) process.stdout.write(replay.stdout);
+    if (replay.stderr) process.stderr.write(replay.stderr);
+    return replay.code;
+  }
 }
 
 // --- Core-hook subprocess plumbing ------------------------------------------
@@ -221,6 +251,12 @@ function runCoreWithStderr(
 
 // Re-wrap the core context output ({"additionalContext": ...}) into the
 // hookSpecificOutput envelope Codex consumes (verified live for SessionStart).
+// CONTRACT WARNING: each Codex event has its OWN output schema — do not reuse
+// this envelope for other events without checking the binary's embedded
+// <event>.command.output schema. PostCompact in particular allows NO
+// hookSpecificOutput and no context channel at all ("this event cannot emit
+// additionalContext"); reusing this wrapper there is rejected as invalid
+// hook JSON on every compaction.
 function wrapContext(coreStdout: string, eventName: string): string {
   try {
     const parsed = JSON.parse(coreStdout) as { additionalContext?: string };
@@ -362,24 +398,9 @@ switch (target) {
     return 0;
   }
 
-  case "post-compact": {
-    // Codex-only event (S9c): re-inject the mission AFTER compaction. The
-    // core session-start hook with source=compact emits NO audit row (the
-    // PreCompact hook owns SESSION_COMPACTED) but still renders the
-    // workflow-context block — exactly the deterministic mission reload.
-    const r = runCore(
-      "aidlc-session-start.ts",
-      JSON.stringify({ hook_event_name: "SessionStart", source: "compact" }),
-    );
-    const wrapped = wrapContext(r.stdout, "PostCompact");
-    persistResponse(wrapped, 0);
-    if (wrapped) process.stdout.write(wrapped);
-    return 0;
-  }
-
   case "log-subagent": {
-    // SubagentStop already carries agent_type (real role name on Codex
-    // ≥ 0.139.0 — doctor pins the minimum) + agent_id. Verbatim pipe.
+    // SubagentStop already carries agent_type (real role name since Codex
+    // 0.139.0; the doctor-enforced floor is 0.145.0) + agent_id. Verbatim pipe.
     runCore("aidlc-log-subagent.ts", rawInput);
     persistResponse("", 0);
     return 0;
@@ -449,6 +470,99 @@ switch (target) {
       }
     }
     persistResponse("", 0);
+    return 0;
+  }
+
+  case "review-freeze": {
+    // PreToolUse: the §12a terminal-receipt write-freeze. Bash already carries
+    // the core hook's command shape, while apply_patch fans out one Write per
+    // touched path (Delete File / Move to included). Block contract: exit 2 +
+    // stderr; the response cache replays the block on duplicate delivery.
+    const tool = codex.tool_name ?? "";
+    if (tool === "Bash") {
+      const r = runCoreWithStderr("aidlc-review-freeze.ts", rawInput);
+      persistResponse(r.stdout, r.code === 2 ? 2 : 0, r.stderr);
+      if (r.code === 2) {
+        process.stderr.write(r.stderr);
+        return 2;
+      }
+      return 0;
+    }
+    if (tool === "apply_patch") {
+      const command = (codex.tool_input?.command as string) ?? "";
+      const targets: Array<{ path: string; tool: string }> = patchedFiles(command);
+      for (const m of command.matchAll(/^\*\*\* (?:Delete File|Move to): (.+)$/gm)) {
+        const rel = m[1].trim();
+        targets.push({ path: isAbsolute(rel) ? rel : join(projectDir, rel), tool: "Edit" });
+      }
+      for (const f of targets) {
+        const fwd = JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: f.tool,
+          tool_input: { file_path: f.path },
+        });
+        const r = runCoreWithStderr("aidlc-review-freeze.ts", fwd);
+        if (r.code === 2) {
+          persistResponse("", 2, r.stderr);
+          process.stderr.write(r.stderr);
+          return 2;
+        }
+      }
+    }
+    persistResponse("", 0);
+    return 0;
+  }
+
+  case "dispatch-rules": {
+    // Codex 0.145 consumes the same PreToolUse hookSpecificOutput.updatedInput
+    // contract as Claude. The core hook recognizes spawn_agent and appends the
+    // exact active-stage bundle to message/items without adapter re-shaping.
+    const r = runCoreWithStderr("aidlc-dispatch-rules.ts", rawInput);
+    const answeredCode = r.code === 2 ? 2 : 0;
+    persistResponse(r.stdout, answeredCode, r.stderr);
+    if (r.stdout) process.stdout.write(r.stdout);
+    if (r.code === 2) {
+      process.stderr.write(r.stderr);
+      return 2;
+    }
+    return 0;
+  }
+
+  case "plan-approval-guard": {
+    // PreToolUse: code-generation's plan-before-generation ordering. Codex's
+    // delegation surface is spawn_agent, whose arguments carry the target in
+    // tool_input.agent_type and task text in message/items. Top-level
+    // agent_type identifies the currently acting agent, so it must not select
+    // the spawn target. Anything else - other tools or other target roles -
+    // allows instantly. The block contract is exit 2 + stderr, cached like
+    // reviewer-scope so a duplicate delivery replays the block faithfully.
+    // Fail-open on any spawn failure.
+    const tool = codex.tool_name ?? "";
+    if (tool !== "spawn_agent") {
+      persistResponse("", 0);
+      return 0;
+    }
+    const spawnInput: CodexSpawnAgentInput = codex.tool_input ?? {};
+    const target =
+      typeof spawnInput.agent_type === "string" ? spawnInput.agent_type : "";
+    if (target !== "aidlc-developer-agent") {
+      persistResponse("", 0);
+      return 0;
+    }
+    const fwd = JSON.stringify({
+      hook_event_name: "PreToolUse",
+      tool_name: "Task",
+      tool_input: {
+        subagent_type: target,
+        prompt: spawnAgentPrompt(spawnInput),
+      },
+    });
+    const r = runCoreWithStderr("aidlc-plan-approval-guard.ts", fwd);
+    persistResponse(r.stdout, r.code === 2 ? 2 : 0, r.stderr);
+    if (r.code === 2) {
+      process.stderr.write(r.stderr);
+      return 2;
+    }
     return 0;
   }
 

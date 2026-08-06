@@ -891,6 +891,7 @@ describe("t230 dispatcher route completeness", () => {
       space: "space",
       "space-create": "space",
       "codekb-path": "workspace",
+      "codekb-scope-diff": "workspace",
       detect: "workspace",
       "select-plugins": "plugin",
       "plugin-list": "plugin",
@@ -912,6 +913,8 @@ describe("t230 dispatcher route completeness", () => {
     for (const [command, routeId] of Object.entries(utilityRoutes)) {
       expect(routePolicyFor(["__delegate", "utility", command])?.id, command).toBe(routeId);
     }
+    expect(routePolicyFor(["__delegate", "workspace-sync"])?.id).toBe("workspace-sync");
+    expect(routePolicyFor(["__delegate", "sensor-claim-sources"])?.id).toBe("sensor");
     expect(routePolicyFor(["__delegate", "utility", "unknown"])?.id).toBe("delegate");
   });
 
@@ -979,6 +982,7 @@ describe("t230 dispatcher route completeness", () => {
       "aidlc-state.ts",
       "aidlc-utility.ts",
       "aidlc-worktree.ts",
+      "aidlc-workspace-sync.ts",
       "aidlc-sensor.ts",
       "aidlc-swarm.ts",
       "aidlc-validate.ts",

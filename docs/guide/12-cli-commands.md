@@ -3,19 +3,12 @@
 All AI-DLC commands start with the orchestrator invocation. This chapter is a complete reference for every invocation pattern and flag.
 
 > **Invocation prefix differs by harness.** On Claude Code, Kiro IDE, Kiro CLI,
-> Cursor, opencode, and GitHub Copilot you type `/aidlc`; on Codex CLI it is `$aidlc` (or
-> `/skills` → aidlc). The flags and behaviour below are identical either way —
-> only the prefix changes. The examples use `/aidlc`; substitute `$aidlc` on
-> Codex. See the [Kiro CLI](harnesses/kiro-cli.md),
-> [Kiro IDE](harnesses/kiro-ide.md), [Codex CLI](harnesses/codex-cli.md),
-> [Cursor](harnesses/cursor.md), [opencode](harnesses/opencode.md), and
-> [GitHub Copilot](harnesses/copilot.md) harness guides.
-
-> **Cursor shortcuts.** Cursor also exposes `/aidlc-status`,
-> `/aidlc-jump --stage <slug|#>` (or `--phase <name|#>`), and
-> `/aidlc-scope <name>` as native skills. They package the matching `/aidlc`
-> forms below and use the same engine; they are aliases, not alternate state
-> paths.
+> and opencode you type `/aidlc`; on Codex CLI it is `$aidlc` (or `/skills` →
+> aidlc). The flags and behaviour below are identical either way — only the
+> prefix changes. The examples use `/aidlc`; substitute `$aidlc` on Codex. See
+> the [Kiro CLI](harnesses/kiro-cli.md), [Kiro IDE](harnesses/kiro-ide.md),
+> [Codex CLI](harnesses/codex-cli.md), and
+> [opencode](harnesses/opencode.md) harness guides.
 
 ---
 
@@ -32,7 +25,6 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | `/aidlc intent [name]` | List intents in the active space, or switch to an existing intent |
 | `/aidlc space [name]` | List spaces, or switch to an existing space |
 | `/aidlc space-create <name>` | Create a new space from the framework baseline |
-| `/aidlc knowledge <verb>` | Index and read your own documents (`onboard`, `sync`, `list`, `show`, `associate`, `dissociate`, `rebind`) |
 | `/aidlc --status` | Display a read-only status summary |
 | `/aidlc --doctor [--check-updates]` | Run a health check; the explicit flag refreshes update metadata |
 | `/aidlc --doctor --export` | Run a fresh health check, then write a small, redacted diagnostic report for sharing |
@@ -42,12 +34,12 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | `/aidlc --scope <name>` | Change the active scope |
 | `/aidlc --depth <level>` | Override depth level (minimal, standard, comprehensive) |
 | `/aidlc --test-strategy <level>` | Override test strategy (minimal, standard, comprehensive) |
-| `/aidlc --review <class>` | Cap stage reviews for this run (adversarial, advisory, none) |
-| `/aidlc config get <key>` | Print active workflow config (`depth`, `test-strategy`, `review`) |
-| `/aidlc config set <key> <value>` | Change active workflow config (`depth`, `test-strategy`, `review`) |
+| `/aidlc config get <key>` | Print active workflow config (`depth`, `test-strategy`) |
+| `/aidlc config set <key> <value>` | Change active workflow config (`depth`, `test-strategy`) |
 | `/aidlc config list` | List active workflow config (`--json` for structured output) |
-| `/aidlc plugin select [names]` | Show or set the enabled plugin list for this install |
 | `aidlc config global <get\|set\|clear\|list>` | Manage machine update and release settings |
+| `aidlc workspace codekb --repo <repo>` | Print the active space's code knowledge directory for a repository |
+| `aidlc plugin select [names]` | Show or set the enabled plugin list through the native dispatcher |
 | `/aidlc plugin list [--verbose\|--json]` | Compare host-installed plugins with this project's composition stamps |
 | `/aidlc plugin sync [--prune-missing]` | Transactionally compose installed plugins; explicitly prune missing owned content |
 | `aidlc init [options]` | Initialize or refresh a project from an installed or local harness projection |
@@ -61,7 +53,7 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | `aidlc package create\|verify` | Create or verify a flat offline release set |
 | `/aidlc --version` | Print the framework version |
 | `/aidlc --help` | Display usage information |
-| `bun .claude/tools/aidlc-utility.ts select-plugins [names]` | Direct utility form of plugin selection |
+| `bun .claude/tools/aidlc-utility.ts select-plugins [names]` | Direct-only: show or set the enabled plugin list for this install |
 
 ---
 
@@ -193,7 +185,7 @@ flowchart TD
     style START fill:#e1bee7,stroke:#7b1fa2
 ```
 
-<!-- Text fallback: Starting a new workflow: use /aidlc classic (known scope) or /aidlc Build a payments API (auto-detect; the first intent auto-births). Managing an existing workflow: /aidlc (resume), /aidlc --status (view progress), /aidlc --stage (jump to stage), /aidlc --phase (jump to phase). Verify setup: /aidlc --doctor (health check). -->
+<!-- Text fallback: Starting a new workflow: use /aidlc feature (known scope) or /aidlc Build a payments API (auto-detect; the first intent auto-births). Managing an existing workflow: /aidlc (resume), /aidlc --status (view progress), /aidlc --stage (jump to stage), /aidlc --phase (jump to phase). Verify setup: /aidlc --doctor (health check). -->
 
 ---
 
@@ -201,7 +193,7 @@ flowchart TD
 
 ### `/aidlc [scope]` — Start with explicit scope
 
-Start a new workflow with one of the enabled scopes. Core ships 11 named scopes; plugins can add more, and `select-plugins` can hide disabled plugin/core scopes from runtime.
+Start a new workflow with one of the enabled scopes. Core ships 9 named scopes; plugins can add more, and `select-plugins` can hide disabled plugin/core scopes from runtime.
 
 **Syntax:**
 
@@ -245,7 +237,7 @@ Describe what you want to build and the engine auto-detects the appropriate scop
 
 ```
 /aidlc Fix the null pointer in ProfileSerializer
-> Starting a "bugfix" workflow for: "Fix the null pointer in ProfileSerializer" - 7 of 33 stages, 4 approval gates, 1 stage repeats per unit of work in Construction. Confirm to proceed, name a different scope, or say "compose" for a tailored plan.
+> Starting a "bugfix" workflow for: "Fix the null pointer in ProfileSerializer" - 7 of 32 stages, 4 approval gates, 1 stage repeats per unit of work in Construction. Confirm to proceed, name a different scope, or say "compose" for a tailored plan.
 ```
 
 ---
@@ -290,15 +282,14 @@ and the engine **auto-births** the first intent on your first `/aidlc` (or when
 you describe what to build). Birth runs the three Initialization stages
 (Workspace Scaffold, Workspace Detection, State Init) as a single deterministic
 tool call: it creates the intent's record dir at
-`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (the `audit/` shard dir, an
-artifact dir for each phase the scope runs, `verification/`) and the empty space-level
+`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (the `audit/` shard dir, the
+per-phase artifact dirs, `verification/`) and the empty space-level
 `aidlc/knowledge/` directory, runs a rule-based workspace scan, and writes that
 intent's `aidlc-state.md` with the scope plan.
 It logs the init-sequence events (`WORKFLOW_STARTED`, `WORKSPACE_SCAFFOLDED`,
 `WORKSPACE_SCANNED`, `WORKSPACE_INITIALISED`, plus per-stage
 `STAGE_STARTED`/`STAGE_COMPLETED`). Naming a scope (`/aidlc --scope feature`)
-seeds the initial scope; absent one it resolves `AWS_AIDLC_DEFAULT_SCOPE`, then
-defaults to `classic`. To add team knowledge
+seeds the initial scope; absent one it defaults to `poc`. To add team knowledge
 or guardrails before the first run, edit the shipped `aidlc/spaces/default/memory/`
 files; the space-level `aidlc/knowledge/` directory is created (empty) once the
 first intent exists, and you add free-form files to it from there.
@@ -315,7 +306,7 @@ code repo (each an immediate child directory with a `.git`), the birth step
 records the set of repos the intent touches in its `intents.json` row. By default
 it **auto-discovers** every sibling repo; to scope an intent to a specific subset,
 the birth tool accepts `--repos a,b` (a comma-separated list of repo directory
-names). These are flags of the deterministic `aidlc-utility intent-create` step the
+names). These are flags of the deterministic `aidlc-utility intent-birth` step the
 engine runs for you — not `/aidlc` flags you type. During Construction, each git
 operation (worktree, swarm, Bolt) targets one repo; the conductor passes
 `--repo <name>` to anchor it, required only when an intent spans more than one
@@ -345,83 +336,6 @@ Creates a new team space with the full `memory/`, `knowledge/`, `codekb/`, and
 team's learned practices. It does not switch spaces automatically. See
 [Spaces and Intents](03-spaces-and-intents.md) for the workspace model,
 switching examples, and what is committed.
-
-### `/aidlc knowledge <verb>` — Index and read your own documents
-
-Put your documents — PDFs, Word files, Markdown, plain text — under
-`aidlc/spaces/<space>/knowledge/documents/`, organised however you like, then index
-them so agents can cite them instead of guessing.
-
-| Command | What it does |
-|---|---|
-| `/aidlc knowledge onboard [path]` | Index one file, or every not-yet-indexed file under `documents/` when no path is given |
-| `/aidlc knowledge sync` | Reconcile the catalog with what is on disk; rebuild an index that was deleted |
-| `/aidlc knowledge list [--json]` | The catalog — every document with its state |
-| `/aidlc knowledge show <id>` | One document's full record plus its extracted text |
-| `/aidlc knowledge associate <id> --intent [slug]` | Scope a document to one intent |
-| `/aidlc knowledge dissociate <id> --intent [slug]` | Remove that scoping |
-| `/aidlc knowledge rebind <id> --to <path>` | Repair a row whose original moved *and* changed |
-
-`--space <name>` targets a space other than the active one. `onboard` is idempotent:
-re-running it on an unchanged file reports `already` rather than writing a second
-row, so sweeping is always safe to repeat. A file that **changed** at a path that is
-already indexed reports `edited` and refreshes that row in place, so one path never
-carries two live rows — the outcomes are `fresh`, `already`, and `edited`, and they
-are worth reading, because "no output changed" and "nothing happened" are different
-results.
-
-**Batch limits.** A pathless `onboard` and `sync` apply the 20-document/256 MiB
-limits to new, changed, or retrying work, not to already-current catalog rows. An
-already-reconciled catalog can be larger. When a work batch exceeds a cap, onboard
-the affected files individually before syncing again. Nothing is indexed when a cap
-is hit, so the refusal is never half-finished. A single document over 32 MiB is
-refused without being read at all; the message says so, because "refused" and "read,
-then refused" have very different costs on a large file.
-
-**Scoping.** Omit `--intent` and the document is space-wide — every intent can see
-it. Bare `--intent` means the active intent, and fails rather than guessing when
-there is no cursor. `--intent <slug>` names one explicitly, and fails if the slug
-matches zero or more than one intent (slugs can repeat across finished intents; the
-stored association is always the UUID, so renaming a slug never re-points a
-document). Scoping to an intent that has finished is refused unless you add
-`--allow-inactive`, which exists for back-filling evidence onto a closed record.
-
-**Text extraction** is delegated to whatever extractor the project configures. PDF
-gets a default extractor (`pdftotext`) if none is configured; a Word (`.docx`) file
-has no built-in default — with none configured it is catalogued and citable as
-`unsupported_type`; after configuring an extractor, run `sync` to retry unchanged
-rows of that detected type. If a CONFIGURED extractor is not installed the
-document is catalogued as `extractor_unavailable` — visible in `list`, and fixed by
-installing the tool and running `/aidlc knowledge sync`. Re-running `onboard` on the
-same unchanged path reports `already` and does NOT retry extraction — only `sync`
-re-probes rows in this state. Nothing is silently skipped.
-
-**Extraction is capped**: 50 pages for PDF (`pdftotext -l 50`) and 200,000
-characters of extractor output. Past a cap the text is cut and the row records
-`truncated` — `show` prints a `truncated  yes` line above the content and the
-`--json` payload carries the flag inside `extraction`. Treat a truncated
-extraction as a partial view: "the document does not mention X" is not a safe
-conclusion from one.
-
-A configured extractor's `argv` must contain **exactly one `$IN`** — the placeholder
-the document's path is substituted into. A configuration without it is refused when
-the tool starts, rather than accepted: a process that never receives the file would
-otherwise record whatever it printed as the extracted text of *every* document routed
-to it, which looks like successful extraction and is not. More than one `$IN` is
-refused for the same reason — the intent is ambiguous, so it fails closed.
-
-**There is deliberately no `remove`.** Deleting a document means deleting your own
-file and then running `sync`, so the tool never holds a destructive verb over files
-you own. A deleted original leaves a tombstoned row — the catalog's record that this
-was removed on purpose, which is distinct from `source_unavailable`, meaning a linked
-original is temporarily unreachable.
-
-> **Document text is data, not instructions.** `show` ships that warning inline with
-> the content. An imperative sentence inside a customer's contract addresses that
-> customer's engineers — it never redirects an AI-DLC workflow, grants permission, or
-> authorises a command.
-
-The `/aidlc-knowledge` skill is the same surface, typed as a command.
 
 ---
 
@@ -485,8 +399,8 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 
 ```
 ✓ bun installed (required for CLI tools and hooks)
-✓ aidlc-write-audit-log.ts present
-✓ aidlc-sync-workflow-state.ts present
+✓ aidlc-audit-logger.ts present
+✓ aidlc-sync-statusline.ts present
 ✓ aidlc-validate-state.ts present
 ✓ aidlc-log-subagent.ts present
 ✓ aidlc-session-start.ts present
@@ -500,11 +414,11 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 ✓ Hook drops: none recorded
 ✓ State matches last audit event (no drift)
 ✓ Cycle detection: 0 cycles
-✓ Orphan stage files: 33 graph entries all have files
+✓ Orphan stage files: 32 graph entries all have files
 ✓ Uncompiled stage files: 0 stage files missing from the compiled graph
-✓ Enabled plugins: all enabled (no selection); enabled stage counts: aidlc=33
-✓ Scope validation: 11 scopes valid
-✓ Schema validation: 33/33 stages valid
+✓ Enabled plugins: all enabled (no selection); enabled stage counts: aidlc=32
+✓ Scope validation: 9 scopes valid (29 advisories)
+✓ Schema validation: 32/32 stages valid
 ✓ Graph references: 122 artifacts + edges resolved
 ✓ Keyword overlap: no conflicts
 ✓ Rule drift: no team/project rule overlaps org policy
@@ -552,12 +466,6 @@ Findings come from the same shared `DoctorFinding` model the
 live `--doctor` uses, so the command and the report can never diverge. A remedy
 that names a recovery bypass (for example an `AIDLC_DISABLE_*` env var or an
 "archive your workspace" instruction) is always flagged as not safe to automate.
-
-`DOCUMENT_INDEXED`/`DOCUMENT_UPDATED`/`DOCUMENT_REMOVED` live in the space-level
-audit shard. `--doctor --export` reads that shard explicitly and combines it with
-the active intent's shards, so the report includes document history after a
-workflow starts while workflow-authority readers remain intent-scoped. `list` and
-`show` continue to read the DocumentKB catalog directly.
 
 **Safety.** The report never includes workspace source, raw state/audit/
 runtime-graph files, artifact/contribution/question/memory bodies, environment
@@ -655,7 +563,7 @@ Change the active scope of a running workflow.
 /aidlc --scope enterprise
 ```
 
-**Behavior:** Updates the scope configuration in `aidlc-state.md`, recalculates which stages should execute and which should be skipped, and logs a `SCOPE_CHANGED` audit event. Can be combined with `--depth`, `--test-strategy`, and `--review`; all supplied overrides are applied in the same change.
+**Behavior:** Updates the scope configuration in `aidlc-state.md`, recalculates which stages should execute and which should be skipped, and logs a `SCOPE_CHANGED` audit event. Can be combined with `--depth` to override the new scope's default depth.
 
 Refused under autonomous Construction (`Construction Autonomy Mode: autonomous`), the same rule as `recompose`: re-shaping the plan needs a human at the gate, and an unattended run has none. Switch to gated Construction first (`aidlc-bolt set-autonomy --mode gated`) or let the swarm finish.
 
@@ -701,7 +609,7 @@ Override the test volume strategy independently of depth.
 /aidlc --test-strategy comprehensive
 ```
 
-**Behavior:** Defaults to the current depth level when not specified, unless the scope declares its own override. When set independently, allows combinations like Standard depth (full artifacts) with Minimal testing (Nyquist model). Updates the `Test Strategy` field in `aidlc-state.md` and logs a `TEST_STRATEGY_CHANGED` audit event.
+**Behavior:** Defaults to the current depth level when not specified, unless the scope declares its own default (e.g., workshop defaults to Minimal). When set independently, allows combinations like Standard depth (full artifacts) with Minimal testing (Nyquist model). Updates the `Test Strategy` field in `aidlc-state.md` and logs a `TEST_STRATEGY_CHANGED` audit event.
 
 **Valid values:** `minimal`, `standard`, `comprehensive` (case-insensitive).
 
@@ -718,51 +626,6 @@ See [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md#the-3-test-strateg
 /aidlc --test-strategy minimal                         Minimal testing for active workflow
 /aidlc --depth standard --test-strategy minimal        Full artifacts, minimal tests
 /aidlc --scope bugfix --test-strategy comprehensive    Bugfix with thorough testing
-```
-
----
-
-### `/aidlc --review <class>` — Cap stage reviews for this run
-
-Set the per-run review override: a ceiling on how heavyweight the §12a stage
-reviews run for the active workflow.
-
-**Syntax:**
-
-```
-/aidlc --review adversarial
-/aidlc --review advisory
-/aidlc --review none
-```
-
-**Behavior:** Each reviewer-bearing stage declares a review class in its
-frontmatter — `adversarial` (the reviewer refutes the artifact and the lead
-fixes findings across up to `reviewer_max_iterations` passes) or `advisory`
-(one normal-flow review pass; findings are quoted verbatim at the approval gate
-for you to triage). The effective class per stage is the LOWEST of the stage's
-declaration, the scope's `review_cap` (bugfix, poc, classic, and workshop cap to
-`advisory`; express caps to `none`), and this override — so
-`--review advisory` turns every remaining adversarial loop into a single
-normal-flow decision-support pass, `--review none` skips
-reviewer dispatch entirely, and `--review adversarial` clears the override
-(it cannot raise a class above the stage declaration or the scope cap).
-Autonomous swarm construction is exempt: inside a Bolt the reviewer is the
-only pre-merge verification, so the declared class always applies there.
-Updates the `Review Override` field in `aidlc-state.md` and logs a
-`REVIEW_CLASS_CHANGED` audit event. It can be supplied when a workflow is
-born or alongside `--scope`; a same-as-current scope applies the review
-override as a config change instead of discarding it. For either class, a later
-output write that invalidates a terminal receipt permits one bounded recovery
-request at the next ordinal.
-
-**Valid values:** `adversarial`, `advisory`, `none` (case-insensitive).
-
-**Examples:**
-
-```
-/aidlc --review advisory              Single normal-flow pass, findings at the gate
-/aidlc --review none                  No stage reviews this run
-/aidlc --review adversarial           Clear the override (stage defaults apply)
 ```
 
 ---
@@ -803,9 +666,12 @@ Codex CLI.
 
 ### `aidlc-utility codekb-path` - resolve the code knowledge directory
 
-This is a **direct utility invocation**, not an `/aidlc codekb-path` command:
+This is a **direct utility invocation**, not an `/aidlc codekb-path` command.
+The native dispatcher exposes the same read-only query as
+`aidlc workspace codekb --repo <repo>`:
 
 ```bash
+aidlc workspace codekb --repo <repo>
 bun .claude/tools/aidlc-utility.ts codekb-path --repo <repo>
 bun .kiro/tools/aidlc-utility.ts codekb-path --repo <repo>
 bun .codex/tools/aidlc-utility.ts codekb-path --repo <repo>
@@ -866,10 +732,7 @@ the workspace root (see
 [Declaring the repo set](03-spaces-and-intents.md#declaring-the-repo-set-optional-manifest)):
 
 ```bash
-bun .claude/tools/aidlc-workspace-sync.ts [--force]
-bun .kiro/tools/aidlc-workspace-sync.ts [--force]
-bun .codex/tools/aidlc-workspace-sync.ts [--force]
-bun .aidlc/tools/aidlc-workspace-sync.ts [--force]
+aidlc __delegate workspace-sync [--force]
 ```
 
 It serializes reconciles with a workspace lock whose live owner is never reaped
@@ -926,8 +789,9 @@ settings are malformed instead of assuming every installed plugin is enabled;
 both hosts fall back when their proved registry source disappears. Kiro reports
 `host inventory unavailable` outside a hook that supplies the current plugin
 root. The check is always offline.
-`/aidlc plugin select [names]` is the public command. `select-plugins` is its
-direct utility form; it is not an `/aidlc select-plugins` command.
+`select-plugins` is a **direct utility invocation**, not an `/aidlc select-plugins`
+command. The native dispatcher exposes the same operation as
+`aidlc plugin select [names]`.
 `bun .claude/tools/aidlc-utility.ts select-plugins` prints the current selection
 (`all enabled (no selection)` when the `plugins` key is absent) and the known
 plugin names. Pass a comma-separated list to set it:
@@ -964,7 +828,7 @@ bun .claude/tools/aidlc-graph.ts ars --iae 0.30 --csu 0.80 --ve 0.40 --r 0.20 --
 
 ### `aidlc-graph validate-grid` - arbitrary-grid dependency check
 
-`bun .claude/tools/aidlc-graph.ts validate-grid --proposal <path> [--strict] [--project-type <t>] [--keywords <csv>]` validates an arbitrary `{"<stage>": "EXECUTE"|"SKIP"}` JSON grid. The proposal must name every compiled stage exactly once; missing stages, unknown stages, and invalid actions are errors. Lenient mode mirrors `validate-scope` (an off-path required producer is advisory); `--strict` hard-rejects it (the recompose posture). `--keywords` checks each granted keyword against the keywords existing scopes already claim: a collision is a hard error naming the incumbent scope (the composer runs this before writing gate-granted keywords). The result also carries `nearest_stock`: every graph/plugin-authored stock scope ranked by grid distance from the proposal (`{scope, diff, differs}`, ascending), with composer-authored scope entries excluded and missing or extra keys counted as differences. For front/report composition, the matched-vs-custom decision routes solely on this final proposal result (`diff <= 2` plus compatible depth), not a model recount or the earlier mechanical ARS screen. In-flight recomposition treats the ranking as advisory and preserves the running scope and plan. Exit 1 iff invalid; the JSON result lands on stdout.
+`bun .claude/tools/aidlc-graph.ts validate-grid --proposal <path> [--strict] [--project-type <t>] [--keywords <csv>]` validates an arbitrary `{"<stage>": "EXECUTE"|"SKIP"}` JSON grid. Lenient mode mirrors `validate-scope` (an off-path required producer is advisory); `--strict` hard-rejects it (the recompose posture). `--keywords` checks each granted keyword against the keywords existing scopes already claim: a collision is a hard error naming the incumbent scope (the composer runs this before writing gate-granted keywords). Exit 1 iff invalid; the JSON result lands on stdout.
 
 ### `aidlc-sensor` — inspect and fire Sensors
 
@@ -976,7 +840,7 @@ Sensors are deterministic checks that run after every `Write` or `Edit` to a sta
 | `describe <id>` | Print one Sensor's full manifest (command, default severity, `matches` glob, timeout) |
 | `fire <id> --stage <slug> --output-path <path>` | Run a Sensor against a file and emit a `SENSOR_FIRED` row plus its paired result row |
 
-A manual fire emits a `SENSOR_FIRED` audit row, then exactly one terminal row: `SENSOR_PASSED`, `SENSOR_FAILED`, or `SENSOR_BUDGET_OVERRIDE`. A failure writes a detail file under `<record>/.aidlc-sensors/<stage>/` (in the intent's record dir). Sensors are advisory — a Sensor failure is never a tool failure, so the command still exits 0. The six Sensors that ship with the framework are `claim-sources`, `required-sections`, `upstream-coverage`, `traceability`, `linter`, and `type-check`.
+A manual fire emits a `SENSOR_FIRED` audit row, then exactly one terminal row: `SENSOR_PASSED`, `SENSOR_FAILED`, or `SENSOR_BUDGET_OVERRIDE`. A failure writes a detail file under `<record>/.aidlc-sensors/<stage>/` (in the intent's record dir). Sensors are advisory — a Sensor failure is never a tool failure, so the command still exits 0. The five Sensors that ship with the framework are `claim-sources`, `required-sections`, `upstream-coverage`, `linter`, and `type-check`.
 
 ```
 bun .claude/tools/aidlc-sensor.ts list
@@ -1038,12 +902,12 @@ Pre-set the default scope for a project. Read from `.claude/settings.json` `env`
 ```json
 {
   "env": {
-    "AWS_AIDLC_DEFAULT_SCOPE": "classic"
+    "AWS_AIDLC_DEFAULT_SCOPE": "workshop"
   }
 }
 ```
 
-**Valid values:** `enterprise`, `feature`, `mvp`, `poc`, `bugfix`, `refactor`, `infra`, `security-patch`, `classic`, `workshop`, `express`.
+**Valid values:** `enterprise`, `feature`, `mvp`, `poc`, `bugfix`, `refactor`, `infra`, `security-patch`, `workshop`.
 
 **Precedence:** explicit CLI flag > keyword detection > `AWS_AIDLC_DEFAULT_SCOPE` > hard-coded fallback.
 

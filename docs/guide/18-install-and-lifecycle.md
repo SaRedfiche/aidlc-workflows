@@ -26,7 +26,7 @@ Windows PowerShell:
 ```powershell
 $installer = Join-Path $env:TEMP install-aidlc.ps1
 irm https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.ps1 -OutFile $installer
-& $installer -Harness claude
+& $installer --harness claude
 ```
 
 Windows installs a stable `aidlc.cmd` under
@@ -189,7 +189,7 @@ aidlc package verify ./aidlc-offline
 install.sh --from ./aidlc-offline --offline --harness claude
 ```
 
-Windows uses `install.ps1 -From .\aidlc-offline -Offline -Harness claude`.
+Windows uses `install.ps1 -From .\aidlc-offline -Offline --harness claude`.
 `--offline` or `AIDLC_OFFLINE=1` forbids sockets before mutation. Local init,
 rollback, versions listing, package verification, and plugin inspection still
 work.

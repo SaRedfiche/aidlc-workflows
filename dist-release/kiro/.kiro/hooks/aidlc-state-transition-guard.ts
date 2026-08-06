@@ -24,7 +24,7 @@ export const BLOCKED_STATE_TRANSITIONS = new Set([
   "park",
 ]);
 
-function maskMultilineQuotedStrings(command: string): string {
+function maskQuotedCommandSeparators(command: string): string {
   const chars = [...command];
   for (let i = 0; i < chars.length; i++) {
     const quote = chars[i];
@@ -41,9 +41,41 @@ function maskMultilineQuotedStrings(command: string): string {
       escaped = false;
     }
     if (end >= chars.length) end = chars.length - 1;
-    if (chars.slice(i, end + 1).includes("\n")) {
-      for (let j = i; j <= end; j++) {
+    const multiline = chars.slice(i, end + 1).includes("\n");
+    let commandSubDepth = 0;
+    for (let j = i; j <= end; j++) {
+      const startsCommandSub =
+        quote === '"' &&
+        chars[j] === "$" &&
+        chars[j + 1] === "(" &&
+        (j === 0 || chars[j - 1] !== "\\");
+      if (startsCommandSub) {
+        commandSubDepth++;
+        j++;
+        continue;
+      }
+      if (
+        quote === '"' &&
+        commandSubDepth > 0 &&
+        chars[j] === ")" &&
+        (j === 0 || chars[j - 1] !== "\\")
+      ) {
+        commandSubDepth--;
+        continue;
+      }
+      if (commandSubDepth > 0) {
+        // Double-quoted $(...) content is executable shell, not prose. Preserve
+        // its opening `(` anchor and body so lifecycle calls inside it remain
+        // visible to the command-position detector.
+        continue;
+      }
+      if (multiline) {
         if (chars[j] !== "\n") chars[j] = " ";
+      } else if (/[&|;({]/.test(chars[j])) {
+        // Keep ordinary quoted path/text characters so real invocations with a
+        // quoted script path still match, but quoted shell separators must
+        // never create a synthetic command-position anchor.
+        chars[j] = " ";
       }
     }
     i = end;
@@ -130,7 +162,7 @@ function maskFunctionDefinitions(command: string): string {
 
 function executableShellText(command: string): string {
   return maskFunctionDefinitions(
-    maskHeredocBodies(maskMultilineQuotedStrings(command)),
+    maskHeredocBodies(maskQuotedCommandSeparators(command)),
   );
 }
 
@@ -153,7 +185,40 @@ export function directStateTransition(command: string): string | null {
     const verb = match[1];
     if (BLOCKED_STATE_TRANSITIONS.has(verb)) return verb;
   }
+  const nativeInvocation =
+    /(?:^|&&|\|\||[;|(\n{])[ \t]*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:"[^"\n]*\/aidlc(?:\.exe)?"|'[^'\n]*\/aidlc(?:\.exe)?'|[^\s"';&|({]*aidlc(?:\.exe)?)[ \t]+(?:(?:__delegate)[ \t]+)?state[ \t]+([a-z][a-z0-9-]*)\b/g;
+  for (const match of executableShellText(command).matchAll(nativeInvocation)) {
+    const verb = match[1];
+    if (BLOCKED_STATE_TRANSITIONS.has(verb)) return verb;
+  }
   return null;
+}
+
+// True only for an executable command that can cross a stage/workflow lifecycle
+// boundary. Unlike isEngineToolCall(), this parser deliberately ignores command
+// text passed to echo/rg, heredoc bodies, multiline strings, and function
+// definitions: flushing subagent holdback is destructive if the apparent
+// lifecycle command is only prose.
+export function isLifecycleBoundaryCommand(command: string): boolean {
+  const invocation =
+    /(?:^|&&|\|\||[;|(\n{])[ \t]*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:[^\s"';&|({]+\/)?bun(?:\.exe)?(?:\s+run)?\s+(?:"[^"\n]*aidlc-(orchestrate|state|jump)\.ts"|'[^'\n]*aidlc-(orchestrate|state|jump)\.ts'|[^\s;&|]*aidlc-(orchestrate|state|jump)\.ts)\s+([a-z][a-z0-9-]*)\b/g;
+  for (const match of executableShellText(command).matchAll(invocation)) {
+    const tool = match[1] ?? match[2] ?? match[3];
+    const verb = match[4];
+    if (tool === "orchestrate" && verb === "report") return true;
+    if (tool === "state" && BLOCKED_STATE_TRANSITIONS.has(verb)) return true;
+    if (tool === "jump" && verb === "execute") return true;
+  }
+  const nativeInvocation =
+    /(?:^|&&|\|\||[;|(\n{])[ \t]*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:"[^"\n]*\/aidlc(?:\.exe)?"|'[^'\n]*\/aidlc(?:\.exe)?'|[^\s"';&|({]*aidlc(?:\.exe)?)[ \t]+(?:(?:__delegate)[ \t]+(orchestrate|state|jump)[ \t]+|(state|jump)[ \t]+)?([a-z][a-z0-9-]*)\b/g;
+  for (const match of executableShellText(command).matchAll(nativeInvocation)) {
+    const tool = match[1] ?? match[2] ?? "orchestrate";
+    const verb = match[3];
+    if (tool === "orchestrate" && (verb === "report" || verb === "park")) return true;
+    if (tool === "state" && BLOCKED_STATE_TRANSITIONS.has(verb)) return true;
+    if (tool === "jump" && verb === "execute") return true;
+  }
+  return false;
 }
 
 export async function run(input: string): Promise<number> {
@@ -163,7 +228,7 @@ export async function run(input: string): Promise<number> {
     if (!isClaudeCodeHookInput(raw)) return 0;
     parsed = raw;
   } catch {
-    return 0; // malformed stdin - fail open
+    return 0;
   }
   if (parsed.tool_name !== "Bash") return 0;
   const verb = directStateTransition(parsed.tool_input?.command ?? "");
@@ -175,10 +240,10 @@ export async function run(input: string): Promise<number> {
       "<awaiting-approval|approved|rejected|revised|completed|skipped>; use " +
       "aidlc-orchestrate.ts park to park, and next/jump for routing changes.\n",
   );
-  return 2; // harness PreToolUse reject contract: exit 2 + stderr blocks
+  return 2;
 }
 
 if (import.meta.main) {
-  if (process.stdin.isTTY) process.exit(0);
-  process.exit(await run(await Bun.stdin.text()));
+  const input = process.stdin.isTTY ? "" : await Bun.stdin.text();
+  process.exitCode = await run(input);
 }

@@ -111,6 +111,7 @@ export const TOOLS = {
   runnerGen: "aidlc-runner-gen.ts",
   runtime: "aidlc-runtime.ts",
   sensor: "aidlc-sensor.ts",
+  sensorClaimSources: "aidlc-sensor-claim-sources.ts",
   sensorLinter: "aidlc-sensor-linter.ts",
   sensorRequiredSections: "aidlc-sensor-required-sections.ts",
   sensorTypeCheck: "aidlc-sensor-type-check.ts",
@@ -120,6 +121,7 @@ export const TOOLS = {
   utility: "aidlc-utility.ts",
   validate: "aidlc-validate.ts",
   worktree: "aidlc-worktree.ts",
+  workspaceSync: "aidlc-workspace-sync.ts",
 } as const;
 
 export const SLASH_FLAG_ALIASES: readonly Alias[] = [
@@ -141,7 +143,7 @@ export const ROUTES: readonly Route[] = [
     group: "top",
     kind: "top-passthrough",
     classification: "passthrough",
-    verbs: ["next", "report", "park"],
+    verbs: ["next", "continue", "report", "park"],
     tool: TOOLS.orchestrate,
     ...PUBLIC_ENGINE,
     human: [
@@ -149,7 +151,7 @@ export const ROUTES: readonly Route[] = [
       { command: "report [args]", summary: "render the orchestrator report" },
       { command: "park [args]", summary: "park the current workflow" },
     ],
-    all: ["next [args]", "report [args]", "park [args]"],
+    all: ["next [args]", "continue <token>", "report [args]", "park [args]"],
   },
   {
     id: "top-compose",
@@ -751,6 +753,17 @@ export const ROUTES: readonly Route[] = [
     targets: { detect: "detect", codekb: "codekb-path" },
   },
   {
+    id: "workspace-sync",
+    group: "workspace",
+    kind: "routing-only",
+    classification: "routing-only",
+    verbs: ["__delegate"],
+    tool: TOOLS.workspaceSync,
+    ...HIDDEN_ENGINE,
+    networkPolicy: "required",
+    all: [],
+  },
+  {
     id: "delegate",
     group: "top",
     kind: "routing-only",
@@ -1046,6 +1059,7 @@ function handleRouteOnly(route: Route, argv: string[]): Action {
       "runner-gen": TOOLS.runnerGen,
       runtime: TOOLS.runtime,
       sensor: TOOLS.sensor,
+      "sensor-claim-sources": TOOLS.sensorClaimSources,
       "sensor-linter": TOOLS.sensorLinter,
       "sensor-required-sections": TOOLS.sensorRequiredSections,
       "sensor-type-check": TOOLS.sensorTypeCheck,
@@ -1055,6 +1069,7 @@ function handleRouteOnly(route: Route, argv: string[]): Action {
       utility: TOOLS.utility,
       validate: TOOLS.validate,
       worktree: TOOLS.worktree,
+      "workspace-sync": TOOLS.workspaceSync,
     };
     const tool = byStem[name];
     return tool
@@ -1105,6 +1120,7 @@ function resolveAlias(argv: string[]): Action | undefined {
   }
   if (head === "__sensor-script") {
     const scripts: Record<string, string> = {
+      "claim-sources": TOOLS.sensorClaimSources,
       linter: TOOLS.sensorLinter,
       "required-sections": TOOLS.sensorRequiredSections,
       "type-check": TOOLS.sensorTypeCheck,
@@ -1330,6 +1346,8 @@ async function loadDelegate(tool: string): Promise<DelegateModule | null> {
       return import("./aidlc-runtime.ts");
     case TOOLS.sensor:
       return import("./aidlc-sensor.ts");
+    case TOOLS.sensorClaimSources:
+      return import("./aidlc-sensor-claim-sources.ts");
     case TOOLS.sensorLinter:
       return import("./aidlc-sensor-linter.ts");
     case TOOLS.sensorRequiredSections:
@@ -1348,6 +1366,8 @@ async function loadDelegate(tool: string): Promise<DelegateModule | null> {
       return import("./aidlc-validate.ts");
     case TOOLS.worktree:
       return import("./aidlc-worktree.ts");
+    case TOOLS.workspaceSync:
+      return import("./aidlc-workspace-sync.ts");
     default:
       return null;
   }
@@ -1381,6 +1401,39 @@ let bufferedStdin: string | null = null;
 async function readStdin(): Promise<string> {
   if (bufferedStdin === null) bufferedStdin = await Bun.stdin.text();
   return bufferedStdin;
+}
+
+async function readStdinWithTimeout(timeoutMs: number): Promise<string> {
+  return await new Promise<string>((resolve) => {
+    const chunks: Buffer[] = [];
+    let settled = false;
+    let timeout: ReturnType<typeof setTimeout>;
+    const cleanup = () => {
+      clearTimeout(timeout);
+      process.stdin.off("data", onData);
+      process.stdin.off("end", onEnd);
+      process.stdin.off("error", onError);
+    };
+    const finish = (value: string) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+    const onData = (chunk: Buffer | string) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    };
+    const onEnd = () => finish(Buffer.concat(chunks).toString("utf-8"));
+    const onError = () => finish("");
+    timeout = setTimeout(() => {
+      process.stdin.pause();
+      finish("");
+    }, timeoutMs);
+    process.stdin.on("data", onData);
+    process.stdin.once("end", onEnd);
+    process.stdin.once("error", onError);
+    process.stdin.resume();
+  });
 }
 
 async function withProjectDir(
@@ -1445,9 +1498,25 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
       text(2, `aidlc adapter ${action.harness} ${action.target}: adapter does not export run(target, input, extraArgs)\n`);
       return 1;
     }
-    const input = action.harness === "kiro-ide"
-      ? (bufferedStdin ?? "")
-      : await readStdin();
+    let input = "";
+    if (action.harness !== "kiro-ide") {
+      input = await readStdin();
+    } else if (action.target === "audit-and-sensors" || action.target === "log-subagent") {
+      // Mirror the adapter entry point's dual-generation channel contract.
+      // IDE 0.12 provides USER_PROMPT and leaves stdin open forever, so consume
+      // a non-empty env payload immediately. IDE 1.x leaves USER_PROMPT empty
+      // and writes+closes stdin; the timeout is only a broken-channel ceiling.
+      const legacyPayload = process.env.USER_PROMPT ?? "";
+      if (legacyPayload.trim().length > 0) {
+        input = legacyPayload;
+      } else if (!process.stdin.isTTY) {
+        // AIDLC_IDE_STDIN_TIMEOUT_MS mirrors the adapter's test seam so both
+        // entry points share one contract.
+        const override = Number(process.env.AIDLC_IDE_STDIN_TIMEOUT_MS ?? "");
+        const ceiling = Number.isFinite(override) && override > 0 ? override : 2000;
+        input = await readStdinWithTimeout(ceiling);
+      }
+    }
     return await mod.run(action.target, input, action.extraArgs);
   } finally {
     if (previousHarness === undefined) delete process.env.AIDLC_HARNESS_DIR;
@@ -1611,6 +1680,7 @@ export function routePolicyFor(argv: readonly string[]): Route | null {
         space: "space",
         "space-create": "space",
         "codekb-path": "workspace",
+        "codekb-scope-diff": "workspace",
         detect: "workspace",
         "select-plugins": "plugin",
         "plugin-list": "plugin",
@@ -1633,6 +1703,8 @@ export function routePolicyFor(argv: readonly string[]): Route | null {
       if (routeId) return routeById(routeId);
       return routeById("delegate");
     }
+    if (delegate === "workspace-sync") return routeById("workspace-sync");
+    if (delegate === "sensor-claim-sources") return routeById("sensor");
     const toolByDelegate: Readonly<Record<string, string>> = {
       audit: TOOLS.audit,
       bolt: TOOLS.bolt,
@@ -1644,6 +1716,7 @@ export function routePolicyFor(argv: readonly string[]): Route | null {
       "runner-gen": TOOLS.runnerGen,
       runtime: TOOLS.runtime,
       sensor: TOOLS.sensor,
+      "sensor-claim-sources": TOOLS.sensorClaimSources,
       "sensor-linter": TOOLS.sensorLinter,
       "sensor-required-sections": TOOLS.sensorRequiredSections,
       "sensor-type-check": TOOLS.sensorTypeCheck,
@@ -1652,6 +1725,7 @@ export function routePolicyFor(argv: readonly string[]): Route | null {
       swarm: TOOLS.swarm,
       validate: TOOLS.validate,
       worktree: TOOLS.worktree,
+      "workspace-sync": TOOLS.workspaceSync,
     };
     const tool = toolByDelegate[delegate ?? ""];
     if (!tool) return routeById("delegate");
@@ -1994,6 +2068,11 @@ async function withRoutePolicy(route: Route, argv: readonly string[], run: () =>
 export async function main(argv: string[]): Promise<void> {
   process.exitCode = 0;
   bufferedStdin = null;
+  if (argv.length === 1 && argv[0] === "--internal-metrics-send") {
+    const metrics = await import("./aidlc-metrics.ts");
+    await metrics.sendMetricFromStdin();
+    return;
+  }
   if (import.meta.url.includes("/$bunfs/") && !process.env.AIDLC_HARNESS_DIR) {
     // Compiled, no explicit harness: discover the project install from its
     // shipped stamp/harness metadata. Module-relative derivation cannot work

@@ -18,7 +18,12 @@
     "execute_bash": {
       "allowedCommands": [
         "aidlc .*",
-        "date -u .*"
+        "date -u( .*)?"
+      ],
+      "deniedCommands": [
+        "([^\\s]*/)?rm( [^\\s]+)* -[A-Za-z]*[rR][A-Za-z]*( .*)?",
+        "([^\\s]*/)?rm( [^\\s]+)* --recursive( .*)?",
+        "([^\\s]*/)?git( -[^\\s]+( (\"[^\"]*\"|'[^']*'|[^\\s]+))?)* push( .*)?"
       ]
     },
     "fs_write": {
@@ -28,11 +33,8 @@
     }
   },
   "resources": [
-    "file://.kiro/agents/aidlc-architecture-reviewer-agent.md",
-    "file://.kiro/knowledge/aidlc-architecture-reviewer-agent/*.md",
     "file://.kiro/knowledge/aidlc-shared/*.md",
     "file://aidlc/spaces/default/memory/**/*.md"
   ],
-  "hooks": {},
-  "model": "claude-sonnet-4.5"
+  "hooks": {}
 }

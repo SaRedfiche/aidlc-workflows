@@ -9,7 +9,7 @@
 // stage graph (data/stage-graph.json), then emits EXACTLY ONE typed Directive
 // (JSON) to stdout. `next` mutates no workflow state itself (state md5 is
 // unchanged across a `next` call) — including birth: on a fresh workspace it
-// NAMES the deterministic `intent-create` move via a print directive (the
+// NAMES the deterministic `intent-birth` move via a print directive (the
 // read-only-engine invariant), and the conductor runs that separate tool. The
 // directive's `kind` tells the conductor the single move to make next; the
 // conductor relays human choices
@@ -92,54 +92,33 @@ import {
   type LoadSteeringDirective,
   type ParkedDirective,
   type PrintDirective,
-  type ProtocolModule,
   type RunStageDirective,
-  type RunStageWave,
-  type RunStageWaveEntry,
   validateDirective,
 } from "./aidlc-directive.ts";
 import {
   activeSpace,
-  ActiveDirectiveLockContendedError,
-  advanceCopilotContinuation,
-  activeUnitCheckpoint,
-  artifactFilename,
   auditBlockField,
   type CheckboxLine,
   checkSummaryConfirmationEvidence,
-  clearActiveDirectiveMarker,
   codekbRepoName,
-  copilotDirectiveCommitRequired,
-  currentUnitLifecycleMode,
   errorMessage,
   filterProducesByKind,
   firstInScopeStageOfPhase,
-  freshReviewReceipts,
   getField,
   intentRepos,
-  inspectCopilotContinuation,
   isPerUnitStage,
-  isRegularFile,
   listIntents,
   loadScopeMetadata,
   loadScopeMetadataAll,
-  resolveReviewClass,
   loadScopeMapping,
   nextInScopeStage,
   parseCheckboxes,
-  type KnowledgeCommand,
-  parseKnowledgeCommand,
-  type PluginCommand,
-  parsePluginCommand,
   parseStateStageSuffixes,
   PHASE_NUMBERS,
   PHASES,
   parseWorkspaceCommand,
   READ_ONLY_FLAGS,
   readAllAuditShards,
-  recordHookDrop,
-  markEngineTouch,
-  markActiveDirectiveResumeWaiting,
   relativeCodekbDir,
   relativeRecordDir,
   relativeSpaceRecordPrefix,
@@ -149,19 +128,14 @@ import {
   scopeCostSummary,
   selectionAwareDefaultScope,
   resolveDefaultScope,
-  DEFAULT_SCOPE,
   type StageEntry,
   stateFilePath,
   swarmConvergedUnits,
-  unitCompletedReceipts,
-  unitLifecycleReceiptsInUse,
   toPosix,
   validScopes,
   harnessDir,
   type WorkspaceCommand,
-  writeActiveDirectiveMarker,
   workspaceCommandUtilityArgv,
-  classifyStateVersion,
 } from "./aidlc-lib.ts";
 import {
   type Consume,
@@ -176,7 +150,11 @@ import {
 // import is safe (aidlc-utility.ts main() runs only under import.meta.main,
 // and utility never imports this module - no cycle).
 import { inferScopeFromText } from "./aidlc-utility.ts";
-import { resolveHarnessPath, resolveHarnessRoot } from "./aidlc-runtime-paths.ts";
+import {
+  aidlcToolInvocation,
+  resolveHarnessPath,
+  resolveHarnessRoot,
+} from "./aidlc-runtime-paths.ts";
 import {
   readRuleBundle,
   rulesContentEntries,
@@ -193,12 +171,11 @@ function loadStateFileIfPresent(projectDir: string): string | null {
 }
 
 // The default scope when neither the state file, a --scope flag, nor the
-// AWS_AIDLC_DEFAULT_SCOPE env var supplies one lives in aidlc-lib.ts
-// (DEFAULT_SCOPE, imported above) so exactly one constant plus the env var
-// control the implicit default everywhere. Mirrors the prose orchestrator's
-// freeform-fallback default (SKILL.md detect-scope fallback).
-// selectionAwareDefaultScope() maps it to the sole enabled plugin's
-// nominated default on a plugin-only install where it is deselected.
+// AWS_AIDLC_DEFAULT_SCOPE env var supplies one. Mirrors the prose
+// orchestrator's freeform-fallback default (SKILL.md detect-scope fallback).
+// selectionAwareDefaultScope() maps this to the sole enabled plugin's
+// nominated default on a plugin-only install where "feature" is deselected.
+const DEFAULT_SCOPE = "feature";
 
 // READ_ONLY_FLAGS (--status/--help/--doctor/--version) and the shared workspace
 // parser (space/space-create/intent) are the terminal-command sources of truth
@@ -215,44 +192,15 @@ function loadStateFileIfPresent(projectDir: string): string | null {
 
 // --- Directive emission ---
 
-interface PreparedEmission {
-  transported: Directive; serialized: string; resultSha256: string; projectDir?: string;
-  marker?: {
-    kind: "load-steering" | "run-stage"; stage: string; unit?: string;
-    part?: number; parts?: number; continue_token?: string; state_sha256: string;
-  };
-}
-
-let engineInvocation: { attemptId?: string; commandKind: "next" | "continue" | "report" | "park"; commandSha256: string } | null = null;
-
 // Print exactly one directive as JSON to stdout, after validating it against
 // the frozen contract. A malformed directive is a hard error (clean
 // boundaries), never a silent miss — we exit non-zero so a wiring bug surfaces
 // loudly rather than emitting a lie the conductor would act on.
-function prepareEmission(directive: Directive): PreparedEmission {
-  const route =
-    directive.kind === "run-stage" ? runStageRoutes.get(directive) : undefined;
+function emit(directive: Directive): void {
   const transported =
-    directive.kind === "run-stage" && route
-      ? transportRunStage(directive, route)
+    directive.kind === "run-stage" && runStageRoutes.has(directive)
+      ? transportRunStage(directive, runStageRoutes.get(directive)!)
       : directive;
-  // Per-unit Construction beats: `unit` is attached by callers after the
-  // run-stage is built, so the builder's stage-entry line is wrong here (the
-  // stage was entered on the first unit, not on this one). Every path that sets
-  // `unit` funnels through here - stage-major, unit-major, the swarm settle, and
-  // the continue-token rehydration - so this is the one place the rule can hold.
-  //
-  // Silence was the original answer and it did not survive contact: a moment
-  // with no words is a moment the conductor fills, and what it reaches for is
-  // the loop's own bookkeeping (which pass this is, what the gate boolean now
-  // says). So a building beat gets ONE short line naming the two things that are
-  // real to the user: the stage and the unit. The settle beat stays silent
-  // because the gate ritual immediately owns that turn.
-  if (transported.kind === "run-stage" && transported.unit !== undefined) {
-    const line = narratePerUnitBeat(transported);
-    if (line === null) delete transported.narration;
-    else transported.narration = line;
-  }
   const result = validateDirective(transported);
   if (!result.valid) {
     console.error(
@@ -267,90 +215,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
     );
     process.exit(1);
   }
-  let marker: PreparedEmission["marker"];
-  if ((transported.kind === "load-steering" || transported.kind === "run-stage") && route) {
-    const markerStateHash =
-      route.stateHash ??
-      (
-        directive.kind === "run-stage" && directive.single === true &&
-          existsSync(stateFilePath(route.codekbCtx.projectDir))
-          ? sha256(readFileSync(stateFilePath(route.codekbCtx.projectDir), "utf-8"))
-          : null
-      );
-    if (markerStateHash) {
-      marker = {
-        kind: transported.kind,
-        stage: transported.stage,
-        ...(directive.kind === "run-stage" && directive.unit ? { unit: directive.unit } : {}),
-        ...(transported.kind === "load-steering"
-          ? {
-              part: transported.part,
-              parts: transported.parts,
-              continue_token: transported.continue_token,
-            }
-          : {}),
-        state_sha256: markerStateHash,
-      };
-    }
-  }
-  return {
-    transported,
-    serialized,
-    resultSha256: sha256(serialized),
-    ...(route ? { projectDir: route.codekbCtx.projectDir } : {}),
-    ...(marker ? { marker } : {}),
-  };
-}
-
-function writePrepared(prepared: PreparedEmission): void {
-  process.stdout.write(`${prepared.serialized}\n`);
-}
-
-function emit(directive: Directive): void {
-  const prepared = prepareEmission(directive);
-  if (prepared.marker) {
-    const projectDir = prepared.projectDir;
-    let requireCopilotCommit = !!projectDir && engineInvocation?.commandKind === "next" &&
-      copilotDirectiveCommitRequired(projectDir, prepared.marker.state_sha256);
-    try {
-      if (projectDir) {
-        const publication = writeActiveDirectiveMarker(projectDir, prepared.marker, {
-          ...(engineInvocation?.attemptId ? { attemptId: engineInvocation.attemptId } : {}),
-          ...(engineInvocation ? { commandKind: engineInvocation.commandKind } : {}),
-          ...(engineInvocation ? { commandSha256: engineInvocation.commandSha256 } : {}),
-          resultSha256: prepared.resultSha256,
-          requireCopilotCommit,
-        });
-        if (publication === "stale-attempt") {
-          recordHookDrop(projectDir, "active-directive", "tracked fresh next attempt was superseded before publication");
-          writePrepared(prepareEmission(errorDirective(
-            "This tracked `next` attempt is stale or superseded, so its prepared result was not issued. Run a fresh `next` in the current Copilot session.",
-          )));
-          return;
-        }
-        if (requireCopilotCommit && publication !== "copilot-committed") {
-          recordHookDrop(projectDir, "active-directive", "fresh Copilot next did not commit its directive");
-          writePrepared(prepareEmission(errorDirective(
-            "The fresh Copilot directive could not be published, so no work directive was issued. Retry `next`; if coordination remains busy, run `/aidlc --doctor`.",
-          )));
-          return;
-        }
-      }
-    } catch (e) {
-      if (projectDir) {
-        requireCopilotCommit ||= engineInvocation?.commandKind === "next" &&
-          copilotDirectiveCommitRequired(projectDir, prepared.marker.state_sha256);
-        recordHookDrop(projectDir, "active-directive", errorMessage(e));
-      }
-      if (requireCopilotCommit) {
-        writePrepared(prepareEmission(errorDirective(
-          "The fresh Copilot directive could not be published, so no work directive was issued. Retry `next`; if coordination remains busy, run `/aidlc --doctor`.",
-        )));
-        return;
-      }
-    }
-  }
-  writePrepared(prepared);
+  console.log(serialized);
 }
 
 // --- Composing sibling CLI tools ---
@@ -426,207 +291,10 @@ function toolErrorMessage(run: ToolRun): string {
   return raw.length > 0 ? raw : run.stdout.trim();
 }
 
-// --- Narration (the spoken line the conductor relays) ---
-//
-// Every line below is authored HERE, next to the facts, because the engine knows
-// them deterministically and the conductor does not have to guess. Left to
-// improvise, the conductor narrates what it can see - the tool it ran, the kind
-// it received, the routing it is following - which is the machinery, not the
-// user's project. These lines describe the work instead.
-//
-// House style for anything added here:
-//   - One sentence. Two only when the second one tells the user what to expect.
-//   - About the user's project, never about this framework's parts. No internal
-//     nouns: the reader has no engine, no directive, no dispatch, no conductor.
-//   - Present tense, first person, plain. "Setting up ...", "Starting ...".
-//   - Name real things by their real names: stage display names, scope names,
-//     and file paths are the user's landmarks and stay verbatim.
-//   - Say nothing a reader would have to already know the framework to parse.
-//
-// A line is deliberately ABSENT for beats that should be silent: rule-bundle
-// transport, per-unit iteration beats, and anything the user did not ask about.
-// Absence is the instruction to say nothing, and it is the common case.
-
-// The user-facing name for a phase. The graph's phase tokens are SHOUTED
-// machine values (IDEATION); spoken prose wants ordinary words.
-function phaseInWords(phase: string): string {
-  const normalized = phase.trim().toLowerCase();
-  if (normalized.length === 0) return "";
-  return normalized;
-}
-
-// The first run-stage of a workflow is the one place a spoken line can set the
-// whole frame: what kind of plan is running, and what the first real step is.
-// Later stages get the shorter per-stage line.
-function narrateStageEntry(
-  node: GraphStage,
-  scope: string,
-  isFirst: boolean,
-  gate: GateValue,
-): string {
-  const stageName = node.name;
-  if (isFirst) {
-    return (
-      `Starting the ${scope} plan for this project. First step is ${stageName}, ` +
-      `and I will stop for your review before anything is final.`
-    );
-  }
-  // Entering the build phase names a piece of vocabulary the user is about to
-  // see in their own artifacts (bolt-plan.md, and every later beat of this
-  // phase), so the line that introduces it defines it in the same breath. The
-  // definition is delivery-planning's own, said the way a colleague would say
-  // it. Said once, on the phase boundary; later Construction stages get the
-  // ordinary per-stage line.
-  if (isFirstConstructionStage(node, scope)) {
-    return (
-      `Starting the first Bolt now: one build pass over the code, tests and ` +
-      `checks for a piece of the work. First step is ${stageName}.`
-    );
-  }
-  // A non-gating stage runs straight through, so the line says so rather than
-  // leaving the user waiting for a prompt that is not coming.
-  if (gate === false) {
-    return `Next up: ${stageName}. This one runs through without needing your input.`;
-  }
-  // Who is in the room. On an inline stage the session adopts the lead's
-  // perspective and any supports as further perspectives, and that is worth one
-  // clause: the user is meeting colleagues by trade, which is a fact about their
-  // project's work, where "loaded the persona files" is a fact about ours.
-  return `Now working on ${stageName}, ${peopleClause(node)}.`;
-}
-
-// The trades participating in an inline stage, phrased as a person would:
-// "wearing the product manager hat, with the architect on hand". Falls back to
-// the phase clause when no trade resolves, so a stage never gets a broken line.
-function peopleClause(node: GraphStage): string {
-  const lead = roleInWords(node.lead_agent);
-  if (!lead) return `in the ${phaseInWords(node.phase)} phase`;
-  const supports = (node.support_agents ?? [])
-    .map(roleInWords)
-    .filter((trade) => trade.length > 0);
-  if (supports.length === 0) return `wearing the ${lead} hat`;
-  const list =
-    supports.length === 1
-      ? supports[0]
-      : `${supports.slice(0, -1).join(", ")} and ${supports[supports.length - 1]}`;
-  return `wearing the ${lead} hat, with the ${list} on hand`;
-}
-
-// A dispatched stage hands the work to a named specialist. The user cares that
-// someone with a particular focus is doing it, not that a Task call happened.
-function narrateSpecialistStage(node: GraphStage): string {
-  const role = roleInWords(node.lead_agent);
-  return role
-    ? `Bringing in the ${role} to work on ${node.name}.`
-    : `Now working on ${node.name}.`;
-}
-
-// The spoken line for ONE iteration of a per-unit Construction stage. Called
-// from emit(), the single choke point every unit-carrying directive passes
-// through, and deliberately the SHORTEST line in this file: the user is watching
-// the same stage name go past once per piece of work, so anything longer reads
-// as repetition. Two facts, both theirs: the stage, and which piece of their
-// work it is running for.
-//
-// null = say nothing. That is the settle beat (gate not false), where the stage
-// is fully built and the very next thing the conductor does is present the gate
-// ritual, which owns its own words. A line here would preface that with a
-// re-announcement of a stage the user has already watched run.
-//
-// The placeholder unit (a scope with no unit DAG) is not a real name, so it
-// falls back to the stage alone rather than saying the token out loud.
-function narratePerUnitBeat(directive: RunStageDirective): string | null {
-  if (directive.gate !== false) return null;
-  const unit = directive.unit;
-  if (unit === undefined || unit === UNIT_NAME_PLACEHOLDER) return null;
-  const stageName = nodeForSlug(directive.stage)?.name ?? directive.stage;
-  return `Now working on ${unit}: the ${stageName} pass.`;
-}
-
-// True when `node` is the FIRST in-scope Construction stage, i.e. the stage the
-// workflow crosses the Construction boundary on. Reuses the same resolution the
-// walking-skeleton gate uses (isSkeletonGateStage), so "the first Bolt" means
-// the same stage to the spoken line as it does to the gate.
-function isFirstConstructionStage(node: GraphStage, scope: string): boolean {
-  return isSkeletonGateStage(node, scope);
-}
-
-// Turn an agent filename into the TRADE a person would say out loud:
-// aidlc-architect-agent -> "architect", aidlc-product-agent -> "product manager".
-// The user is meeting a colleague, so the words are the ones a colleague would
-// use about themselves; a slug fragment like "product" or "aws platform" is not
-// one. Unmapped names fall back to the de-slugged fragment, and an unfamiliar
-// shape returns "" so the caller can drop the role clause rather than invent it.
-const TRADE_BY_ROLE: Readonly<Record<string, string>> = {
-  product: "product manager",
-  "product lead": "product lead",
-  design: "designer",
-  delivery: "delivery lead",
-  architect: "architect",
-  "architecture reviewer": "architecture reviewer",
-  "aws platform": "platform engineer",
-  compliance: "compliance specialist",
-  devsecops: "security engineer",
-  developer: "developer",
-  quality: "quality engineer",
-  "pipeline deploy": "release engineer",
-  operations: "operations engineer",
-};
-
-function roleInWords(agent: string): string {
-  const match = /^aidlc-(.+)-agent$/.exec(agent.trim());
-  if (!match) return "";
-  const fragment = match[1].replaceAll("-", " ");
-  return TRADE_BY_ROLE[fragment] ?? fragment;
-}
-
-// Record that the engine was ADVANCED this turn, for the Stop hook's
-// conversational carve-out on transcript-free harnesses (Kiro, opencode). The
-// hook compares .aidlc-engine-touch's mtime against .aidlc-human-turn's: newer
-// engine => the conductor engaged the workflow => a bail mid-loop must still be
-// nudged; older => the human's last prompt was answered as pure chat.
-//
-// TWO exclusions keep the marker honest, and BOTH are load-bearing:
-//   1. The Stop hook's OWN `next` probe. markEngineTouch is a no-op when
-//      STOP_HOOK_PROBE_ENV is set (aidlc-lib.ts). Without it the hook's own
-//      consultation would refresh the marker on every stop, the predicate would
-//      be permanently false, and the carve-out would be silently dead code.
-//   2. Read-only routing (--status / --doctor / --help / --version, and the
-//      workspace verbs). These carry no workflow intent, so counting them as
-//      engagement would make "what's my status?" a non-conversational turn.
-//      isEngineToolCall exempts the same read-only flags, so the two predicates
-//      agree HERE — but they do not agree everywhere: the marker is blind to
-//      aidlc-jump / aidlc-bolt / aidlc-swarm and the mutating aidlc-state verbs,
-//      which the transcript predicate does count. See the coverage-gap note on
-//      markEngineTouch in aidlc-lib.ts; do not restate this as full parity.
-// Advisory throughout: a marker failure must never fail an engine invocation.
-function touchEngineMarker(projectDir: string | undefined): void {
-  try {
-    markEngineTouch(resolveProjectDir(projectDir));
-  } catch {
-    /* advisory - the marker is a Stop-hook optimisation, never a hard dependency */
-  }
-}
-
 // --- Terminal-directive constructors (the non-run-stage kinds) ---
 
 function askDirective(question: string): AskDirective {
   return { kind: "ask", question };
-}
-
-function newWorkRoutingAskDirective(
-  question: string,
-  description: string,
-  proposedScope: string,
-): AskDirective {
-  return {
-    kind: "ask",
-    ask_type: "new-work-routing",
-    response_route: "next",
-    question,
-    new_work_description: description,
-    proposed_scope: proposedScope,
-  };
 }
 
 function printDirective(message: string): PrintDirective {
@@ -635,19 +303,6 @@ function printDirective(message: string): PrintDirective {
 
 function errorDirective(message: string): ErrorDirective {
   return { kind: "error", message };
-}
-
-// State-schema-version guard. The classifier (aidlc-lib.ts
-// `classifyStateVersion`) is the single source of truth for parsing and
-// classifying `- **State Version**: N` lines; runtime (next/report) and doctor
-// call it the same way so they can never disagree on whether a state is
-// unparseable / past / future / ok. staleStateVersionError() is the runtime
-// adapter: it returns the classifier's message on any incompatible verdict and
-// null on `ok`, so next/report can emit the message as an errorDirective
-// before any workflow-cursor read/advance.
-function staleStateVersionError(stateContent: string): string | null {
-  const verdict = classifyStateVersion(stateContent);
-  return verdict.kind === "ok" ? null : verdict.message;
 }
 
 function shellArg(value: string): string {
@@ -659,15 +314,7 @@ function shellArg(value: string): string {
 // the slug it parked at; the Stop hook treats `parked` as a terminal allow so
 // the conductor can end its turn at a clean inter-stage boundary.
 function parkedDirective(reason: string, stage: string): ParkedDirective {
-  return {
-    kind: "parked",
-    reason,
-    stage,
-    // Parking is the one stop that a user could mistake for a crash, so the
-    // spoken line says the work is safe and names the way back in.
-    narration:
-      "Pausing here with everything saved. Run `/aidlc --resume` when you want to pick it back up.",
-  };
+  return { kind: "parked", reason, stage };
 }
 
 // The one-line ceremony preview for a scope, deterministic from the compiled
@@ -693,21 +340,17 @@ interface ParsedFlags {
   phase?: string;
   depth?: string;
   testStrategy?: string;
-  review?: string; // --review <adversarial|advisory|none>: per-run review-class override
   readOnly?: string; // the matched read-only flag, if any
   readOnlyArgs?: string[]; // allowlisted trailing args for the read-only flag (e.g. --doctor --export --output <dir>)
   resume?: boolean; // --resume: re-enter an existing workflow (resume choice)
   single?: boolean; // --single: run ONE stage under a synthetic workflow id, never touching the main pointer
-  newIntent?: boolean; // --new-intent: the conductor confirmed new-work alongside an active intent → emit the SAME birth directive (with the --label seam) the fresh-start path uses, instead of constructing intent-create from SKILL.md prose
+  newIntent?: boolean; // --new-intent: the conductor confirmed new-work alongside an active intent → emit the SAME birth directive (with the --label seam) the fresh-start path uses, instead of constructing intent-birth from SKILL.md prose
   intent?: string; // freeform request text (no leading --flag)
   workspaceCommand?: WorkspaceCommand; // leading workspace command (space/space-create/intent)
-  pluginCommand?: Exclude<PluginCommand, { kind: "not-plugin" }>; // leading plugin noun: terminal list/sync/select/help/error
-  knowledgeCommand?: Exclude<KnowledgeCommand, { kind: "not-knowledge" }>; // leading knowledge noun: terminal DocumentKB verbs/help/error
   compose?: boolean; // leading `compose` verb: force the composer (front or in-flight)
   newScope?: boolean; // --new-scope: force the composer to SYNTHESIZE a custom scope even when a stock scope matches
   report?: string; // --report <path>: compose from a scan report (the composer triages the file)
   projectDir?: string;
-  parseError?: string;
 }
 
 // Extract the flags the `next` decision rule consumes. --project-dir is pulled
@@ -727,10 +370,6 @@ function parseNextFlags(args: string[]): ParsedFlags {
   if (args.length === 1 && (args[0] === "help" || args[0] === "-h")) {
     return { readOnly: "--help" };
   }
-  const pluginCommand = parsePluginCommand(args);
-  if (pluginCommand.kind !== "not-plugin") return { pluginCommand };
-  const knowledgeCommand = parseKnowledgeCommand(args);
-  if (knowledgeCommand.kind !== "not-knowledge") return { knowledgeCommand };
   // Leading workspace nouns own the command. Any later read-only-looking token
   // is part of that workspace command's argv, not a mode switch, because the
   // public grammar promises leading-token semantics.
@@ -799,14 +438,6 @@ function parseNextFlags(args: string[]): ParsedFlags {
     } else if (a === "--test-strategy" && i + 1 < args.length) {
       flags.testStrategy = args[i + 1];
       i++;
-    } else if (a === "--review") {
-      const value = args[i + 1];
-      if (value === undefined || value.startsWith("--")) {
-        flags.parseError = "--review requires <adversarial|advisory|none>.";
-      } else {
-        flags.review = value;
-        i++;
-      }
     } else if (a === "--new-scope") {
       flags.newScope = true;
     } else if (a === "--report" && i + 1 < args.length) {
@@ -842,38 +473,25 @@ function parseNextFlags(args: string[]): ParsedFlags {
   return flags;
 }
 
-// Appended to the `done` reason emitted when the ACTIVE intent has no in-scope
-// stage left (a completed workflow). Without this, a scope-runner's forwarding
-// loop ("repeat until done") dead-ends here with no cue that new, unrelated
-// work has an escape hatch. This is a HINT to the conductor, not an instruction
-// to act: starting a second intent is still gated on the SKILL's
-// recognise-vs-continue judgement plus the human "yes" offer (never auto-birth).
-// The leading space lets callers concatenate it onto their own reason text.
-const NEW_WORK_HINT =
-  " If this input is genuinely NEW, unrelated work (not a follow-up to the " +
-  "completed intent), don't stop here: offer to start a second intent, and on " +
-  "the human's yes run `next --new-intent --scope <scope> \"<text>\"` (see the " +
-  "SKILL's new-work offer, never auto-birth).";
-
 // The workflow-birth print for a resolved scope on a fresh workspace (no intent
 // record yet). A user who described what to build — `/aidlc "build the auth
 // service"`, the bare positional `next bugfix`, or `next --scope bugfix` — asked
 // to START a workflow; there is nothing to run until an intent is born, and
 // birth is a mutation, so `next` (read-only) NAMES the move as a
 // run-then-continue print and the conductor runs it, then re-runs `next` to land
-// on the first stage. The named move is the deterministic `intent-create` handler
+// on the first stage. The named move is the deterministic `intent-birth` handler
 // (mint UUIDv7, create the intent dir, append intents.json, set active-intent,
 // emit WORKFLOW_STARTED/PHASE_STARTED into the new intent's audit) — the
 // read-only-engine invariant is preserved: the routing tool names, a separate
 // deterministic tool mutates, the human's "start a new intent?" judgement gated
 // the get-here. Threads the freeform feature description (--arguments) so the
 // born intent's slug + state Project field carry it, plus --depth /
-// --test-strategy / --review. Shared by Branch 7b (valid-scope positional) and
+// --test-strategy. Shared by Branch 7b (valid-scope positional) and
 // Branch 9 (explicit --scope flag) so the explicit-naming shapes emit identical
 // directives. The harness dir is resolved through harnessDir() so the directive
 // names the right tree on every harness (.claude/.kiro/.codex).
-function createPrintDirective(scope: string, flags: ParsedFlags, description?: string): PrintDirective {
-  const cmd = [`intent-create --scope ${scope}`];
+function birthPrintDirective(scope: string, flags: ParsedFlags, description?: string): PrintDirective {
+  const cmd = [`intent-birth --scope ${scope}`];
   let labelHint = "";
   if (description && description.length > 0) {
     // Shell-quote the freeform description so multi-word intents survive intact.
@@ -884,34 +502,18 @@ function createPrintDirective(scope: string, flags: ParsedFlags, description?: s
     // without --label still births a sane name by truncating --arguments.)
     cmd.push(`--label "<2-3 word kebab essence>"`);
     labelHint =
-      ` Replace \`--label\` with a 2-3 word kebab essence of the description (e.g. "simple calc"), which becomes the readable folder name for this piece of work.`;
+      ` Replace \`--label\` with a 2-3 word kebab essence of the description (e.g. "simple calc") — it becomes the readable record dir name.`;
   }
   if (flags.depth) cmd.push(`--depth ${flags.depth}`);
   if (flags.testStrategy) cmd.push(`--test-strategy ${flags.testStrategy}`);
-  if (flags.review) cmd.push(`--review ${flags.review}`);
   // Disclose the ceremony on the print: an explicitly named scope births
   // directly (no confirm ask by design), so the stage/gate counts ride here.
   // Omit the parenthetical when the scope does not resolve (fixture trees).
   const clause = costClause(scope);
   const cost = clause ? ` (${clause})` : "";
-  const runCmd = `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${cmd.join(" ")}\``;
-  const directive = flags.newIntent
-    ? printDirective(
-      `${runCmd} to start the new intent${cost}.${labelHint} Then STOP, do NOT re-run \`next\` in this session. ` +
-        `This is a NEW, unrelated intent, and the current session still carries the previous intent's context. ` +
-        `Tell the user to start a fresh session using this harness's reset or restart flow, then invoke its AI-DLC entry skill to begin the new intent with a clean slate. ` +
-        `Nothing is lost: the intent is saved on disk and resumes on the next \`next\`.`,
-      )
-    : printDirective(
-      `${runCmd} to start the workflow${cost}, then re-run \`next\` to continue.${labelHint}`,
-    );
-  // The user named a scope (or one was inferred and confirmed), so the spoken
-  // line can say what is being set up and how much process that means, with the
-  // counts the compiled grid already gave us.
-  directive.narration = clause
-    ? `Setting up a ${scope} workflow for this: ${clause}.`
-    : `Setting up a ${scope} workflow for this.`;
-  return directive;
+  return printDirective(
+    `Run \`${aidlcToolInvocation("utility")} ${cmd.join(" ")}\` to start the workflow${cost}, then re-run \`next\` to continue.${labelHint}`,
+  );
 }
 
 // The composer-dispatch print for a compose request (the adaptive-workflows
@@ -920,7 +522,7 @@ function createPrintDirective(scope: string, flags: ParsedFlags, description?: s
 // approve/edit/reject gate); it never dispatches or writes itself. Two modes:
 //   - front (no state file): compose a scope from the prompt (or a scan
 //     report) BEFORE birth. The composer proposes; on approval the conductor
-//     continues into the normal intent-create with the chosen scope.
+//     continues into the normal intent-birth with the chosen scope.
 //   - in-flight (state file present): re-shape the RUNNING workflow's pending
 //     stages (SKIP / un-SKIP), which lands as suffix flips via the recompose
 //     verb - never a silent advance of the current stage.
@@ -937,10 +539,9 @@ function composeDispatchDirective(
       `Dispatch the composer agent (${hd}/agents/aidlc-composer-agent.md) as a subagent to propose re-shaping the RUNNING workflow's pending stages` +
         (flags.intent ? ` for: "${flags.intent}".` : "."),
       "The composer reads the live state file's Stage Progress, re-estimates the entropy components from what completed stages resolved, validates the flipped grid with --strict, and proposes SKIP/un-SKIP flips for PENDING, ahead-of-cursor stages only (completed [x], in-progress [-], and skipped [S] stages are frozen; an ADD whose required producer is skipped or behind the cursor is rejected, not proposed).",
-      "This is mode in-flight, not matched/custom routing: preserve the current scope, depth, frozen actions, and full effective grid; stock-distance rankings are advisory only and MUST NOT trigger stock-grid adoption. Return the exact approved command delta as changes.skip and changes.add arrays.",
-      "BEFORE presenting the gate, write the pending-proposal marker `aidlc/.aidlc-compose-pending` (any content) so the turn can end at the gate; on approve run `bun " +
-        hd +
-        "/tools/aidlc-utility.ts recompose --skip <changes.skip> --add <changes.add>` (comma-separated) and DELETE the marker; on reject/edit-then-resolve delete the marker too. Never write scope registry files for an in-flight proposal.",
+      "BEFORE presenting the gate, write the pending-proposal marker `aidlc/.aidlc-compose-pending` (any content) so the turn can end at the gate; on approve run `" +
+        aidlcToolInvocation("utility") +
+        " recompose --skip <slugs> --add <slugs>` (comma-separated) and DELETE the marker; on reject/edit-then-resolve delete the marker too.",
     );
   } else {
     parts.push(
@@ -957,25 +558,11 @@ function composeDispatchDirective(
       );
     }
   }
-  const proposalShape = inFlight
-    ? "mode in-flight, the current scopeName, an ars block (the five component scores with method codekb|fallback), an arsRationale, the preserved full effective grid, exact changes.skip and changes.add arrays, a per-change rationale, a summary the strict validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)"
-    : "mode matched|custom, scopeName, an ars block (the five component scores with method codekb|fallback), an arsRationale, the per-stage EXECUTE/SKIP grid, a per-SKIP rationale, a summary the validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)";
-  const modeContract = inFlight
-    ? "the composer's mode is IN-FLIGHT and FINAL for the returned delta: nearest_stock is advisory, the running scope and frozen actions stay unchanged, and approval uses only changes.skip/changes.add through recompose; neither presentation nor comparison with stock grids may alter that delta"
-    : "the composer's mode is FINAL for the grid it returned: it routed matched-vs-custom solely on the final proposal validator's nearest_stock distance, a matched proposal already carries the revalidated stock grid verbatim, and neither presentation nor your own comparison of grids ever changes the verdict - never re-derive it, and a MATCHED proposal writes no scope file; if the human edits that stock grid, re-dispatch the composer, which must convert it to CUSTOM and revalidate before re-presenting";
   parts.push(
-    `The composer runs \`bun ${hd}/tools/aidlc-utility.ts detect --json\` (read-only scan + scope-registry paths), estimates the five entropy components (intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions) per its persona, and returns a structured proposal: ${proposalShape}.`,
-    `Render the proposal to the human as THREE blocks before the approve/edit/reject gate (see the composer block in SKILL.md), leading with plain language rather than the scores: (1) a two-or-three-sentence recommendation in your own words - what kind of change this looks like, how much process you suggest, and the steps in plain terms - followed by the validator's summary line formatted "<execute> stages EXECUTE / <skip> SKIP, <gates> approval gates" plus scopeName and mode (${modeContract}); (2) the composer's stage-decision table verbatim, with any fold advisories beneath it; (3) under a "Scoring detail (advisory)" heading, the composer's ARS score table verbatim with its method line and arsRationale. Relay the composer's tables and numbers as returned - never recompute, collapse into prose, or drop them. Do NOT write any file and do NOT advance any stage before an explicit approval.`,
+    `The composer runs \`${aidlcToolInvocation("utility")} detect --json\` (read-only scan + scope-registry paths), estimates the five entropy components (intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions) per its persona, and returns a structured proposal: mode matched|custom, scopeName, an ars block (the five component scores with method codekb|fallback), an arsRationale, the per-stage EXECUTE/SKIP grid, a per-SKIP rationale, a summary the validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning).`,
+    "Render the proposal to the human as THREE blocks before the approve/edit/reject gate (see the composer block in SKILL.md): (1) the validator's summary line formatted \"<execute> stages EXECUTE / <skip> SKIP, <gates> approval gates\" plus scopeName and mode - use the validator's numbers verbatim, never recount by hand; (2) the composer's ARS score table verbatim, with its method line and arsRationale; (3) the composer's stage-decision table verbatim, with any fold advisories beneath it. Relay the composer's tables and numbers as returned - never recompute, collapse into prose, or drop them. Do NOT write any file and do NOT advance any stage before an explicit approval.",
   );
-  const directive = printDirective(parts.join(" "));
-  // This is the moment issue 682's reporter described: the user has asked for a
-  // plan and the framework goes quiet while it works one out. Say what is
-  // happening in their terms. In-flight means a plan is already running and only
-  // the not-yet-run steps are on the table.
-  directive.narration = inFlight
-    ? "Looking at what is left to do and working out which of the remaining steps still earn their place. I will show you the change before anything moves."
-    : "Working out which steps of the development process this piece of work actually needs, based on what you have asked for and what is already in the codebase. I will show you the plan before anything runs.";
-  return directive;
+  return printDirective(parts.join(" "));
 }
 
 // Guard the birth gate against a DUPLICATE intent on a fresh clone of a
@@ -1011,10 +598,10 @@ function intentPickPromptIfRecordsExist(
   const list = slugs.map((s) => `\`${s}\``).join(", ");
   const spaceLabel = space === "default" ? "" : ` in space "${space}"`;
   return askDirective(
-    `This project already has ${intents.length} piece${intents.length === 1 ? "" : "s"} of work in progress${spaceLabel}, and none is currently selected ` +
-      `(which one you are on is tracked per-person and does not travel with the repo). ` +
-      `Pick the one to work on with \`/aidlc intent <slug>\`: ${list}. ` +
-      "That selects it; re-run `next` afterward to carry on where it left off.",
+    `This workspace already has ${intents.length} intent${intents.length === 1 ? "" : "s"}${spaceLabel} but no active intent is selected ` +
+      `(the active-intent cursor is per-user and not cloned). ` +
+      `Pick one to work on with \`/aidlc intent <slug>\`: ${list}. ` +
+      "Selecting an intent sets the cursor; re-run `next` afterward to continue its workflow.",
   );
 }
 
@@ -1087,15 +674,6 @@ function memoryPathFor(phase: string, slug: string, recordPrefix: string | null)
   return `${prefix}/${phase}/${slug}/memory.md`;
 }
 
-function unitMemoryPathFor(
-  slug: string,
-  unit: string,
-  recordPrefix: string | null,
-): string {
-  const prefix = recordPrefix ?? relativeSpaceRecordPrefix();
-  return `${prefix}/construction/${unit}/${slug}/memory.md`;
-}
-
 // Derive the stage file path from phase + slug (the shipped layout:
 // .claude/aidlc-common/stages/<phase>/<slug>.md — relocated to the shared
 // aidlc-common/ spine, a peer of skills/). Matches the engine design's example
@@ -1147,7 +725,7 @@ type RunStageRoute = {
   stateAware: boolean;
   stateHash: string | null;
   codekbCtx: CodekbCtx;
-  unit: string | null;
+  unit: string;
   unitKind: string | null;
   forcePersona: boolean;
 };
@@ -1161,15 +739,13 @@ type SteeringTokenPayload = {
   d: string;
   r: string;
   a: boolean;
-  u: string | null;
+  u: string;
   k: string | null;
   f: boolean;
   g: GateValue;
   n: string | null | undefined;
   x: boolean;
   p: boolean;
-  w: boolean;
-  z?: boolean;
   h: string | null;
 };
 
@@ -1291,9 +867,8 @@ function readConstructionIteration(
 // signal, NOT on-disk artifact presence. A swarm unit builds inside an isolated
 // Bolt worktree and `aidlc-bolt complete --merge` consolidates only the AIDLC
 // metadata (state + audit + runtime-graph fragment) back to the main checkout;
-// the unit's produced artifacts (code-generation-plan.md,
-// unit-test-instructions.md, code-summary.md, and the generated source) are NOT
-// copied into the main record tree by the swarm
+// the unit's produced artifacts (code-generation-plan.md / code-summary.md and
+// the generated source) are NOT copied into the main record tree by the swarm
 // finalize flow. So unitCovered's disk check (the INLINE per-unit ledger) never
 // sees a swarm unit as covered, and the batch-advance signal must instead be the
 // `SWARM_UNIT_CONVERGED` audit rows `aidlc-swarm.ts finalize` writes from the
@@ -1303,9 +878,9 @@ function readConstructionIteration(
 //
 // The read lives in aidlc-lib.ts (swarmConvergedUnits), shared with the
 // state-tool consumer and the emitter: a row counts only when its Stage names
-// this slug AND its Run floor equals the stage's exact current-attempt token,
-// so a prior attempt's late finalize retry or another swarm stage's rows can
-// never satisfy the current run. The
+// this slug AND its Run floor equals the stage's current attempt floor (the
+// latest main-workflow STAGE_STARTED), so a prior attempt's late finalize
+// retry or another swarm stage's rows can never satisfy the current run. The
 // audit is append-only and per-intent, and the stage CAN legitimately re-run
 // within the same intent with the same unit names: a backward/redo jump
 // resets completed stages to pending without touching the ledger (and without
@@ -1332,14 +907,14 @@ function readConstructionIteration(
 //               parse; the unit list is unknowable, callers surface an error
 //               instead of silently building one unit.
 // Pure in-memory: never writes the graph (next stays read-only); the
-// rebuild-stage-graph hook repairs the cache on the next transition.
+// runtime-compile hook repairs the cache on the next transition.
 type BoltBatchesResolution = BoltDagResolution;
 
 function resolveBoltBatches(projectDir: string): BoltBatchesResolution {
   const resolution = resolveBoltDag(projectDir);
   if (resolution.state === "ok" && resolution.healed) {
     process.stderr.write(
-      `aidlc-orchestrate: runtime-graph.json bolt_dag is missing or stale; recomputed ${resolution.batches.length} unit batch(es) from unit-of-work-dependency.md (check the rebuild-stage-graph hook)\n`,
+      `aidlc-orchestrate: runtime-graph.json bolt_dag is missing or stale; recomputed ${resolution.batches.length} unit batch(es) from unit-of-work-dependency.md (check the runtime-compile hook)\n`,
     );
   }
   return resolution;
@@ -1349,7 +924,7 @@ function resolveBoltBatches(projectDir: string): BoltBatchesResolution {
 // Construction EXECUTE stage in scope (the start of Bolt 1). This is derived,
 // not hardcoded: firstInScopeStageOfPhase("construction", scope) walks the
 // scope's EXECUTE-only sub-DAG and returns its first construction stage (e.g.
-// functional-design for feature/enterprise/mvp/refactor/classic, code-generation
+// functional-design for feature/enterprise/mvp/refactor/workshop, code-generation
 // for poc/bugfix/security-patch, nfr-requirements for infra). A scope-mapping
 // edit that moves the first construction stage moves the skeleton gate with it,
 // no code change. Non-construction stages are never the skeleton gate.
@@ -1498,11 +1073,10 @@ function codekbCtxFor(pd: string): CodekbCtx {
 function resolveArtifactPath(
   name: string,
   owner: GraphStage,
-  unit: string | null,
+  unit: string,
   recordPrefix: string | null,
   codekbCtx?: CodekbCtx,
 ): string {
-  const filename = artifactFilename(name);
   // Codekb artifacts live in the space-level codekb dir, keyed by repo — NOT
   // under the per-intent record dir. This arm fires for BOTH produces[] (owner
   // is the directive's own node) AND consumes[] (owner is the producing stage
@@ -1511,13 +1085,13 @@ function resolveArtifactPath(
   // stem, mirroring relativeCodekbDir. Guarded on the ctx being present so a
   // ctx-less caller (defaults) falls through to the record-dir arms below.
   if (isCodekb(owner) && codekbCtx) {
-    return `${relativeCodekbDir(codekbCtx.projectDir, codekbCtx.codekbRepo, codekbCtx.space)}/${filename}`;
+    return `${relativeCodekbDir(codekbCtx.projectDir, codekbCtx.codekbRepo, codekbCtx.space)}/${name}.md`;
   }
   const prefix = recordPrefix ?? relativeSpaceRecordPrefix();
-  if (isPerUnit(owner) && unit !== null) {
-    return `${prefix}/construction/${unit}/${owner.slug}/${filename}`;
+  if (isPerUnit(owner)) {
+    return `${prefix}/construction/${unit}/${owner.slug}/${name}.md`;
   }
-  return `${prefix}/${owner.phase}/${owner.slug}/${filename}`;
+  return `${prefix}/${owner.phase}/${owner.slug}/${name}.md`;
 }
 
 // Resolve a CONSUMED artifact's path. A consumed artifact lives under the stage
@@ -1532,7 +1106,7 @@ function resolveArtifactPath(
 function resolveConsumePath(
   name: string,
   node: GraphStage,
-  unit: string | null,
+  unit: string,
   recordPrefix: string | null,
   codekbCtx?: CodekbCtx,
 ): string {
@@ -1572,10 +1146,9 @@ function resolveConsumes(
   consumes: Consume[],
   node: GraphStage,
   projectType: "brownfield" | "greenfield" | null,
-  unit: string | null,
+  unit: string,
   recordPrefix: string | null,
   codekbCtx?: CodekbCtx,
-  unitKind: string | null = null,
 ): ResolvedConsume[] {
   const resolved: ResolvedConsume[] = [];
   for (const consume of consumes) {
@@ -1583,18 +1156,6 @@ function resolveConsumes(
       consume.conditional_on &&
       projectType &&
       consume.conditional_on !== projectType
-    ) {
-      continue;
-    }
-    const producer = producersOf(consume.artifact)[0];
-    if (
-      producer &&
-      isPerUnit(producer) &&
-      filterProducesByKind(
-        producer.produces_kinds,
-        [consume.artifact],
-        unitKind,
-      ).length === 0
     ) {
       continue;
     }
@@ -1665,7 +1226,7 @@ function splitConsumesByPresence(
 // behaviour change off the kind path.
 function resolveProduces(
   node: GraphStage,
-  unit: string | null,
+  unit: string,
   recordPrefix: string | null,
   codekbCtx?: CodekbCtx,
   unitKind: string | null = null,
@@ -1919,9 +1480,9 @@ function inlineContextRoster(
   const omitted = allPaths.length - paths.length;
   if (omitted > 0) {
     warnings.push(
-      `Warning: ${omitted} optional persona/knowledge path(s) were omitted because there was ` +
-        `no room to pass them all (inline_context_paths is capped at ${INLINE_CONTEXT_PATHS_MAX_BYTES} bytes). ` +
-        "Configure fewer knowledge files if this matters; the stage runs without the omitted optional context.",
+      `Warning: ${omitted} optional persona/knowledge path(s) were omitted because ` +
+        `inline_context_paths exceeded its ${INLINE_CONTEXT_PATHS_MAX_BYTES}-byte transport budget. ` +
+        "Reduce the configured knowledge file count; this stage will continue without the omitted optional context.",
     );
   }
   return { paths, warnings: boundedContextWarnings(warnings) };
@@ -1964,16 +1525,14 @@ function boundedContextWarnings(warnings: string[]): string[] {
 // conductor never re-derives them) and drops conditional_on consumes-entries
 // against the workflow's Project Type. rules_in_context maps to the node's
 // resolved rule paths; sensors_applicable maps to the node's resolved sensor ids.
-// `unit` is the active Unit of Work for per-unit Construction stages. The
-// placeholder keeps the documented unresolved shape for isolated/ctx-less
-// callers; null is the explicit zero-Unit fallback and resolves artifacts at the
-// stage-level Construction directory. `scope` + `stateContent` feed the gate
-// computation (the skeleton round-trip) and the first-run-stage persona delivery
-// (decision D-E).
+// `unit` is the active Unit of Work for per-unit Construction stages; callers
+// without Bolt context omit it and the per-unit path keeps the {unit-name}
+// placeholder. `scope` + `stateContent` feed the gate computation (the skeleton
+// round-trip) and the first-run-stage persona delivery (decision D-E).
 function buildRunStageDirective(
   node: GraphStage,
   projectType: "brownfield" | "greenfield" | null = null,
-  unit: string | null = UNIT_NAME_PLACEHOLDER,
+  unit: string = UNIT_NAME_PLACEHOLDER,
   scope: string = resolveDefaultScope(DEFAULT_SCOPE),
   stateContent: string | null = null,
   recordPrefix: string | null = null,
@@ -1981,19 +1540,8 @@ function buildRunStageDirective(
   unitKind: string | null = null,
   forcePersona = false,
 ): RunStageDirective {
-  const artifactUnit =
-    unit === UNIT_NAME_PLACEHOLDER &&
-      usesStageLevelPerUnitArtifacts(scope, stateContent)
-      ? null
-      : unit;
   const resolvedConsumes = resolveConsumes(
-    node.consumes ?? [],
-    node,
-    projectType,
-    artifactUnit,
-    recordPrefix,
-    codekbCtx,
-    unitKind,
+    node.consumes ?? [], node, projectType, unit, recordPrefix, codekbCtx,
   );
   const { present, absent } = splitConsumesByPresence(resolvedConsumes, scope, codekbCtx);
   const inlineContext = inlineContextRoster(node, codekbCtx);
@@ -2015,13 +1563,7 @@ function buildRunStageDirective(
     gate: computeGate(node, scope, stateContent),
     memory_path: memoryPathFor(node.phase, node.slug, recordPrefix),
     consumes: present,
-    produces: resolveProduces(
-      node,
-      artifactUnit,
-      recordPrefix,
-      codekbCtx,
-      unitKind,
-    ),
+    produces: resolveProduces(node, unit, recordPrefix, codekbCtx, unitKind),
     rules_in_context:
       ruleEntries?.map((entry) => entry.rel) ??
       (node.rules_in_context ?? []).map((r) => r.path),
@@ -2043,43 +1585,10 @@ function buildRunStageDirective(
   // the final in-scope stage (the conductor renders "Complete workflow").
   const nextStage = nextInScopeStage(node.slug, scope, stateContent ?? undefined);
   directive.next_stage = nextStage ? nextStage.name : null;
-  // Reviewer — include if the stage declares one (§12a) AND the effective
-  // review class is not "none". The engine resolves the class here (stage
-  // declaration, lowered by the scope's review_cap and any per-run Review
-  // Override, low-wins) so the conductor never re-derives it: a "none"
-  // resolution omits the whole reviewer block and the stage runs reviewless,
-  // exactly like a stage that never declared a reviewer. Advisory pins the
-  // iteration cap to 1 - a single pass is the contract, not a budget.
+  // Reviewer — include if the stage declares one (§12a).
   if (node.reviewer) {
-    const reviewClass = resolveReviewClass(
-      node.review_class,
-      scope,
-      stateContent
-    );
-    if (reviewClass !== "none") {
-      directive.reviewer = node.reviewer;
-      directive.review_class = reviewClass;
-      directive.reviewer_max_iterations =
-        reviewClass === "advisory" ? 1 : node.reviewer_max_iterations ?? 2;
-    }
-  }
-  const protocolModules: ProtocolModule[] = [];
-  if (directive.reviewer && directive.review_class) {
-    protocolModules.push("reviewer");
-  }
-  if (
-    node.mode === "subagent" ||
-    node.mode === "pipeline" ||
-    node.mode === "mob" ||
-    (node.support_agents?.length ?? 0) > 0
-  ) {
-    protocolModules.push("ensemble");
-  }
-  if (node.phase === "construction") {
-    protocolModules.push("construction");
-  }
-  if (protocolModules.length > 0) {
-    directive.protocol_modules = protocolModules;
+    directive.reviewer = node.reviewer;
+    directive.reviewer_max_iterations = node.reviewer_max_iterations ?? 2;
   }
   // Decision D-E: bake the conductor persona into the FIRST run-stage of the
   // workflow. The optional field is omitted on every later directive (the
@@ -2088,18 +1597,10 @@ function buildRunStageDirective(
   // `forcePersona` covers the isolated single-stage runner, whose directive is
   // always the conductor's first of that run regardless of state - attached
   // HERE (not by the caller after build) so the final run-stage is complete.
-  const firstOfWorkflow = isFirstRunStageOfWorkflow(stateContent, node);
-  if (forcePersona || firstOfWorkflow) {
+  if (forcePersona || isFirstRunStageOfWorkflow(stateContent, node)) {
     const persona = readConductorPersona();
     if (persona !== null) directive.conductor_persona = persona;
   }
-  // The spoken line for entering this stage. Attached here, where the scope and
-  // first-of-workflow facts are in hand; emit() drops it again on a per-unit
-  // iteration beat, because callers set `unit` after this builder returns.
-  directive.narration =
-    node.mode === "subagent" || node.mode === "pipeline"
-      ? narrateSpecialistStage(node)
-      : narrateStageEntry(node, scope, firstOfWorkflow, directive.gate);
   if (codekbCtx) {
     runStageRoutes.set(directive, {
       node,
@@ -2258,8 +1759,8 @@ function steeringTokenKey(
         return {
           key: null,
           error:
-            `The local key file at "${path}" is corrupt, so this stage's rules cannot be loaded safely. ` +
-            "Delete that file and run a fresh `next`; a replacement is created automatically.",
+            `The machine-local steering token key at "${path}" is invalid. ` +
+            "Delete it and run a fresh `next` to mint a replacement.",
         };
       }
       return { key, error: null };
@@ -2267,7 +1768,7 @@ function steeringTokenKey(
       return {
         key: null,
         error:
-          `Cannot read the local key file at "${path}", so this stage's rules cannot be loaded ` +
+          `Cannot read the machine-local steering token key at "${path}" ` +
           `(${errorMessage(error)}).`,
       };
     }
@@ -2292,7 +1793,7 @@ function steeringTokenKey(
     return {
       key: null,
       error:
-        `Cannot create the local key file at "${path}", so this stage's rules cannot be loaded ` +
+        `Cannot create the machine-local steering token key at "${path}" ` +
         `(${errorMessage(error)}). Fix the directory permissions, then run a fresh \`next\`.`,
     };
   }
@@ -2368,15 +1869,13 @@ function decodeSteeringToken(
       typeof p.d !== "string" ||
       typeof p.r !== "string" ||
       typeof p.a !== "boolean" ||
-      (p.u !== null && typeof p.u !== "string") ||
+      typeof p.u !== "string" ||
       (p.k !== null && typeof p.k !== "string") ||
       typeof p.f !== "boolean" ||
       (typeof p.g !== "boolean" && p.g !== GATE_UNRESOLVED) ||
       (p.n !== undefined && p.n !== null && typeof p.n !== "string") ||
       typeof p.x !== "boolean" ||
       typeof p.p !== "boolean" ||
-      typeof p.w !== "boolean" ||
-      (p.z !== undefined && typeof p.z !== "boolean") ||
       (p.h !== null && typeof p.h !== "string")
     ) {
       return null;
@@ -2410,8 +1909,6 @@ function steeringTokenPayload(
     n: directive.next_stage,
     x: directive.single === true,
     p: directive.unit !== undefined,
-    w: directive.wave !== undefined,
-    z: directive.swarm_settled === true,
     h: route.stateHash,
   };
 }
@@ -2453,12 +1950,12 @@ function transportRunStage(
       requested.d !== directiveHash
     ) {
       return errorDirective(
-        "This stage or its rules changed while they were being loaded, so what has arrived so far is stale. Run a fresh `next` to restart delivery from part 1.",
+        "The stage or its rules changed during steering delivery. Run a fresh `next` to restart delivery from part 1.",
       );
     }
     if (requested.i > chunks.length) {
       return errorDirective(
-        "This request asks for a part of the stage rules that does not exist. Run a fresh `next` to restart delivery from part 1.",
+        "The steering continuation token is out of range. Run a fresh `next` to restart delivery from part 1.",
       );
     }
     if (requested.i === chunks.length) return directive;
@@ -2481,7 +1978,7 @@ function transportRunStage(
   if (!encoded.token) {
     return errorDirective(
       encoded.error ??
-        "This stage's rules cannot be loaded safely right now. Run a fresh `next` after repairing the local runtime files under `aidlc/`.",
+        "Cannot protect the steering continuation token. Run a fresh `next` after repairing the machine-local runtime state.",
     );
   }
   const load: LoadSteeringDirective = {
@@ -2506,83 +2003,11 @@ function nodeForSlug(slug: string): GraphStage | undefined {
   return loadGraph().find((s) => s.slug === slug);
 }
 
-// Resolve the approved plan's action for one stage. The state suffix is the
-// live plan (including recomposition) and therefore wins over the stock scope
-// grid. Keep this separate from GraphStage.execution: ALWAYS|CONDITIONAL
-// describes stage-authored applicability, not whether this workflow approved
-// the stage for execution.
-function effectivePlanAction(
-  slug: string,
-  scope: string,
-  stateContent: string | null,
-): "EXECUTE" | "SKIP" | undefined {
-  const stateAction = stateContent
-    ? parseStateStageSuffixes(stateContent).get(slug)
-    : undefined;
-  return stateAction ?? loadScopeMapping()[scope]?.stages[slug];
-}
-
-// A per-unit stage falls back to one stage-level iteration only when the
-// effective plan excludes the Unit-DAG producer. This distinguishes an
-// intentional zero-Unit scope/composed plan from a normal workflow whose
-// Units Generation stage has not produced its artifact yet.
-function usesStageLevelPerUnitArtifacts(
-  scope: string,
-  stateContent: string | null,
-): boolean {
-  return effectivePlanAction("units-generation", scope, stateContent) !== "EXECUTE";
-}
-
 // The `next` handler reads workflow state and emits exactly one directive. Rule
 // transport may lazily mint its machine-local MAC key, but never mutates shared
 // workflow state.
 function handleNext(args: string[], projectDir: string | undefined): void {
   const flags = parseNextFlags(args);
-
-  // Turn-shape marker: a `next` that ASKS FOR THE NEXT MOVE is engagement with
-  // the forwarding loop even though it mutates nothing — and it emits no audit
-  // event, which is precisely why the Stop hook's carve-out needs a marker
-  // rather than the ledger (a conductor that ran `next` and then bailed is
-  // invisible to the ledger but visible here). Read-only utility flags and the
-  // workspace verbs are excluded: they carry no workflow intent, so a status
-  // query stays a conversational turn.
-  //
-  // DELIBERATELY BEFORE Branch 0 (the roll-forward latch) below, so a `next` the
-  // latch swallows as a no-op still counts as engagement. That is the correct
-  // parity: on the transcript path a bare `next` counts too, latch or no latch —
-  // isEngineToolCall reads the command, not its outcome. Moving this after the
-  // latch would make the two predicates disagree about the same command. The
-  // same reasoning keeps it before the flag-validation early returns: an
-  // errored command still counted on the transcript path.
-  if (!flags.readOnly && !flags.workspaceCommand) touchEngineMarker(projectDir);
-
-  if (flags.parseError) {
-    emit(errorDirective(flags.parseError));
-    return;
-  }
-
-  // Review changes mutate workflow configuration. Compound modes that return
-  // before the config branch cannot silently discard the flag; require callers
-  // to apply the override first, then invoke the other mode separately.
-  if (
-    flags.review &&
-    (
-      flags.readOnly ||
-      flags.workspaceCommand ||
-      flags.compose ||
-      flags.newScope ||
-      flags.report ||
-      flags.single ||
-      flags.stage ||
-      flags.phase ||
-      flags.resume
-    )
-  ) {
-    emit(errorDirective(
-      "Cannot combine --review with read-only, workspace, compose, single-stage, jump, or resume modes. Apply /aidlc --review <class> first, then run the other command.",
-    ));
-    return;
-  }
 
   // Branch 0 — turn-scoped no-op-next guard (Kiro roll-forward defense). On Kiro
   // the userPromptSubmit seam handles a read-only/navigation command
@@ -2597,9 +2022,9 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // swallowed. Inert on Claude/Codex: the latch files are never written there (no
   // seam) → fresh is always false → falls through. Advisory: any failure fails
   // open to the normal `next`.
-  if (!flags.readOnly && !flags.workspaceCommand && !flags.pluginCommand && !flags.knowledgeCommand && !flags.stage && !flags.phase &&
+  if (!flags.readOnly && !flags.workspaceCommand && !flags.stage && !flags.phase &&
       !flags.scope && !flags.positionalScope && !flags.intent && !flags.resume &&
-      !flags.depth && !flags.testStrategy && !flags.review &&
+      !flags.depth && !flags.testStrategy &&
       !flags.single && !flags.compose && !flags.newScope && !flags.report) {
     try {
       const pdLatch = resolveProjectDir(projectDir);
@@ -2616,10 +2041,8 @@ function handleNext(args: string[], projectDir: string | undefined): void {
         const lr = JSON.parse(readFileSync(latchPath, "utf-8")) as { turn?: number; flag?: string; source?: string };
         if (typeof lr.turn === "number") latchTurn = lr.turn;
         if (typeof lr.flag === "string") {
-          // Read-only flags render with `--`; noun commands render as typed.
-          const nounCommand = lr.source === "workspace-verb" || lr.source === "plugin-verb" ||
-            lr.source === "knowledge-verb";
-          label = nounCommand ? `\`${lr.flag}\`` : `--${lr.flag}`;
+          // read-only flags render with a leading `--`; workspace verbs are bare.
+          label = lr.source === "workspace-verb" ? `\`${lr.flag}\`` : `--${lr.flag}`;
         }
       }
       if (counter >= 0 && latchTurn === counter) {
@@ -2655,7 +2078,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       ? ` ${flags.readOnlyArgs.join(" ")}`
       : "";
     emit(printDirective(
-      `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${sub}${extra}\`, print its output verbatim, then stop. This is a read-only utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
+      `Run \`${aidlcToolInvocation("utility")} ${sub}${extra}\`, print its output verbatim, then stop. This is a read-only utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
     ));
     return;
   }
@@ -2684,44 +2107,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     const [verb, ...tail] = argv;
     const suffix = tail.length > 0 ? ` ${tail.map(shellArg).join(" ")}` : "";
     emit(printDirective(
-      `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${verb}${suffix}\`, print its output verbatim, then stop.`,
-    ));
-    return;
-  }
-
-  // Branch 1c - plugin utilities are terminal commands, never freeform intent
-  // text. The shared parser also feeds the binary dispatcher and Kiro seam, so
-  // every harness preserves the same list/sync/select argv and error grammar.
-  if (flags.pluginCommand) {
-    const command = flags.pluginCommand;
-    if (command.kind === "error") {
-      emit(errorDirective(command.message));
-      return;
-    }
-    const argv = command.kind === "help" ? ["help"] : command.argv;
-    const [verb, ...tail] = argv;
-    const suffix = tail.length > 0 ? ` ${tail.map(shellArg).join(" ")}` : "";
-    emit(printDirective(
-      `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${verb}${suffix}\`, print its output verbatim, then stop. This is a terminal utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
-    ));
-    return;
-  }
-
-  // Branch 1d - DocumentKB verbs are terminal commands, never freeform intent
-  // text. Same shape as 1c, but the directive names aidlc-knowledge.ts: this is
-  // the first public noun whose verbs live in their own tool rather than in
-  // aidlc-utility.ts, so the tool name is part of what each site must agree on.
-  if (flags.knowledgeCommand) {
-    const command = flags.knowledgeCommand;
-    if (command.kind === "error") {
-      emit(errorDirective(command.message));
-      return;
-    }
-    const argv = command.kind === "help" ? ["help"] : command.argv;
-    const [verb, ...tail] = argv;
-    const suffix = tail.length > 0 ? ` ${tail.map(shellArg).join(" ")}` : "";
-    emit(printDirective(
-      `Run \`bun ${harnessDir()}/tools/aidlc-knowledge.ts ${verb}${suffix}\`, print its output verbatim, then stop. This is a terminal utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
+      `Run \`${aidlcToolInvocation("utility")} ${verb}${suffix}\`, print its output verbatim, then stop.`,
     ));
     return;
   }
@@ -2738,21 +2124,6 @@ function handleNext(args: string[], projectDir: string | undefined): void {
 
   const pd = resolveProjectDir(projectDir);
   const stateContent = loadStateFileIfPresent(pd);
-  // Runtime state-version guard (see staleStateVersionError): refuse to advance
-  // a pre-v8 state up front rather than silently routing until it hits the
-  // renamed/missing Inception rows. Fires after the workspace/plugin/compose
-  // branches above (those are version-independent) and before any branch that
-  // reads or advances the workflow cursor.
-  // `!== null` (not truthiness): a PRESENT but zero-byte aidlc-state.md returns
-  // "" and must still be refused (an empty version → missing/unparseable branch),
-  // not skipped as if the file were absent.
-  if (stateContent !== null) {
-    const stale = staleStateVersionError(stateContent);
-    if (stale) {
-      emit(errorDirective(stale));
-      return;
-    }
-  }
   // The active intent's RELATIVE record-dir prefix (aidlc/spaces/<sp>/intents/
   // <slug>-<id8>), threaded into every run-stage directive so the conductor's
   // artifact/diary paths resolve under the active intent. null → the flat legacy
@@ -2784,8 +2155,6 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     !flags.resume &&
     !flags.stage &&
     !flags.phase &&
-    !flags.review &&
-    !flags.newIntent &&
     (getField(stateContent, "Parked") ?? "").trim().length > 0
   ) {
     const parkedAt = (getField(stateContent, "Parked At Stage") ?? "").trim();
@@ -2813,7 +2182,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     (getField(stateContent, "Parked") ?? "").trim().length > 0
   ) {
     emit(printDirective(
-      `This workflow is parked. Run \`bun ${harnessDir()}/tools/aidlc-state.ts unpark\` ` +
+      `This workflow is parked. Run \`${aidlcToolInvocation("state")} unpark\` ` +
         "to clear the park marker, then re-run `next --resume` to continue.",
     ));
     return;
@@ -2822,7 +2191,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // (Branch 3 — the legacy `--init` flag — retired in P4. There is no longer a
   // user-facing `/aidlc --init`: the workspace shell ships in dist/ (SEED) and
   // the first intent is BORN, not scaffolded. Birth flows through the
-  // createPrintDirective seam below — Branch 7b/9a name the `intent-create` move
+  // birthPrintDirective seam below — Branch 7b/9a name the `intent-birth` move
   // for a resolved scope on a fresh workspace; Branch 8 surfaces the freeform
   // scope-confirm `ask` first. No `--init`/`--force` flag reaches the engine.)
 
@@ -2902,34 +2271,24 @@ function handleNext(args: string[], projectDir: string | undefined): void {
 
   // Branch 4a — --new-intent: the conductor recognized NEW WORK alongside an
   // already-active intent, ran the SKILL.md offer (AskUserQuestion), and the human
-  // confirmed. Rather than have the conductor CONSTRUCT the intent-create command
+  // confirmed. Rather than have the conductor CONSTRUCT the intent-birth command
   // from SKILL.md prose — a weak signal the live model dropped the --label seam on
   // (the 2nd/3rd intents truncated where the 1st, driven by this directive, got a
-  // clean LLM label) — the engine emits the SAME createPrintDirective the fresh-
+  // clean LLM label) — the engine emits the SAME birthPrintDirective the fresh-
   // start path (Branch 7b/9a) uses, so BOTH births carry the --label placeholder
   // identically. The human-yes gate already happened conductor-side; this is the
-  // birth print that performs it. Unlike the fresh-start tail, the new-intent
-  // directive tells the conductor to STOP after birth and hand off to a fresh
-  // session (birthPrintDirective branches on flags.newIntent): a second, unrelated
-  // intent should not inherit the completed intent's session context. Precedes
-  // every continuation branch so an active intent's state never routes the
-  // new-work birth into "advance the current stage". The freeform new-work text
-  // rides in flags.intent (the same slot Branch 9a threads as the description).
+  // run-then-continue print that performs it. Precedes every continuation branch
+  // so an active intent's state never routes the new-work birth into "advance the
+  // current stage". The freeform new-work text rides in flags.intent (the same
+  // slot Branch 9a threads as the description).
   if (flags.newIntent) {
-    const description = flags.intent?.trim();
-    if (!description) {
-      emit(errorDirective(
-        "`next --new-intent` requires a nonblank new-work description after the confirmed scope.",
-      ));
-      return;
-    }
     // Use the EXPLICIT --scope, not the precedence-ladder `scope` (which lets the
     // ACTIVE intent's state scope win — wrong for a brand-new intent: the offer
     // confirmed a scope for the NEW work, independent of what's in flight). Fall
     // back to the resolved scope only when no flag was passed. Both were already
     // validated above (Branch 3b validates flags.scope; the unknown-scope check
     // validates the resolved scope).
-    emit(createPrintDirective(flags.scope ?? scope, flags, description));
+    emit(birthPrintDirective(flags.scope ?? scope, flags, flags.intent));
     return;
   }
 
@@ -2992,25 +2351,20 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       const parts = [`scope-change --scope ${flags.scope}`];
       if (flags.depth) parts.push(`--depth ${flags.depth}`);
       if (flags.testStrategy) parts.push(`--test-strategy ${flags.testStrategy}`);
-      if (flags.review) parts.push(`--review ${flags.review}`);
       emit(printDirective(
-        `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${parts.join(" ")}\` to change scope, then print its output verbatim and stop.`,
+        `Run \`${aidlcToolInvocation("utility")} ${parts.join(" ")}\` to change scope, then print its output verbatim and stop.`,
       ));
       return;
     }
-    // A depth / test-strategy / review modifier with no scope change is a
-    // config-change. A same-as-current --scope is also config-only: dropping
-    // it here would silently discard the modifiers and run the current stage.
-    if (
-      (!flags.scope || flags.scope === currentStateScope) &&
-      (flags.depth || flags.testStrategy || flags.review)
-    ) {
+    // A depth / test-strategy modifier with no scope change is a config-change.
+    // Gate it on the absence of a scope flag so a `--scope X --depth Y` combo
+    // routes through scope-change above (which carries the depth), not here.
+    if (!flags.scope && (flags.depth || flags.testStrategy)) {
       const parts = ["config-change"];
       if (flags.depth) parts.push(`--depth ${flags.depth}`);
       if (flags.testStrategy) parts.push(`--test-strategy ${flags.testStrategy}`);
-      if (flags.review) parts.push(`--review ${flags.review}`);
       emit(printDirective(
-        `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${parts.join(" ")}\` to update the configuration, then print its output verbatim and stop.`,
+        `Run \`${aidlcToolInvocation("utility")} ${parts.join(" ")}\` to update the configuration, then print its output verbatim and stop.`,
       ));
       return;
     }
@@ -3026,13 +2380,6 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   if (flags.resume && stateContent) {
     const currentSlug = getField(stateContent, "Current Stage") ?? "";
     const where = currentSlug.length > 0 ? ` (currently at "${currentSlug}")` : "";
-    if (currentSlug) {
-      try {
-        markActiveDirectiveResumeWaiting(pd, stateContent, currentSlug);
-      } catch (e) {
-        recordHookDrop(pd, "active-directive", errorMessage(e));
-      }
-    }
     emit(askDirective(
       `An existing workflow was found${where}. How would you like to proceed? ` +
         "Resume from last checkpoint, redo the current stage, jump to a stage, or start fresh.",
@@ -3058,7 +2405,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // `/aidlc bugfix Fix duplicate todos` both name a scope; the parser peels the
   // leading valid token into positionalScope and leaves any trailing prose in
   // flags.intent. Birth the positional scope and preserve that prose as the
-  // intent-create --arguments value. An explicit --scope outranks this branch
+  // intent-birth --arguments value. An explicit --scope outranks this branch
   // and reaches Branch 9a; --resume never births.
   if (
     !stateContent &&
@@ -3074,7 +2421,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       emit(pick);
       return;
     }
-    emit(createPrintDirective(flags.positionalScope, flags, flags.intent));
+    emit(birthPrintDirective(flags.positionalScope, flags, flags.intent));
     return;
   }
 
@@ -3084,9 +2431,9 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // never calls AskUserQuestion itself. A bare KNOWN-SCOPE positional was
   // already handled by Branch 7b above, so only genuine prose reaches here.
   //
-  // Adaptive routing (replaces the old static default confirm, which
-  // interpolated the precedence-ladder scope and silently defaulted rich prose):
-  // keyword inference (inferScopeFromText, a pure read; the
+  // Adaptive routing (replaces the old static feature-default confirm, which
+  // interpolated the precedence-ladder scope and silently defaulted rich prose
+  // to `feature`): keyword inference (inferScopeFromText, a pure read; the
   // audit-emitting detect-scope verb remains the conductor's recording move)
   // now drives the ask.
   //   - CLEAR KEYWORD HIT (source "keyword": matched a scope's keywords and
@@ -3094,7 +2441,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   //     MATCHED scope, with "name another scope" and "compose" as outs.
   //   - NO HIT / RICH PROSE (source "freeform": no keyword matched, or the
   //     description is long enough that the match is likely incidental): the
-  //     COMPOSE OFFER, never a silent default. The conductor renders
+  //     COMPOSE OFFER, never a silent feature default. The conductor renders
   //     it; on "compose" it re-runs `next compose "<text>"` to reach the
   //     Branch 4c dispatch.
   if (
@@ -3111,25 +2458,25 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       const clause = costClause(inferred.scope);
       const cost = clause ? ` - ${clause}` : "";
       emit(askDirective(
-        `This looks like "${inferred.scope}" work, so I'd run the "${inferred.scope}" plan for: "${flags.intent}"${cost}. ` +
-          "Say go ahead, name a different plan, or say \"compose\" and I'll tailor one to this task.",
+        `Starting a "${inferred.scope}" workflow for: "${flags.intent}"${cost}. ` +
+          "Confirm to proceed, name a different scope, or say \"compose\" for a tailored plan.",
       ));
       return;
     }
     // Anchor the compose offer with the counts for the three named scopes so the
     // user calibrates the order-of-magnitude difference before deciding. Fall
     // back to bare names if any scope does not resolve.
-    const express = scopeCostSummary("express");
-    const classic = scopeCostSummary("classic");
+    const bf = scopeCostSummary("bugfix");
+    const poc = scopeCostSummary("poc");
     const feat = scopeCostSummary("feature");
     const fallbackExamples = [...validScopes()].slice(0, 3).join(", ") || "an explicit scope";
-    const examples = express && classic && feat
-      ? `express = ${express.execute} of ${express.total} stages, classic = ${classic.execute}, feature = all ${feat.execute}`
+    const examples = bf && poc && feat
+      ? `bugfix = ${bf.execute} of ${bf.total} stages, poc = ${poc.execute}, feature = all ${feat.execute}`
       : fallbackExamples;
     emit(askDirective(
-      `None of the ready-made plans is an obvious fit for: "${flags.intent}". ` +
-        "I can work out a plan tailored to this task (recommended: reply \"compose\"), " +
-        `or you can pick one directly (e.g. ${examples}; see /aidlc --help for the full list).`,
+      `No stock scope clearly fits: "${flags.intent}". ` +
+        "I can compose a tailored plan for this task (recommended: reply \"compose\"), " +
+        `or you can name a scope directly (e.g. ${examples}; see /aidlc --help for all).`,
     ));
     return;
   }
@@ -3157,7 +2504,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     // flags.intent here is freeform feature text typed alongside an explicit
     // --scope (e.g. `/aidlc --scope feature "build the auth service"`) — thread
     // it as the born intent's description; a bare `--scope <s>` carries none.
-    emit(createPrintDirective(scope, flags, flags.intent));
+    emit(birthPrintDirective(scope, flags, flags.intent));
     return;
   }
   //
@@ -3178,40 +2525,6 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     return;
   }
 
-  // Branch 9c - freeform prose while a workflow is ACTIVE. Branch 8 gives
-  // fresh-start prose a routing ask; mid-flow prose used to fall through to
-  // Branch 10, which reads only the state file - the typed text contributed
-  // NOTHING and the engine silently answered "advance the current stage".
-  // That silent discard made the conductor's continue-vs-new-work judgment
-  // skippable, and live conductors that skipped it poured new-work prose into
-  // the active intent's stage. Detection is mechanical (prose arrived, no
-  // routing flag, a workflow is active), so the engine surfaces the question
-  // and stops - the classification stays with the human, the same split as
-  // every other ask. Explicit forms are untouched: --scope'd prose, positional
-  // scopes, jumps, compose, --new-intent, --single and --resume all returned
-  // in earlier branches or are excluded here.
-  if (flags.intent && !flags.scope && !flags.positionalScope && !flags.resume) {
-    const activeLabel =
-      (getField(stateContent, "Project") ?? "").trim() ||
-      (getField(stateContent, "Current Stage") ?? "").trim() ||
-      "the active workflow";
-    // Name the scope a confirmed new intent would get (the same pure
-    // inference Branch 8 uses) so the single ask carries everything the offer
-    // needs: active work, the new text, the proposed scope, and a "Yes"-led
-    // affirmative. inferScopeFromText always returns a deterministic scope,
-    // including its selection-aware fallback for rich prose.
-    const inferred = inferScopeFromText(flags.intent);
-    emit(newWorkRoutingAskDirective(
-      `Work is already in progress on: "${activeLabel}". You said: "${flags.intent}". ` +
-        `Is this (1) part of that work - continue it; (2) a separate new piece of work - ` +
-        `Yes, set it up alongside the current one as "${inferred.scope}" work without changing it; ` +
-        "or (3) a change to how the remaining plan is shaped?",
-      flags.intent,
-      inferred.scope,
-    ));
-    return;
-  }
-
   // Branch 10 — the happy path. Read the workflow's position from state and map
   // it to the stage to run next.
   const currentSlug = getField(stateContent, "Current Stage");
@@ -3226,42 +2539,15 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   const currentState = checkboxStateOf(checkboxes, currentSlug);
 
   // If the current stage is still in-flight (pending / in-progress /
-  // awaiting-approval / revising), the next move is normally to run THAT stage
-  // — the workflow has not yet completed it. A plan-SKIP mismatch is recovered
-  // below instead. If it is already completed or skipped, walk to the next
-  // EXECUTE stage for the scope (state-override aware).
+  // awaiting-approval / revising), the next move is to run THAT stage — the
+  // workflow has not yet completed it. If it is already completed or skipped,
+  // walk to the next EXECUTE stage for the scope (state-override aware).
   const currentIsInFlight =
     currentState === "pending" ||
     currentState === "in-progress" ||
     currentState === "awaiting-approval" ||
     currentState === "revising" ||
     currentState === undefined; // no checkbox row → treat as the active stage
-
-  // A stale/corrupt cursor can still point at an in-flight row whose approved
-  // plan suffix is SKIP. Never turn that mismatch into permission to run the
-  // stage, regardless of the graph's ALWAYS|CONDITIONAL applicability axis.
-  // `next` stays read-only: name the report-owned recovery transition, which
-  // records the skip and routes to the next effective EXECUTE stage.
-  if (
-    currentIsInFlight &&
-    effectivePlanAction(currentSlug, scope, stateContent) === "SKIP"
-  ) {
-    if (currentState !== "in-progress" && currentState !== "revising") {
-      emit(errorDirective(
-        `Stage "${currentSlug}" is SKIP in the approved workflow plan but its active cursor state is ` +
-          `"${currentState ?? "missing"}". Refusing to emit run-stage; repair the inconsistent state before continuing.`,
-      ));
-      return;
-    }
-    const reason = "stage is SKIP in the approved workflow plan";
-    emit(printDirective(
-      `Stage "${currentSlug}" is SKIP in the approved workflow plan but is still the active cursor. ` +
-        `Do not run this stage. Run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts report ` +
-        `--stage ${shellArg(currentSlug)} --result skipped --reason ${shellArg(reason)}\` ` +
-        "to recover the stale pointer, then re-run `next` to continue.",
-    ));
-    return;
-  }
 
   if (currentIsInFlight) {
     // Under an autonomy grant, an eligible per-unit build stage fans out as a
@@ -3290,11 +2576,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     // No stage left to run — the workflow is complete.
     emit({
       kind: "done",
-      reason: `Workflow complete — no in-scope stage remains after ${currentSlug} (scope: ${scope}).${NEW_WORK_HINT}`,
-      // The genuine end of the work. The other `done` emissions in this file are
-      // loop bookkeeping (a report landed, a read-only command already ran) and
-      // stay silent: the user did not ask about the round-trip.
-      narration: "That is everything on the plan. Your work is finished and written up.",
+      reason: `Workflow complete — no in-scope stage remains after ${currentSlug} (scope: ${scope}).`,
     });
     return;
   }
@@ -3329,18 +2611,6 @@ function eligibleAutonomousSwarmBatches(
   projectDir: string,
 ): string[][] | null {
   if (!isAutonomousSwarmCandidate(node, scope, stateContent)) return null;
-  // Under unit-major iteration the WALK owns code-generation: each unit's
-  // build is emitted inline in the walk and its coverage signal is DISK
-  // (unitCovered on the main record tree). The swarm's completion signal is
-  // SWARM_UNIT_CONVERGED audit rows, which walk-built units never write - an
-  // autonomous swarm firing mid-walk would re-fan units the walk already
-  // built. One owner and one coverage signal per stage, so unit-major
-  // suppresses swarm EMISSION. Deliberately here and not in
-  // isAutonomousSwarmCandidate: isSettledAutonomousSwarm must keep granting
-  // the report-side approve exemption for units a PRIOR stage-major swarm
-  // legitimately built in worktrees (their artifacts never reach the main
-  // tree), even if the knob was flipped afterwards.
-  if (readConstructionIteration(stateContent) === "unit-major") return null;
   const r = resolveBoltBatches(projectDir);
   if (r.state !== "ok" || r.batches.length === 0) return null;
   return r.batches;
@@ -3382,17 +2652,6 @@ function isSettledAutonomousSwarm(
   if (units.length === 0) return false;
   const converged = swarmConvergedUnits(projectDir, node.slug);
   return units.every((unit) => converged.has(unit));
-}
-
-function applySettledSwarmShape(
-  directive: RunStageDirective,
-): RunStageDirective {
-  delete directive.reviewer;
-  delete directive.review_class;
-  delete directive.reviewer_max_iterations;
-  directive.protocol_modules = ["construction", "swarm"];
-  directive.swarm_settled = true;
-  return directive;
 }
 
 // Try to handle an eligible autonomous swarm stage, returning true (and emitting)
@@ -3476,10 +2735,7 @@ function tryEmitSwarm(
       node, projectType, lastUnit, scope, stateContent, recordPrefix, codekbCtx,
     );
     directive.unit = lastUnit;
-    // Gate-only resume surface: every Unit body and reviewer already converged
-    // inside the swarm. Keep that fact explicit across fresh sessions and remove
-    // the ordinary body/reviewer modules so settlement cannot repeat work.
-    emit(applySettledSwarmShape(directive));
+    emit(directive);
     return true;
   }
 
@@ -3496,46 +2752,23 @@ function tryEmitSwarm(
   //     from the intent's recorded set; `prepare` errors without it on a multi-repo
   //     intent, surfacing the choice rather than guessing.
   const repos = intentRepos(projectDir);
-  // Autonomous swarm reviews are NOT subject to the scope review_cap or the
-  // per-run Review Override: inside an invoke-swarm the reviewer is the ONLY
-  // verification between a unit's convergence and its merge - there is no
-  // downstream human gate for advisory findings to flow to, so lowering the
-  // class here would remove the sole check rather than rebalance it. The
-  // declared class (adversarial for every shipped construction stage) rides
-  // along verbatim; review_class is emitted for observability.
-  const declaredReviewClass = node.review_class ?? "adversarial";
   const reviewerFields = node.reviewer
     ? {
         stage: node.slug,
         stage_file: stageFileFor(node.phase, node.slug),
         reviewer: node.reviewer,
-        review_class: declaredReviewClass,
-        reviewer_max_iterations:
-          declaredReviewClass === "advisory"
-            ? 1
-            : node.reviewer_max_iterations ?? 2,
+        reviewer_max_iterations: node.reviewer_max_iterations ?? 2,
       }
     : {};
-  const protocolModules: ProtocolModule[] = [
-    ...(node.reviewer ? (["reviewer"] as const) : []),
-    "construction",
-    "swarm",
-  ];
   if (repos.length === 1) {
     emit({
       kind: "invoke-swarm",
       units: pendingUnits,
       ...reviewerFields,
-      protocol_modules: protocolModules,
       repo: repos[0],
     });
   } else {
-    emit({
-      kind: "invoke-swarm",
-      units: pendingUnits,
-      ...reviewerFields,
-      protocol_modules: protocolModules,
-    });
+    emit({ kind: "invoke-swarm", units: pendingUnits, ...reviewerFields });
   }
   return true;
 }
@@ -3616,65 +2849,16 @@ function unitCovered(
   for (const name of applicable) {
     const rel = resolveArtifactPath(name, node, unit, recordPrefix, codekbCtx);
     const abs = join(projectDir, ...rel.split("/"));
-    if (!isRegularFile(abs)) return false;
+    if (!existsSync(abs)) return false;
   }
   return true;
 }
 
-// The per-stage unit-receipt ledger: the current attempt's UNIT_COMPLETED
-// receipts plus whether the unit lifecycle has EVER been used for this stage.
-// When in use, receipts become the
-// completion authority and artifact existence degrades to evidence — a paused
-// or partially-written unit has artifacts but no receipt and stays uncovered
-// (issue: artifact presence was mistaken for completion). When NOT in use
-// (a genuinely ledger-free legacy flow), coverage stays artifact-driven, so
-// in-flight upgrades do not break until the stage adopts lifecycle receipts.
-type UnitLedger = {
-  receipts: Set<string>;
-  checkpoint: ReturnType<typeof activeUnitCheckpoint>;
-  inUse: boolean;
-  mode: ReturnType<typeof currentUnitLifecycleMode>;
-};
-function unitLedgerFor(projectDir: string, slug: string): UnitLedger {
-  const receipts = unitCompletedReceipts(projectDir, slug);
-  const checkpoint = activeUnitCheckpoint(projectDir, slug);
-  return {
-    receipts,
-    checkpoint,
-    inUse: unitLifecycleReceiptsInUse(projectDir, slug),
-    mode: currentUnitLifecycleMode(projectDir, slug),
-  };
-}
-
-// A unit is SETTLED when its artifacts exist AND, when the receipt ledger is
-// in use, a current-attempt UNIT_COMPLETED receipt names it. Kind-vacuous
-// units (required set filters to empty — the stage does not apply) never
-// receive directives, so they can never earn receipts: they settle on the
-// artifact rule alone, exactly as before.
-function unitSettled(
-  projectDir: string,
-  node: GraphStage,
-  unit: string,
-  recordPrefix: string | null,
-  codekbCtx: CodekbCtx,
-  unitKind: string | null,
-  ledger: UnitLedger,
-): boolean {
-  if (!unitCovered(projectDir, node, unit, recordPrefix, codekbCtx, unitKind)) return false;
-  if (!ledger.inUse) return true;
-  const names = node.produces ?? [];
-  if (names.length > 0 && applicableProduceNames(node, unitKind, false).length === 0) {
-    return true; // vacuous for this kind — no directive, no receipt to earn
-  }
-  return ledger.receipts.has(unit);
-}
-
-// Walk the ordered unit list and find the units that are not yet settled
-// (artifacts missing, or — with the receipt ledger in use — no UNIT_COMPLETED
-// receipt). Returns {unit, uncovered} where `unit` is the FIRST unsettled
+// Walk the ordered unit list and find the units whose artifacts are not all
+// present on disk. Returns {unit, uncovered} where `unit` is the FIRST uncovered
 // unit (the one the engine emits next) and `uncovered` is the full ordered list
-// of not-yet-settled units (so the caller can name them without re-scanning the
-// disk), or null when EVERY unit is already settled (the stage's per-unit work is
+// of not-yet-covered units (so the caller can name them without re-scanning the
+// disk), or null when EVERY unit is already covered (the stage's per-unit work is
 // complete; the caller then presents the final gate, see emitPerUnitRunStage).
 // Order is the topo order from orderedUnits, so the engine produces unit
 // dependencies before their dependents.
@@ -3686,19 +2870,17 @@ function nextUncoveredUnit(
   codekbCtx: CodekbCtx,
   kinds: Map<string, string> | null,
   stateContent: string | null,
-  ledger: UnitLedger,
 ): { unit: string; uncovered: string[] } | { error: string } | null {
   const uncovered: string[] = [];
   for (const unit of units) {
     if (
-      !unitSettled(
+      !unitCovered(
         projectDir,
         node,
         unit,
         recordPrefix,
         codekbCtx,
         kinds?.get(unit) ?? null,
-        ledger,
       )
     ) {
       uncovered.push(unit);
@@ -3711,249 +2893,7 @@ function nextUncoveredUnit(
     if (!confirmation.ok) return { error: confirmation.message };
   }
   if (uncovered.length === 0) return null;
-  // An in-flight unit (UNIT_STARTED/RESUMED without a terminal receipt) routes
-  // FIRST regardless of topo position: the single-active-unit invariant means
-  // new work must not begin while one unit is open (a crashed session's active
-  // unit is picked up before anything else).
-  const active = ledger.checkpoint;
-  if (active && uncovered.includes(active.unit)) {
-    return { unit: active.unit, uncovered };
-  }
   return { unit: uncovered[0], uncovered };
-}
-
-const WAVE_ELIGIBLE_STAGES: ReadonlySet<string> = new Set([
-  "functional-design",
-  "nfr-requirements",
-  "nfr-design",
-  "infrastructure-design",
-]);
-
-function waveEligible(node: GraphStage): boolean {
-  return (
-    WAVE_ELIGIBLE_STAGES.has(node.slug) &&
-    node.phase === "construction" &&
-    node.for_each === "unit-of-work" &&
-    node.mode === "inline" &&
-    node.workspace_requires !== true
-  );
-}
-
-type ActiveWave =
-  | { state: "active"; unit: string; wave: RunStageWave }
-  | { state: "settled" }
-  | { state: "error"; message: string };
-
-function waveEntry(
-  node: GraphStage,
-  unit: string,
-  unitKind: string | null,
-  projectType: "brownfield" | "greenfield" | null,
-  scope: string,
-  recordPrefix: string | null,
-  codekbCtx: CodekbCtx,
-  buildRequired: boolean,
-  completionRequired: boolean,
-  reviewState: RunStageWaveEntry["review_state"],
-  reviewIteration: number | null,
-): RunStageWaveEntry {
-  const resolvedConsumes = resolveConsumes(
-    node.consumes ?? [],
-    node,
-    projectType,
-    unit,
-    recordPrefix,
-    codekbCtx,
-    unitKind,
-  );
-  const { present, absent } = splitConsumesByPresence(
-    resolvedConsumes,
-    scope,
-    codekbCtx,
-  );
-  const entry: RunStageWaveEntry = {
-    unit,
-    unit_kind: unitKind,
-    build_required: buildRequired,
-    completion_required: completionRequired,
-    review_state: reviewState,
-    review_iteration: reviewIteration,
-    unit_memory_path: unitMemoryPathFor(node.slug, unit, recordPrefix),
-    consumes: present,
-    consumes_absent: absent,
-    produces: resolveProduces(
-      node,
-      unit,
-      recordPrefix,
-      codekbCtx,
-      unitKind,
-    ),
-    required_produces: applicableProduceNames(node, unitKind, false).map(
-      (name) =>
-        resolveArtifactPath(
-          name,
-          node,
-          unit,
-          recordPrefix,
-          codekbCtx,
-        ),
-    ),
-  };
-  return entry;
-}
-
-function attachBoundedWave(
-  directive: RunStageDirective,
-  wave: RunStageWave,
-): string | null {
-  const entries: RunStageWaveEntry[] = [];
-  for (const entry of wave.entries) {
-    const candidate = {
-      batch_index: wave.batch_index,
-      entries: [...entries, entry],
-    };
-    directive.wave = candidate;
-    // Leave room for the final transport's canonical rules_in_context paths
-    // and JSON framing. A large batch degrades to deterministic same-batch
-    // prefixes across successive next calls; it never spills into a dependent
-    // batch merely to fit one directive.
-    if (
-      Buffer.byteLength(JSON.stringify(directive), "utf-8") >
-      DIRECTIVE_MAX_BYTES - 1024
-    ) {
-      break;
-    }
-    entries.push(entry);
-  }
-  if (entries.length === 0) {
-    delete directive.wave;
-    return (
-      `Cannot emit the active wave for stage "${directive.stage}" within the ` +
-      `${DIRECTIVE_MAX_BYTES}-byte directive limit. Reduce the stage's path/context ` +
-      "fan-out or process this workflow with a smaller unit batch."
-    );
-  }
-  directive.wave = { batch_index: wave.batch_index, entries };
-  return null;
-}
-
-// Resolve the first unsettled Bolt-DAG batch from one healed snapshot. A batch
-// stays active until each kind-applicable unit has both its required artifacts
-// and a fresh terminal review receipt. This is the ordering boundary that keeps
-// dependent units from consuming work whose review may still trigger revision.
-function activePerUnitWave(
-  projectDir: string,
-  node: GraphStage,
-  resolution: Extract<BoltBatchesResolution, { state: "ok" }>,
-  projectType: "brownfield" | "greenfield" | null,
-  scope: string,
-  stateContent: string | null,
-  recordPrefix: string | null,
-  codekbCtx: CodekbCtx,
-): ActiveWave {
-  const reviewClass = node.reviewer
-    ? resolveReviewClass(node.review_class ?? "adversarial", scope, stateContent)
-    : "none";
-  const reviewProgress = reviewClass !== "none"
-    ? freshReviewReceipts(projectDir, stateContent ?? "", node, {
-        boltDag: resolution,
-        reviewClass,
-      })
-    : null;
-  const ledger = unitLedgerFor(projectDir, node.slug);
-
-  for (let batchIndex = 0; batchIndex < resolution.batches.length; batchIndex++) {
-    const batch = resolution.batches[batchIndex];
-    const entries: RunStageWaveEntry[] = [];
-    let firstPendingIndex = -1;
-    for (const unit of batch) {
-      const unitKind = resolution.unitKinds?.get(unit) ?? null;
-      // Match unitCovered and the approval guard: a kind with no applicable
-      // required produce is vacuously covered and owes neither work nor review.
-      if (applicableProduceNames(node, unitKind, false).length === 0) continue;
-
-      const covered = unitCovered(
-        projectDir,
-        node,
-        unit,
-        recordPrefix,
-        codekbCtx,
-        unitKind,
-      );
-      if (covered) {
-        const confirmation = checkSummaryConfirmationEvidence(projectDir, node, {
-          stateContent,
-          unit,
-        });
-        if (!confirmation.ok) return { state: "error", message: confirmation.message };
-      }
-      const terminalVerdict = reviewProgress?.unitVerdicts.get(unit);
-      const pendingReview = reviewProgress?.unitPending.get(unit);
-      const staleReview = reviewProgress?.unitStaleProgress.get(unit);
-      const reviewState: RunStageWaveEntry["review_state"] = reviewClass === "none"
-        ? "not-required"
-        : terminalVerdict ??
-          pendingReview?.state ??
-          (staleReview
-            ? staleReview.recoverySpent
-              ? "escalation-required"
-              : "recovery-required"
-            : "outstanding");
-      const reviewIteration = reviewClass === "none"
-        ? null
-        : terminalVerdict
-          ? (reviewProgress?.unitIterations.get(unit) ?? null)
-          : (pendingReview?.iteration ?? staleReview?.nextIteration ?? 1);
-      const buildRequired = !covered;
-      // Wave entries always settle through an explicit `unit complete --wave`
-      // receipt. This is the parallel counterpart to the serial start/complete
-      // lifecycle: the completion tool verifies this exact entry, fans its
-      // memory into the parent diary, then emits UNIT_COMPLETED atomically.
-      const completionRequired = !ledger.receipts.has(unit);
-      if (
-        buildRequired ||
-        completionRequired ||
-        reviewState === "outstanding" ||
-        reviewState === "retry-required" ||
-        reviewState === "repair-required" ||
-        reviewState === "recovery-required" ||
-        reviewState === "escalation-required"
-      ) {
-        entries.push(
-          waveEntry(
-            node,
-            unit,
-            unitKind,
-            projectType,
-            scope,
-            recordPrefix,
-            codekbCtx,
-            buildRequired,
-            completionRequired,
-            reviewState,
-            reviewIteration,
-          ),
-        );
-        if (firstPendingIndex === -1) {
-          firstPendingIndex = entries.length - 1;
-        }
-      }
-    }
-    if (firstPendingIndex !== -1) {
-      // Put the active unit first so the size-bounded prefix always contains
-      // the parent directive's unit, then retain deterministic batch order.
-      const ordered = [
-        ...entries.slice(firstPendingIndex),
-        ...entries.slice(0, firstPendingIndex),
-      ];
-      return {
-        state: "active",
-        unit: ordered[0].unit,
-        wave: { batch_index: batchIndex, entries: ordered },
-      };
-    }
-  }
-  return { state: "settled" };
 }
 
 // Emit ONE iteration of a per-unit Construction stage. The engine owns the
@@ -3971,60 +2911,26 @@ function emitPerUnitRunStage(
   codekbCtx: CodekbCtx,
   projectDir: string,
   resolution?: BoltBatchesResolution,
-  allowWave = true,
 ): void {
-  const r = resolution ?? resolveBoltBatches(projectDir);
-
   // GATE precedence: never iterate per-unit until the walking-skeleton gate is
-  // RESOLVED when a real Unit DAG exists. If this is the skeleton-gate stage,
-  // the DAG is present, and no stance is recorded yet,
+  // RESOLVED. If this is the skeleton-gate stage and no stance is recorded yet,
   // buildRunStageDirective would emit gate:"unresolved" (the classify
   // round-trip). The conductor must classify the stance FIRST, there is no
   // per-unit work to do while the gate is undetermined, so emit the normal
   // single directive (with the {unit-name} placeholder + the unresolved gate)
   // and return. The follow-up `next` (after `report --skeleton-stance`) resolves
   // the gate and re-enters here to begin per-unit iteration.
-  const stageLevelFallback =
-    r.state === "none" && usesStageLevelPerUnitArtifacts(scope, stateContent);
-  if (
-    !stageLevelFallback &&
-    isSkeletonGateStage(node, scope) &&
-    readSkeletonStance(stateContent) === null
-  ) {
+  if (isSkeletonGateStage(node, scope) && readSkeletonStance(stateContent) === null) {
     emitRunStageForSlug(node.slug, projectType, scope, stateContent, recordPrefix, codekbCtx);
     return;
   }
 
+  const r = resolution ?? resolveBoltBatches(projectDir);
   switch (r.state) {
     case "none":
-      if (!stageLevelFallback) {
-        emitRunStageForSlug(
-          node.slug,
-          projectType,
-          scope,
-          stateContent,
-          recordPrefix,
-          codekbCtx,
-        );
-        return;
-      }
-      // No dependency artifact exists on disk: run one stage-level iteration.
-      // There is no Bolt, Unit, skeleton classification, ladder, or swarm path,
-      // so paths omit the synthetic {unit-name} segment and the ordinary gated
-      // stage contract applies directly.
-      {
-        const directive = buildRunStageDirective(
-          node,
-          projectType,
-          null,
-          scope,
-          stateContent,
-          recordPrefix,
-          codekbCtx,
-        );
-        directive.gate = true;
-        emit(directive);
-      }
+      // No dependency artifact exists on disk: degrade to today's single
+      // {unit-name} directive for genuinely zero-unit scopes.
+      emitRunStageForSlug(node.slug, projectType, scope, stateContent, recordPrefix, codekbCtx);
       return;
     case "malformed":
       emit({
@@ -4037,71 +2943,10 @@ function emitPerUnitRunStage(
       break;
   }
   const units = r.batches.flat();
+
+  // The resolution carries batches + kinds from one graph snapshot. null =
+  // no kinds known = every unit on the full matrix.
   const kinds = r.unitKinds;
-  const ledger = unitLedgerFor(projectDir, node.slug);
-
-  // The serial lifecycle owns any existing active/paused checkpoint. A fresh
-  // wave has no single active Unit; every entry settles with `complete --wave`.
-  if (ledger.checkpoint?.state === "paused") {
-    const cp = ledger.checkpoint;
-    emit(askDirective(
-      `Unit "${cp.unit}" of stage "${node.slug}" is PAUSED (unit_state: paused)` +
-        `${cp.reason ? ` — reason: ${cp.reason}` : ""}.` +
-        `${cp.nextAction ? ` Recorded next action: ${cp.nextAction}.` : ""} ` +
-        `Do not start other work. Resume this unit (bun ${harnessDir()}/tools/aidlc-state.ts unit resume ` +
-        `--stage ${node.slug} --unit ${cp.unit}) and continue from the recorded next action, or ask ` +
-        "the human how to proceed. STOP until the unit is explicitly resumed.",
-    ));
-    return;
-  }
-
-  if (
-    allowWave &&
-    ledger.checkpoint === null &&
-    ledger.mode !== "serial" &&
-    ledger.mode !== "mixed" &&
-    waveEligible(node)
-  ) {
-    const wave = activePerUnitWave(
-      projectDir,
-      node,
-      r,
-      projectType,
-      scope,
-      stateContent,
-      recordPrefix,
-      codekbCtx,
-    );
-    if (wave.state === "error") {
-      emit(errorDirective(wave.message));
-      return;
-    }
-    if (wave.state === "active") {
-      const unitKind = r.unitKinds?.get(wave.unit) ?? null;
-      const directive = buildRunStageDirective(
-        node,
-        projectType,
-        wave.unit,
-        scope,
-        stateContent,
-        recordPrefix,
-        codekbCtx,
-        unitKind,
-      );
-      directive.gate = false;
-      directive.unit = wave.unit;
-      const waveError = attachBoundedWave(directive, wave.wave);
-      if (waveError !== null) {
-        emit(errorDirective(waveError));
-        return;
-      }
-      emit(directive);
-      return;
-    }
-    // All applicable units have settled build + review evidence. Fall through
-    // to the stock settle branch below, which presents the one stage gate.
-  }
-
   const pick = nextUncoveredUnit(
     projectDir,
     node,
@@ -4110,7 +2955,6 @@ function emitPerUnitRunStage(
     codekbCtx,
     kinds,
     stateContent,
-    ledger,
   );
   if (pick !== null && "error" in pick) {
     emit(errorDirective(pick.error));
@@ -4139,11 +2983,11 @@ function emitPerUnitRunStage(
     node, projectType, pick.unit, scope, stateContent, recordPrefix, codekbCtx,
     kinds?.get(pick.unit) ?? null,
   );
-  // Suppress the gate on EVERY not-yet-settled unit. A per-unit directive with an
-  // unsettled unit carries gate:false: the conductor completes the body, writes
+  // Suppress the gate on EVERY not-yet-covered unit. A per-unit directive with an
+  // uncovered unit carries gate:false: the conductor completes the body, writes
   // the unit's artifacts, and re-runs `next` (NO report-approve), so the checkbox
-  // stays in-flight and the engine emits the next unsettled unit. Once the LAST
-  // unit settles, the next `next` takes the pick === null branch
+  // stays in-flight and the engine emits the next uncovered unit. Once the LAST
+  // unit's artifacts land on disk, the next `next` takes the pick === null branch
   // above and presents the stage's real gate, so the single human approval covers
   // the whole stage only after all units are built. We override AFTER building so
   // the rest of the directive (paths, reviewer, persona) is unchanged.
@@ -4152,22 +2996,19 @@ function emitPerUnitRunStage(
   emit(directive);
 }
 
-// The in-scope, not-yet-settled per-unit Construction stages, in GRAPH order.
-// This is the unit-major walk's inner list: functional-design,
-// nfr-requirements, nfr-design, infrastructure-design, code-generation (each
-// `for_each: unit-of-work`), minus any this scope SKIPs or the state has
-// already completed/skipped. code-generation joins the walk (no mode filter):
-// graph order puts it last per unit because it requires all four design
-// stages, so each unit is designed and then BUILT before the next unit begins
-// - the walk owns the build and the autonomous swarm is suppressed under
-// unit-major (see eligibleAutonomousSwarmBatches). Graph order is preserved by
-// filtering loadGraph() in place, and graph order respects `requires_stage`
-// by the compile-time edge-direction invariant (aidlc-graph.ts), so a stage's
-// per-unit dependency is honoured per unit by construction. Effective action
-// uses the same state-override-wins rule as nextInScopeStage (state overrides
-// beat scope-mapping); completed or skipped checkboxes are dropped, the same
-// fresh-clone carve-out the report guard makes.
-function constructionUnitMajorBlock(
+// The in-scope, not-yet-settled INLINE per-unit Construction design stages, in
+// GRAPH order. This is the unit-major walk's inner list: functional-design,
+// nfr-requirements, nfr-design, infrastructure-design (each `for_each:
+// unit-of-work` + `mode: inline`), minus any this scope SKIPs or the state has
+// already completed/skipped. code-generation (`mode: subagent`) is excluded by
+// the mode filter, so the walk never touches the swarm path. Graph order is
+// preserved by filtering loadGraph() in place, and graph order respects
+// `requires_stage` by the compile-time edge-direction invariant
+// (aidlc-graph.ts), so a stage's per-unit dependency is honoured per unit by
+// construction. Effective action uses the same state-override-wins rule as
+// nextInScopeStage (state overrides beat scope-mapping); completed or skipped
+// checkboxes are dropped, the same fresh-clone carve-out the report guard makes.
+function constructionDesignBlock(
   scope: string,
   stateContent: string | null,
 ): GraphStage[] {
@@ -4180,6 +3021,7 @@ function constructionUnitMajorBlock(
   return loadGraph().filter((n) => {
     if (n.phase !== "construction") return false;
     if (!isPerUnit(n)) return false;
+    if (n.mode !== "inline") return false;
     const cb = checkboxStates.find((c) => c.slug === n.slug);
     if (cb && (cb.state === "completed" || cb.state === "skipped")) return false;
     const effectiveAction = stateOverrides?.get(n.slug) ?? mapping.stages[n.slug];
@@ -4187,28 +3029,21 @@ function constructionUnitMajorBlock(
   });
 }
 
-// Emit ONE iteration of the UNIT-MAJOR construction walk (opt-in via the
+// Emit ONE iteration of the UNIT-MAJOR construction design walk (opt-in via the
 // `Construction Iteration: unit-major` state field). Where emitPerUnitRunStage
 // is stage-outer / unit-inner (all units of the current stage before the next
 // stage), this is unit-outer / stage-inner: it walks the ordered unit list
-// (Bolt DAG topo order) OUTER and the per-unit construction block (graph
-// order: the four design stages then code-generation) INNER, emitting the
-// first uncovered (stage, unit) pair with the gate suppressed. So a unit's
-// four design documents are authored consecutively and the unit is BUILT
-// before the next unit begins - the first working code lands after ONE unit's
-// design, not after every unit's (the deferred half of the original
-// unit-major increment). code-generation's stage body still hard-stops at its
-// per-unit Plan Approval before generating, so a human sees each unit's
-// design -> plan -> code in sequence even though the stage-level gates come
-// later. The per-stage gates are UNCHANGED in count and machinery: they fire
-// late, in stage order, once the whole (stage x unit) grid is covered: the
-// fully-covered walk delegates to emitPerUnitRunStage for the CURRENT slug,
-// whose pick === null branch presents that stage's real gate on the last
-// unit. `handleApprove` then advances Current Stage to the next block stage;
-// its `next` re-enters here, finds the grid still fully covered, and presents
-// ITS gate, so the gates cascade at the block's end, one per human turn (the
-// presence guard enforces one resolution per turn). No gate/approve/audit
-// machinery changes.
+// (Bolt DAG topo order) OUTER and the design block (graph order) INNER, emitting
+// the first uncovered (stage, unit) pair with the gate suppressed. So a unit's
+// four design documents are authored consecutively before the next unit begins.
+// The four per-stage gates are UNCHANGED: they fire late, in stage order, once
+// the whole (stage x unit) grid is covered: the fully-covered walk delegates to
+// emitPerUnitRunStage for the CURRENT slug, whose pick === null branch presents
+// that stage's real gate on the last unit. `handleApprove` then advances Current
+// Stage to the next design stage; its `next` re-enters here, finds the grid
+// still fully covered, and presents ITS gate, so the four gates cascade at the
+// block's end, one per human turn (the presence guard enforces one resolution
+// per turn). No gate/approve/audit machinery changes.
 function emitUnitMajorRunStage(
   node: GraphStage,
   projectType: "brownfield" | "greenfield" | null,
@@ -4242,17 +3077,15 @@ function emitUnitMajorRunStage(
       codekbCtx,
       projectDir,
       resolution,
-      false,
     );
     return;
   }
   const units = resolution.batches.flat();
 
-  const block = constructionUnitMajorBlock(scope, stateContent);
+  const block = constructionDesignBlock(scope, stateContent);
   // Defensive: if the current node is not itself an active block stage (e.g. it
-  // was completed between the read and here, or a scope with no per-unit
-  // construction block routed here), fall back to the stage-major path for
-  // this slug.
+  // was completed between the read and here, or a scope with no inline design
+  // block routed here), fall back to the stage-major path for this slug.
   if (!block.some((n) => n.slug === node.slug)) {
     emitPerUnitRunStage(
       node,
@@ -4263,44 +3096,22 @@ function emitUnitMajorRunStage(
       codekbCtx,
       projectDir,
       resolution,
-      false,
     );
     return;
   }
 
   // Walk units OUTER (Bolt DAG topo order: dependencies before dependents),
   // block stages INNER (graph order, dependency-safe per unit by the compile
-  // invariant). Emit the first unsettled (stage, unit) pair with the gate
+  // invariant). Emit the first uncovered (stage, unit) pair with the gate
   // suppressed, using the same post-build override pattern as
   // emitPerUnitRunStage (the conductor acts on directive.stage + directive.unit,
   // not on Current Stage, so an interleaved slug needs no protocol change).
   // Kinds read ONCE (the single-read pattern): coverage must see the same
   // kind-pruned artifact set the directive names, or a pruned unit never covers.
-  // Ledgers read per block stage (each stage keeps its own receipt set); the
-  // paused-unit hard stop mirrors emitPerUnitRunStage — a pause on ANY block
-  // stage halts the walk before new (stage, unit) work.
   const kinds = resolution.unitKinds;
-  const ledgers = new Map<string, UnitLedger>(
-    block.map((k) => [k.slug, unitLedgerFor(projectDir, k.slug)]),
-  );
-  for (const k of block) {
-    const cp = ledgers.get(k.slug)?.checkpoint;
-    if (cp?.state === "paused") {
-      emit(askDirective(
-        `Unit "${cp.unit}" of stage "${k.slug}" is PAUSED (unit_state: paused)` +
-          `${cp.reason ? ` — reason: ${cp.reason}` : ""}.` +
-          `${cp.nextAction ? ` Recorded next action: ${cp.nextAction}.` : ""} ` +
-          `Do not start other work. Resume this unit (bun ${harnessDir()}/tools/aidlc-state.ts unit resume ` +
-          `--stage ${k.slug} --unit ${cp.unit}) and continue from the recorded next action, or ask ` +
-          "the human how to proceed. STOP until the unit is explicitly resumed.",
-      ));
-      return;
-    }
-  }
   for (const u of units) {
     for (const k of block) {
-      const ledger = ledgers.get(k.slug) ?? unitLedgerFor(projectDir, k.slug);
-      if (!unitSettled(projectDir, k, u, recordPrefix, codekbCtx, kinds?.get(u) ?? null, ledger)) {
+      if (!unitCovered(projectDir, k, u, recordPrefix, codekbCtx, kinds?.get(u) ?? null)) {
         const directive = buildRunStageDirective(
           k, projectType, u, scope, stateContent, recordPrefix, codekbCtx,
           kinds?.get(u) ?? null,
@@ -4334,7 +3145,6 @@ function emitUnitMajorRunStage(
     codekbCtx,
     projectDir,
     resolution,
-    false,
   );
 }
 
@@ -4354,10 +3164,9 @@ function emitForSlug(
 ): void {
   const node = nodeForSlug(slug);
   if (node && isPerUnit(node)) {
-    // Unit-major iteration (opt-in) covers EVERY per-unit Construction stage,
-    // code-generation included (the swarm never fires under unit-major - see
-    // eligibleAutonomousSwarmBatches - so this branch owns the build too).
-    if (readConstructionIteration(stateContent) === "unit-major") {
+    // Unit-major iteration (opt-in) applies only to the INLINE design stages;
+    // mode:subagent (code-generation) is left to the swarm / stage-major path.
+    if (node.mode === "inline" && readConstructionIteration(stateContent) === "unit-major") {
       emitUnitMajorRunStage(node, projectType, scope, stateContent, recordPrefix, codekbCtx, projectDir);
       return;
     }
@@ -4390,7 +3199,7 @@ function emitForSlug(
 // `single:true` marker gives the conductor a typed branch before ordinary gate
 // handling; isolated runs have no main-workflow approval lifecycle.
 const SINGLE_INIT_ERROR =
-  "Cannot run an initialization stage with --single. Initialization is bootstrap (it creates the intent + state); it runs automatically when you start a workflow (describe what to build, e.g. /aidlc \"build the auth service\").";
+  "Cannot run an initialization stage with --single. Initialization is bootstrap (it births the intent + state); it runs automatically when you start a workflow (describe what to build, e.g. /aidlc \"build the auth service\").";
 
 function emitSingleRunStage(
   slug: string,
@@ -4527,7 +3336,7 @@ function emitJumpDirective(
     // conductor runs it, the NEXT `next` sees the pivoted state and emits the
     // run-stage for the now-current target.
     emit(printDirective(
-      `Run \`bun ${harnessDir()}/tools/aidlc-jump.ts execute --target ${targetSlug} --direction ${direction} --scope ${scope}\` to perform the jump, then re-run \`next\` to continue from the jump target.`,
+      `Run \`${aidlcToolInvocation("jump")} execute --target ${targetSlug} --direction ${direction} --scope ${scope}\` to perform the jump, then re-run \`next\` to continue from the jump target.`,
     ));
     return;
   }
@@ -5069,7 +3878,7 @@ function checkEnsembleEvidence(
       `Stage "${slug}" is mode: ${node.mode} - its ensemble must convene before approval, and the ` +
       `contribution files are the evidence. Missing or malformed: ${missing.join("; ")}. ` +
       `Dispatch each support agent to write ${contributionPath} ` +
-      `(first line: **Collaborator:** <agent-slug>) per stage-protocol-ensemble.md §5, then re-report. ` +
+      `(first line: **Collaborator:** <agent-slug>) per stage-protocol.md §5, then re-report. ` +
       `Set AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 only to recover a legitimately-run stage whose files were lost.`,
   };
 }
@@ -5109,19 +3918,6 @@ function checkStageCompletionEvidence(
     if (resolution.state === "ok") {
       const units = resolution.batches.flat();
       const recordPrefix = relativeRecordDir(pd);
-      const ledger = unitLedgerFor(pd, slug);
-      // A paused unit blocks approval outright: its work is not done and the
-      // pause carries an explicit next action a gate must not paper over.
-      if (ledger.checkpoint?.state === "paused") {
-        const cp = ledger.checkpoint;
-        return {
-          ok: false,
-          message:
-            `Stage "${slug}" cannot enter approval: unit "${cp.unit}" is paused` +
-            `${cp.reason ? ` (reason: ${cp.reason})` : ""}. Resume and complete it first ` +
-            `(bun ${harnessDir()}/tools/aidlc-state.ts unit resume --stage ${slug} --unit ${cp.unit}).`,
-        };
-      }
       const pick = nextUncoveredUnit(
         pd,
         node,
@@ -5130,7 +3926,6 @@ function checkStageCompletionEvidence(
         codekbCtxFor(pd),
         unitKinds,
         stateContent,
-        ledger,
       );
       if (pick !== null && "error" in pick) {
         return { ok: false, message: pick.error };
@@ -5280,8 +4075,6 @@ function handleSingleReport(
     ));
     return;
   }
-  try { clearActiveDirectiveMarker(pd); }
-  catch (e) { recordHookDrop(pd, "active-directive", errorMessage(e)); }
 
   emit({
     kind: "done",
@@ -5342,27 +4135,17 @@ function handleResumeReport(
     ));
     return;
   }
-  // Numbered-prose harnesses show this fixed menu as 1-4. Normalize an exact
-  // visible response key before semantic matching so the engine, not the
-  // conductor, owns that stable mapping.
-  const numericChoices: Readonly<Record<string, string>> = {
-    "1": "resume from last checkpoint",
-    "2": "redo the current stage",
-    "3": "jump to a stage",
-    "4": "start fresh",
-  };
-  const rawChoice = flags.userInput.trim().toLowerCase();
-  const choice = numericChoices[rawChoice] ?? rawChoice;
+  const choice = flags.userInput.toLowerCase();
   if (choice.includes("redo")) {
     const scope = getField(stateContent, "Scope")?.trim() ?? "";
     emit(printDirective(
-      `Redo accepted at "${slug}". Run \`bun ${harnessDir()}/tools/aidlc-jump.ts execute --target ${slug} --direction redo --scope ${scope}\` to reset the current stage, then re-run \`next\` to start it over.`,
+      `Redo accepted at "${slug}". Run \`${aidlcToolInvocation("jump")} execute --target ${slug} --direction redo --scope ${scope}\` to reset the current stage, then re-run \`next\` to start it over.`,
     ));
     return;
   }
   if (choice.includes("jump")) {
     emit(printDirective(
-      `Jump accepted. Ask the human which stage to jump to, then re-run \`next --stage <slug>\`; the direction and the target are worked out and checked for you.`,
+      `Jump accepted. Ask the human which stage to jump to, then re-run \`next --stage <slug>\` — the engine resolves the direction and validates the target.`,
     ));
     return;
   }
@@ -5383,7 +4166,7 @@ function handleResumeReport(
     return;
   }
   emit(errorDirective(
-    `Unrecognized resume choice "${flags.userInput}". Accepted choices: 1/resume from last checkpoint, 2/redo the current stage, 3/jump to a stage, or 4/start fresh.`,
+    `Unrecognized resume choice "${flags.userInput}". Accepted choices: resume from last checkpoint, redo the current stage, jump to a stage, or start fresh.`,
   ));
 }
 
@@ -5394,29 +4177,6 @@ function handleResumeReport(
 // the spawned subcommand(s) — the engine itself writes nothing.
 function handleReport(args: string[], projectDir: string | undefined): void {
   const flags = parseReportFlags(args);
-
-  // Turn-shape marker: a `report` is unambiguous workflow engagement (it commits
-  // a transition), so it always disqualifies the turn from the Stop hook's
-  // conversational carve-out. See touchEngineMarker.
-  touchEngineMarker(projectDir);
-
-  // Runtime state-version guard (see staleStateVersionError): `report` commits a
-  // lifecycle transition, so a pre-v8 state must be refused here too — before any
-  // report sub-branch mutates it. Covers every report path (result, skeleton
-  // stance, single) via one early check.
-  {
-    const pd = resolveProjectDir(projectDir);
-    const sc = loadStateFileIfPresent(pd);
-    // `!== null` (not truthiness): a present but zero-byte state file returns ""
-    // and must still be refused, not treated as an absent file.
-    if (sc !== null) {
-      const stale = staleStateVersionError(sc);
-      if (stale) {
-        emit(errorDirective(stale));
-        return;
-      }
-    }
-  }
 
   // Branch -1 — the --single stage-runner commit. A stage-runner reports
   // its lone stage via `report --single --stage <slug> --result <outcome>`; the
@@ -5541,8 +4301,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
-    const planAction = effectivePlanAction(slug, scope, stateContent);
-    if (node.execution !== "CONDITIONAL" && planAction !== "SKIP") {
+    if (node.execution !== "CONDITIONAL") {
       emit(errorDirective(
         `Stage "${slug}" is execution: ${node.execution}; only a CONDITIONAL stage can report skipped.`,
       ));
@@ -5677,7 +4436,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       return;
     }
     emit(printDirective(
-      `Recorded ${flags.result} for "${slug}".`,
+      `Recorded ${flags.result} for "${slug}" through the orchestration engine.`,
     ));
     return;
   }
@@ -5762,7 +4521,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         emit({
           kind: "done",
           reason:
-            `Workflow is already completed at "${slug}" (scope: ${scope}); no transition was needed.${NEW_WORK_HINT}`,
+            `Workflow is already completed at "${slug}" (scope: ${scope}); no transition was needed.`,
         });
         return;
       }
@@ -5867,10 +4626,6 @@ function handleReport(args: string[], projectDir: string | undefined): void {
 // is relayed verbatim as an error directive.
 function handlePark(_args: string[], projectDir: string | undefined): void {
   const pd = resolveProjectDir(projectDir);
-  // Turn-shape marker: a `park` mutates workflow state, so it is engagement. See
-  // touchEngineMarker. (The `parked` directive is a terminal allow in the Stop
-  // hook anyway, so this is belt-and-braces rather than load-bearing.)
-  touchEngineMarker(projectDir);
   const res = spawnState(pd, ["park"]);
   if (res.exitCode !== 0) {
     const detail = (res.stderr || res.stdout).trim();
@@ -5897,7 +4652,7 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   const payload = decodeSteeringToken(token, pd);
   if (!payload || args.length !== 1) {
     emit(errorDirective(
-      "Invalid steering continuation token: this stage's rules cannot be loaded from where they left off. Run a fresh `next` to restart delivery from part 1.",
+      "Invalid steering continuation token. Run a fresh `next` to restart delivery from part 1.",
     ));
     return;
   }
@@ -5905,7 +4660,7 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   const liveStateHash = liveState === null ? null : sha256(liveState);
   if (payload.a && payload.h !== liveStateHash) {
     emit(errorDirective(
-      "The saved position moved on: the workflow state changed while this stage's rules were being loaded. Run a fresh `next` to restart delivery from part 1.",
+      "The workflow state changed during steering delivery. Run a fresh `next` to restart delivery from part 1.",
     ));
     return;
   }
@@ -5918,11 +4673,10 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   }
   if (payload.r !== steeringRouteHash(node, payload.c)) {
     emit(errorDirective(
-      "Which stage runs next has changed: the stage route changed while its rules were being loaded. Run a fresh `next` to restart delivery from part 1.",
+      "The stage route changed during steering delivery. Run a fresh `next` to restart delivery from part 1.",
     ));
     return;
   }
-  const cursor = inspectCopilotContinuation(pd, liveState, token);
 
   const directive = buildRunStageDirective(
     node,
@@ -5936,92 +4690,16 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
     payload.f,
   );
   directive.gate = payload.g;
-  if (payload.p && payload.u !== null) directive.unit = payload.u;
+  if (payload.p) directive.unit = payload.u;
   if (payload.n === undefined) {
     delete directive.next_stage;
   } else {
     directive.next_stage = payload.n;
   }
   if (payload.x) directive.single = true;
-  if (payload.z === true) applySettledSwarmShape(directive);
-  if (payload.w) {
-    const resolution = resolveBoltDag(pd);
-    if (resolution.state === "ok") {
-      const wave = activePerUnitWave(
-        pd,
-        node,
-        resolution,
-        projectTypeFrom(liveState),
-        payload.c,
-        payload.a ? liveState : null,
-        relativeRecordDir(pd),
-        codekbCtxFor(pd),
-      );
-      if (wave.state === "active" && wave.unit === payload.u) {
-        const waveError = attachBoundedWave(directive, wave.wave);
-        if (waveError !== null) {
-          emit(errorDirective(waveError));
-          return;
-        }
-      }
-    }
-  }
 
   requestedSteeringContinuation = payload;
-  const prepared = prepareEmission(directive);
-  if (!prepared.marker) {
-    writePrepared(prepared);
-    return;
-  }
-  try {
-    const advanced = advanceCopilotContinuation(
-      cursor,
-      token,
-      prepared.marker,
-      prepared.resultSha256,
-      engineInvocation?.attemptId,
-    );
-    if (advanced === "advanced" || advanced === "stateless") {
-      writePrepared(prepared);
-      return;
-    }
-    const message = advanced === "superseded"
-      ? "This continuation token is no longer current for this Copilot workflow. Run a fresh `next`; do not reuse an earlier token."
-      : "The active workflow context changed while this continuation was prepared. Run a fresh `next`; do not use the prepared result.";
-    writePrepared(prepareEmission(errorDirective(message)));
-  } catch (error) {
-    if (!(error instanceof ActiveDirectiveLockContendedError)) throw error;
-    if (cursor.authority === "stateless" && !cursor.copilotInstalled) {
-      try {
-        const latest = inspectCopilotContinuation(
-          pd,
-          loadStateFileIfPresent(pd),
-          token,
-        );
-        if (
-          latest.authority === "stateless" &&
-          !latest.copilotInstalled &&
-          latest.target.markerPath === cursor.target.markerPath &&
-          latest.target.intentUuid === cursor.target.intentUuid &&
-          latest.stateSha256 === cursor.stateSha256 &&
-          latest.statePresent === cursor.statePresent
-        ) {
-          recordHookDrop(
-            pd,
-            "active-directive",
-            "stateless continuation marker publication contended; delivered without updating the marker",
-          );
-          writePrepared(prepared);
-          return;
-        }
-      } catch {
-        // Keep the coordination-busy refusal when authority cannot be rechecked.
-      }
-    }
-    writePrepared(prepareEmission(errorDirective(
-      "Continuation coordination is busy. This call did not commit a cursor change. Retry the current token; if it is reported superseded, run a fresh `next`.",
-    )));
-  }
+  emit(directive);
 }
 
 // --- CLI entry point ---
@@ -6031,19 +4709,10 @@ export function main(argv: string[]): void {
 
   // Extract --project-dir (mirrors aidlc-jump.ts / aidlc-state.ts).
   let projectDir: string | undefined;
-  let attemptId: string | undefined;
-  let conflictingAttemptId = false;
   const filteredArgs: string[] = [];
   for (let i = 0; i < rawArgs.length; i++) {
     if (rawArgs[i] === "--project-dir" && i + 1 < rawArgs.length) {
       projectDir = rawArgs[i + 1];
-      i++;
-    } else if (rawArgs[i] === "--aidlc-attempt-id" && i + 1 < rawArgs.length) {
-      const candidate = rawArgs[i + 1];
-      if (/^[A-Za-z0-9._:-]{1,128}$/.test(candidate)) {
-        if (attemptId !== undefined && attemptId !== candidate) conflictingAttemptId = true;
-        attemptId = candidate;
-      }
       i++;
     } else {
       filteredArgs.push(rawArgs[i]);
@@ -6052,38 +4721,27 @@ export function main(argv: string[]): void {
 
   const subcommand = filteredArgs[0];
   const subArgs = filteredArgs.slice(1);
-  if (engineInvocation !== null) throw new Error("Nested aidlc-orchestrate dispatch is not supported");
-  const commandKind = (["next", "continue", "report", "park"] as const).find((kind) => kind === subcommand);
-  if (commandKind) engineInvocation = {
-    commandKind,
-    commandSha256: sha256(JSON.stringify([commandKind, ...subArgs])),
-    ...(!conflictingAttemptId && attemptId ? { attemptId } : {}),
-  };
-  try {
-    switch (subcommand) {
-      case "next":
-        handleNext(subArgs, projectDir);
-        break;
-      case "continue":
-        handleContinue(subArgs, projectDir);
-        break;
-      case "report":
-        handleReport(subArgs, projectDir);
-        break;
-      case "park":
-        handlePark(subArgs, projectDir);
-        break;
-      default:
-        // Unknown / missing subcommand — usage to stderr, exit 1. Matches the
-        // stderr-only usage shape the sibling tools use for a bad subcommand.
-        console.error(
-          `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: next, continue, report, park`,
-        );
-        process.exit(1);
-    }
-  } finally {
-    engineInvocation = null;
-    requestedSteeringContinuation = null;
+
+  switch (subcommand) {
+    case "next":
+      handleNext(subArgs, projectDir);
+      break;
+    case "continue":
+      handleContinue(subArgs, projectDir);
+      break;
+    case "report":
+      handleReport(subArgs, projectDir);
+      break;
+    case "park":
+      handlePark(subArgs, projectDir);
+      break;
+    default:
+      // Unknown / missing subcommand — usage to stderr, exit 1. Matches the
+      // stderr-only usage shape the sibling tools use for a bad subcommand.
+      console.error(
+        `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: next, continue, report, park`,
+      );
+      process.exit(1);
   }
 }
 

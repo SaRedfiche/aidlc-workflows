@@ -9,7 +9,6 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -860,7 +859,11 @@ function writeCompositionRecords(
   );
 }
 
-function copyProjectSurfaces(projectDir: string, stagedProject: string, harnessDir: string): void {
+export function copyProjectSurfaces(
+  projectDir: string,
+  stagedProject: string,
+  harnessDir: string,
+): void {
   mkdirSync(stagedProject, { recursive: true });
   for (const entry of [harnessDir, ".agents", "aidlc"]) {
     const source = join(projectDir, entry);
@@ -1210,7 +1213,7 @@ function allSurfaceFiles(projectDir: string, harnessDir: string): Map<string, st
   return files;
 }
 
-function projectDiffPlan(
+export function projectDiffPlan(
   projectDir: string,
   stagedProject: string,
   harnessDir: string,

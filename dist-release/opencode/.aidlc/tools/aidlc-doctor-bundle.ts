@@ -71,6 +71,7 @@ import {
   stateFilePath,
   stopHookDir,
 } from "./aidlc-lib.ts";
+import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
 // The bundle format version — bumped when the report/manifest/evidence SHAPE
@@ -625,7 +626,7 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
       for (const agent of stage.support_agents) {
         const file = join(contribDir, `${agent}.md`);
         const st = safeLstat(file);
-        if (!st || !st.isFile()) {
+        if (!st?.isFile()) {
           problems.push({ collaborator: agent, exists: false, markerMatches: false });
           continue;
         }
@@ -696,8 +697,9 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
         authoredInputsNewestMtime: new Date(authoredInputsNewestMtimeMs).toISOString(),
       },
       remedy:
-        "The compiled runtime graph is out of date. Re-run `bun " +
-        "<harness>/tools/aidlc-graph.ts compile`; if this recurs, the " +
+        `The compiled runtime graph is out of date. Re-run \`${
+          aidlcToolInvocation("graph")
+        } compile\`; if this recurs, the ` +
         "runtime-compile hook may not be firing on this harness (check hook heartbeats).",
       safeToAutomate: true,
     });
@@ -716,7 +718,7 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
       summary: "runtime-graph.json is missing for the active workflow.",
       evidence: { runtimeGraphExists: false },
       remedy:
-        "No compiled runtime graph. Re-run `bun <harness>/tools/aidlc-graph.ts compile`. " +
+        `No compiled runtime graph. Re-run \`${aidlcToolInvocation("graph")} compile\`. ` +
         "If it never appears, the runtime-compile hook is not firing on this harness.",
       safeToAutomate: true,
     });
@@ -878,6 +880,7 @@ const AUDIT_EVENT_ALLOWLIST = new Set([
   "GATE_APPROVED",
   "GATE_REJECTED",
   "HUMAN_TURN",
+  "SUMMARY_CONFIRMATION_RECORDED",
   "PHASE_STARTED",
   "PHASE_COMPLETED",
   "SCOPE_DETECTED",

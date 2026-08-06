@@ -82,6 +82,11 @@ usage() {
   fail 2 usage "${1:-invalid arguments}" "$(usage_text)"
 }
 
+has_controlling_terminal() {
+  ( : </dev/tty ) 2>/dev/null &&
+    ( : >/dev/tty ) 2>/dev/null
+}
+
 output_scan_expects_value=0
 for arg in "$@"; do
   if [ "$output_scan_expects_value" -eq 1 ]; then
@@ -122,9 +127,11 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-[ -n "$HARNESSES" ] || [ -t 0 ] || usage "a harness is required in non-interactive installs; pass --harness <name>"
-[ -n "$HARNESSES" ] || { [ "$MODE" = "human" ] && [ "$YES" -eq 0 ]; } ||
-  usage "interactive harness selection is unavailable with --json, --quiet, or --yes; pass --harness <name>"
+if [ -z "$HARNESSES" ]; then
+  harness_required="a harness is required in non-interactive installs; pass --harness <name>"
+  { [ "$MODE" = "human" ] && [ "$YES" -eq 0 ]; } || usage "$harness_required"
+  has_controlling_terminal || usage "$harness_required"
+fi
 [ "$(id -u)" -ne 0 ] || fail 4 failed "refusing a root install; run as the target user"
 if [ -n "$VERSION" ] && ! printf '%s\n' "$VERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
   usage "invalid --version: $VERSION"
@@ -182,7 +189,7 @@ resolve_command_path() {
     esac
     directory=$(dirname "$path")
     name=$(basename "$path")
-    if resolved_directory=$(CDPATH= cd -P "$directory" 2>/dev/null && pwd -P); then
+    if resolved_directory=$(CDPATH='' cd -P "$directory" 2>/dev/null && pwd -P); then
       path=$resolved_directory/$name
     fi
     hops=$((hops + 1))
@@ -342,11 +349,15 @@ choices=$(awk '
 ' "$TMP/version.json")
 [ -n "$choices" ] || fail 4 failed "version.json contains no harness distributions."
 if [ -z "$HARNESSES" ]; then
-  echo "Select the harness distribution to install:"
-  printf '%s\n' "$choices" | awk -F '|' '{ printf "  %d) %-10s - %s\n", NR, $1, $2 }'
-  choice_count=$(printf '%s\n' "$choices" | awk 'END { print NR }')
-  printf 'Harness [1-%s]: ' "$choice_count"
-  IFS= read -r choice
+  {
+    echo "Select the harness distribution to install:"
+    printf '%s\n' "$choices" | awk -F '|' '{ printf "  %d) %-10s - %s\n", NR, $1, $2 }'
+    choice_count=$(printf '%s\n' "$choices" | awk 'END { print NR }')
+    printf 'Harness [1-%s]: ' "$choice_count"
+  } >/dev/tty
+  if ! IFS= read -r choice </dev/tty; then
+    usage "unable to read harness selection from the controlling terminal"
+  fi
   case "$choice" in ""|*[!0-9]*) usage "invalid harness selection" ;; esac
   selected=$(printf '%s\n' "$choices" | sed -n "${choice}p" | cut -d '|' -f 1)
   [ -n "$selected" ] || usage "invalid harness selection"

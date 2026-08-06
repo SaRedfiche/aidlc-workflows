@@ -39,11 +39,13 @@
 //            [--test-file <path>] [--reasons <unit>=<reason>,...]
 //       The AUTHORITATIVE gate. The conductor's claimed-converged set is an
 //       explicit input and the only thing finalize trusts from it. For each
-//       claimed unit, RE-RUN the check (green + untampered) before any merge: a
-//       unit named in --claimed but red on disk is refused the merge and lands in
-//       the failure envelope (the lying-conductor guard). Serialised HOLD-MERGE
-//       merge-back of the genuine passes only, then emit the full SWARM_* audit
-//       trail + the typed envelope + exit 0/2. --reasons carries the conductor's
+//       claimed unit, RE-RUN the check (green + untampered) and, when the current
+//       stage declares a reviewer, require that unit's matching post-BOLT_STARTED
+//       REVIEW_COMPLETED receipt before any merge. A unit named in --claimed but
+//       red or unreviewed on disk is refused the merge and lands in the failure
+//       envelope (the lying-conductor guard). Serialised HOLD-MERGE merge-back of
+//       the genuine passes only, then emit the full SWARM_* audit trail + the typed
+//       envelope + exit 0/2. --reasons carries the conductor's
 //       typed attribution for a DECLINED (unclaimed) unit — unsatisfiable /
 //       budget-exhausted / cap-exhausted — recorded faithfully (the conductor
 //       judges WHY a unit gave up; the tool only records it, never for a claimed
@@ -76,13 +78,16 @@ import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
+  auditBlockField,
   getField,
   latestMainWorkflowStageStarted,
   parseArgs,
   readAllAuditShards,
   readStateFile,
+  reviewArtifactFingerprint,
   resolveConstructionRepo,
   resolveProjectDir,
+  resolveStage,
   worktreePath,
 } from "./aidlc-lib.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
@@ -230,6 +235,118 @@ function verdictFor(
     }
   }
   return { exists: true, converged, tampered, confineError };
+}
+
+interface ReviewerRequirement {
+  stage: string;
+  reviewer: string | null;
+  error?: string;
+}
+
+function reviewerRequirement(projectDir: string): ReviewerRequirement {
+  try {
+    const stage = getField(readStateFile(projectDir), "Current Stage")?.trim() ?? "";
+    if (!stage) {
+      return {
+        stage: "",
+        reviewer: null,
+        error: "cannot resolve reviewer requirement: Current Stage is empty",
+      };
+    }
+    const definition = resolveStage(stage);
+    if (!definition) {
+      return {
+        stage,
+        reviewer: null,
+        error: `cannot resolve reviewer requirement: stage "${stage}" is absent from the stage graph`,
+      };
+    }
+    return { stage, reviewer: definition.reviewer?.trim() || null };
+  } catch (e) {
+    return {
+      stage: "",
+      reviewer: null,
+      error: `cannot resolve reviewer requirement: ${e instanceof Error ? e.message : String(e)}`,
+    };
+  }
+}
+
+// A claimed autonomous unit must prove its configured review happened inside
+// this Bolt attempt. BOLT_STARTED is a stronger floor than STAGE_STARTED here:
+// it excludes a matching receipt inherited from main when prepare forked the
+// worktree, while preserving a receipt across a merge retry on that worktree.
+function reviewerReceiptError(
+  projectDir: string,
+  unit: string,
+  stage: string,
+  reviewer: string,
+): string | null {
+  const audit = readAllAuditShards(worktreePath(projectDir, unit));
+  if (!audit) {
+    return `claimed converged but worktree audit is missing; expected a terminal review by ${reviewer}`;
+  }
+
+  const relevant = new Set(["BOLT_STARTED", "REVIEW_COMPLETED"]);
+  const events = audit
+    .replace(/\r\n/g, "\n")
+    .split(/\n---\n/)
+    .map((block, position) => ({
+      block,
+      position,
+      event: auditBlockField(block, "Event") ?? "",
+      timestamp: auditBlockField(block, "Timestamp") ?? "",
+    }))
+    .filter((event) => relevant.has(event.event))
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      return a.position - b.position;
+    });
+
+  let boltStart = -1;
+  for (let i = 0; i < events.length; i++) {
+    if (
+      events[i].event === "BOLT_STARTED" &&
+      auditBlockField(events[i].block, "Bolt slug") === unit
+    ) {
+      boltStart = i;
+    }
+  }
+  if (boltStart === -1) {
+    return `claimed converged but worktree audit has no BOLT_STARTED boundary for unit "${unit}"`;
+  }
+
+  for (let i = boltStart + 1; i < events.length; i++) {
+    const event = events[i];
+    if (event.event !== "REVIEW_COMPLETED") continue;
+    if (auditBlockField(event.block, "Workflow")?.startsWith("single-stage:")) continue;
+    if (auditBlockField(event.block, "Stage") !== stage) continue;
+    if (auditBlockField(event.block, "Reviewer") !== reviewer) continue;
+    if (auditBlockField(event.block, "Unit") !== unit) continue;
+    const verdict = auditBlockField(event.block, "Verdict");
+    if (verdict !== "READY" && verdict !== "NOT-READY") continue;
+    const definition = resolveStage(stage);
+    if (!definition) continue;
+    const recordedFingerprint = auditBlockField(event.block, "Artifact Fingerprint");
+    const currentFingerprint = reviewArtifactFingerprint(
+      worktreePath(projectDir, unit),
+      definition,
+      unit,
+      { requireRequiredArtifacts: true },
+    );
+    if (
+      recordedFingerprint !== null &&
+      /^sha256:[0-9a-f]{64}$/.test(recordedFingerprint) &&
+      currentFingerprint !== null &&
+      recordedFingerprint === currentFingerprint
+    ) {
+      return null;
+    }
+  }
+
+  return (
+    `claimed converged but no terminal REVIEW_COMPLETED for stage "${stage}", ` +
+    `unit "${unit}", reviewer "${reviewer}" with a current artifact fingerprint exists after this Bolt started`
+  );
 }
 
 // --- Audit emission (this tool owns the whole swarm taxonomy) ---------------
@@ -537,6 +654,7 @@ function handleFinalize(rest: string[]): void {
   const claimedSet = new Set(claimed);
   const testFile = flags["test-file"];
   const checkCmd = flags["check-cmd"];
+  const review = reviewerRequirement(projectDir);
 
   // Optional per-declined-unit typed reasons: `--reasons a=unsatisfiable,b=budget-exhausted`.
   // The conductor judged WHY each unclaimed unit gave up (knowledge → conductor,
@@ -587,8 +705,22 @@ function handleFinalize(rest: string[]): void {
           tampered: true,
         });
       } else if (verdict.converged) {
-        genuine.push(unit);
-        results.push({ unit, status: "converged" });
+        const reviewError = review.error ?? (
+          review.reviewer
+            ? reviewerReceiptError(projectDir, unit, review.stage, review.reviewer)
+            : null
+        );
+        if (reviewError) {
+          results.push({
+            unit,
+            status: "failed",
+            reason: "error",
+            detail: reviewError,
+          });
+        } else {
+          genuine.push(unit);
+          results.push({ unit, status: "converged" });
+        }
       } else {
         // Claimed converged, but the check command does not pass on re-verify —
         // the lying / misremembering conductor. Refuse the merge.

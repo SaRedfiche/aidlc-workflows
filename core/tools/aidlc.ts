@@ -123,6 +123,7 @@ export const TOOLS = {
   utility: "aidlc-utility.ts",
   validate: "aidlc-validate.ts",
   worktree: "aidlc-worktree.ts",
+  workspaceSync: "aidlc-workspace-sync.ts",
 } as const;
 
 export const SLASH_FLAG_ALIASES: readonly Alias[] = [
@@ -790,6 +791,17 @@ export const ROUTES: readonly Route[] = [
     targets: { detect: "detect", codekb: "codekb-path" },
   },
   {
+    id: "workspace-sync",
+    group: "workspace",
+    kind: "routing-only",
+    classification: "routing-only",
+    verbs: ["__delegate"],
+    tool: TOOLS.workspaceSync,
+    ...HIDDEN_ENGINE,
+    networkPolicy: "required",
+    all: [],
+  },
+  {
     id: "delegate",
     group: "top",
     kind: "routing-only",
@@ -1104,6 +1116,7 @@ function handleRouteOnly(route: Route, argv: string[]): Action {
       "runner-gen": TOOLS.runnerGen,
       runtime: TOOLS.runtime,
       sensor: TOOLS.sensor,
+      "sensor-claim-sources": TOOLS.sensorClaimSources,
       "sensor-linter": TOOLS.sensorLinter,
       "sensor-required-sections": TOOLS.sensorRequiredSections,
       "sensor-type-check": TOOLS.sensorTypeCheck,
@@ -1113,6 +1126,7 @@ function handleRouteOnly(route: Route, argv: string[]): Action {
       utility: TOOLS.utility,
       validate: TOOLS.validate,
       worktree: TOOLS.worktree,
+      "workspace-sync": TOOLS.workspaceSync,
     };
     const tool = byStem[name];
     return tool
@@ -1409,6 +1423,8 @@ async function loadDelegate(tool: string): Promise<DelegateModule | null> {
       return import("./aidlc-validate.ts");
     case TOOLS.worktree:
       return import("./aidlc-worktree.ts");
+    case TOOLS.workspaceSync:
+      return import("./aidlc-workspace-sync.ts");
     default:
       return null;
   }
@@ -1727,6 +1743,7 @@ export function routePolicyFor(argv: readonly string[]): Route | null {
         space: "space",
         "space-create": "space",
         "codekb-path": "workspace",
+        "codekb-scope-diff": "workspace",
         detect: "workspace",
         "select-plugins": "plugin",
         "plugin-list": "plugin",
@@ -1749,6 +1766,8 @@ export function routePolicyFor(argv: readonly string[]): Route | null {
       if (routeId) return routeById(routeId);
       return routeById("delegate");
     }
+    if (delegate === "workspace-sync") return routeById("workspace-sync");
+    if (delegate === "sensor-claim-sources") return routeById("sensor");
     const toolByDelegate: Readonly<Record<string, string>> = {
       audit: TOOLS.audit,
       bolt: TOOLS.bolt,
@@ -1760,6 +1779,7 @@ export function routePolicyFor(argv: readonly string[]): Route | null {
       "runner-gen": TOOLS.runnerGen,
       runtime: TOOLS.runtime,
       sensor: TOOLS.sensor,
+      "sensor-claim-sources": TOOLS.sensorClaimSources,
       "sensor-linter": TOOLS.sensorLinter,
       "sensor-required-sections": TOOLS.sensorRequiredSections,
       "sensor-type-check": TOOLS.sensorTypeCheck,
@@ -1768,6 +1788,7 @@ export function routePolicyFor(argv: readonly string[]): Route | null {
       swarm: TOOLS.swarm,
       validate: TOOLS.validate,
       worktree: TOOLS.worktree,
+      "workspace-sync": TOOLS.workspaceSync,
     };
     const tool = toolByDelegate[delegate ?? ""];
     if (!tool) return routeById("delegate");

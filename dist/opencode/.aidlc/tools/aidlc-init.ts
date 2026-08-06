@@ -44,6 +44,11 @@ import {
   _resetHarnessDataForTests,
   _resetScopeMappingForTests,
   _resetStageGraphForTests,
+  getField,
+  listIntents,
+  listSpaces,
+  stateFilePath,
+  withAuditLock,
 } from "./aidlc-lib.ts";
 import { regenerateRunnerSurfaces } from "./aidlc-runner-gen.ts";
 import {
@@ -53,8 +58,6 @@ import {
   renderStageTable,
 } from "./aidlc-utility.ts";
 import {
-  aidlcDispatcherInvocation,
-  aidlcToolInvocation,
   discoverProjectHarnesses,
 } from "./aidlc-runtime-paths.ts";
 
@@ -338,15 +341,40 @@ function mergePluginFragments(
   return value;
 }
 
-function replaceGeneratedRegion(current: string, generated: string, begin: string, end: string): string {
-  const currentBegin = current.indexOf(begin);
-  const currentEnd = current.indexOf(end, currentBegin + begin.length);
-  const generatedBegin = generated.indexOf(begin);
-  const generatedEnd = generated.indexOf(end, generatedBegin + begin.length);
-  if (currentBegin < 0 || currentEnd < 0 || generatedBegin < 0 || generatedEnd < 0) return generated;
-  return `${current.slice(0, currentBegin)}${
-    generated.slice(generatedBegin, generatedEnd + end.length)
-  }${current.slice(currentEnd + end.length)}`;
+function replaceGeneratedRegion(
+  current: string,
+  generated: string,
+  kind: "stage" | "scope",
+): string {
+  const noun = kind === "stage" ? "stage graph" : "scope grid";
+  const beginPrefix = `<!-- BEGIN: compiled ${noun} via `;
+  const end = `<!-- END: compiled ${noun} -->`;
+  const locate = (content: string): {
+    begin: number;
+    beginLineEnd: number;
+    endStart: number;
+    end: number;
+  } => {
+    const begin = content.indexOf(beginPrefix);
+    const beginLineEnd = content.indexOf("-->", begin);
+    const endAt = content.indexOf(end, beginLineEnd);
+    if (begin < 0 || beginLineEnd < 0 || endAt < 0) {
+      throw new Error(`SKILL.md is missing the compiled ${noun} region`);
+    }
+    return {
+      begin,
+      beginLineEnd: beginLineEnd + 3,
+      endStart: endAt,
+      end: endAt + end.length,
+    };
+  };
+  const target = locate(current);
+  const source = locate(generated);
+  return `${current.slice(0, target.begin)}${
+    current.slice(target.begin, target.beginLineEnd)
+  }${generated.slice(source.beginLineEnd, source.endStart)}${
+    current.slice(target.endStart, target.end)
+  }${current.slice(target.end)}`;
 }
 
 function generatedOverlayCandidate(rel: string, harnessDir: string): boolean {
@@ -360,27 +388,40 @@ function generatedOverlayCandidate(rel: string, harnessDir: string): boolean {
     rel.startsWith(".agents/skills/");
 }
 
+const HARNESS_IDENTITY_KEYS = new Set([
+  "schemaVersion",
+  "distribution",
+  "productName",
+  "initNextStep",
+  "harnessDir",
+  "rulesSubdir",
+]);
+
 function prepareRefreshSource(
   projectDir: string,
   sourceRoot: string,
   descriptor: ProjectionDescriptor,
   prior: Baseline | null,
 ): { root: string; cleanup?: string; regenerated: Set<string> } {
-  if (!prior) return { root: sourceRoot, regenerated: new Set() };
+  const currentHarness = join(projectDir, descriptor.harnessDir);
+  const currentHarnessData = join(currentHarness, "tools", "data", "harness.json");
+  if (!prior && !regularFile(currentHarnessData)) {
+    return { root: sourceRoot, regenerated: new Set() };
+  }
   const cleanup = mkdtempSync(join(tmpdir(), "aidlc-init-refresh-"));
   try {
   const root = join(cleanup, "projection");
   cpSync(sourceRoot, root, { recursive: true, preserveTimestamps: true });
   const regenerated = new Set<string>();
-  const currentHarness = join(projectDir, descriptor.harnessDir);
   const stagedHarness = join(root, descriptor.harnessDir);
 
-  const currentHarnessData = join(currentHarness, "tools", "data", "harness.json");
   const stagedHarnessData = join(stagedHarness, "tools", "data", "harness.json");
   if (regularFile(currentHarnessData)) {
     const current = JSON.parse(readFileSync(currentHarnessData, "utf-8")) as Record<string, unknown>;
     const staged = JSON.parse(readFileSync(stagedHarnessData, "utf-8")) as Record<string, unknown>;
-    if (Array.isArray(current.plugins)) staged.plugins = current.plugins;
+    for (const [key, value] of Object.entries(current)) {
+      if (!HARNESS_IDENTITY_KEYS.has(key)) staged[key] = value;
+    }
     writeFileSync(stagedHarnessData, `${JSON.stringify(staged, null, 2)}\n`);
     regenerated.add(`${descriptor.harnessDir}/tools/data/harness.json`);
   }
@@ -401,7 +442,7 @@ function prepareRefreshSource(
       const staged = join(root, rel);
       if (
         existsSync(staged) ||
-        prior.files[rel] ||
+        prior?.files[rel] ||
         !generatedOverlayCandidate(rel, descriptor.harnessDir)
       ) continue;
       mkdirSync(dirname(staged), { recursive: true });
@@ -439,10 +480,10 @@ function prepareRefreshSource(
       if (!lstatSync(currentPhase).isDirectory()) continue;
       for (const file of readdirSync(currentPhase).filter((name) => name.endsWith(".md"))) {
         const rel = `${descriptor.harnessDir}/aidlc-common/stages/${phase}/${file}`;
-        const priorHash = prior.files[rel];
+        const priorHash = prior?.files[rel];
         const currentPath = join(projectDir, rel);
         const stagedPath = join(root, rel);
-        if (!priorHash || !regularFile(currentPath) || !existsSync(stagedPath)) continue;
+        if (!regularFile(currentPath) || !existsSync(stagedPath)) continue;
         const current = readFileSync(currentPath, "utf-8");
         const record = records.get(file.slice(0, -3)) ?? {};
         const fragments = pluginFragments(current);
@@ -454,7 +495,7 @@ function prepareRefreshSource(
         }
         const currentHash = sha256Bytes(current);
         const strippedHash = sha256Bytes(stripRecordedContributions(current, record));
-        if (currentHash !== priorHash && strippedHash !== priorHash) continue;
+        if (priorHash && currentHash !== priorHash && strippedHash !== priorHash) continue;
         let fresh = readFileSync(stagedPath, "utf-8");
         fresh = mergeListField(fresh, "produces", record.produces ?? []);
         fresh = mergeListField(fresh, "sensors", record.sensors ?? []);
@@ -462,7 +503,7 @@ function prepareRefreshSource(
         fresh = mergeRequiredSections(fresh, record);
         fresh = mergePluginFragments(fresh, fragments);
         writeFileSync(stagedPath, fresh);
-        regenerated.add(rel);
+        if (prior) regenerated.add(rel);
       }
     }
   }
@@ -507,33 +548,14 @@ function prepareRefreshSource(
       generated = replaceGeneratedRegion(
         generated,
         canonicalStageTableRegion(renderStageTable()),
-        `<!-- BEGIN: compiled stage graph via \`${aidlcDispatcherInvocation("utility")} stage-table\` - do NOT hand-edit -->`,
-        "<!-- END: compiled stage graph -->",
+        "stage",
       );
       generated = replaceGeneratedRegion(
         generated,
         canonicalScopeTableRegion(renderScopeTable()),
-        `<!-- BEGIN: compiled scope grid via \`${aidlcDispatcherInvocation("utility")} scope-table\` - do NOT hand-edit -->`,
-        "<!-- END: compiled scope grid -->",
+        "scope",
       );
-      const rel = relative(root, skillPath).replaceAll("\\", "/");
-      const currentSkill = join(projectDir, rel);
-      if (regularFile(currentSkill)) {
-        generated = replaceGeneratedRegion(
-          readFileSync(currentSkill, "utf-8"),
-          generated,
-          `<!-- BEGIN: compiled stage graph via \`${aidlcDispatcherInvocation("utility")} stage-table\` - do NOT hand-edit -->`,
-          "<!-- END: compiled stage graph -->",
-        );
-        generated = replaceGeneratedRegion(
-          generated,
-          canonicalScopeTableRegion(renderScopeTable()),
-          `<!-- BEGIN: compiled scope grid via \`${aidlcDispatcherInvocation("utility")} scope-table\` - do NOT hand-edit -->`,
-          "<!-- END: compiled scope grid -->",
-        );
-      }
       writeFileSync(skillPath, generated);
-      regenerated.add(rel);
     }
     regenerated.add(`${descriptor.harnessDir}/tools/data/stage-graph.json`);
     for (const directory of [join(stagedHarness, "skills"), join(root, ".agents", "skills")]) {
@@ -558,6 +580,32 @@ function prepareRefreshSource(
     rmSync(cleanup, { recursive: true, force: true });
     throw error;
   }
+}
+
+function activeWorkflowDescriptions(projectDir: string): string[] {
+  const active: string[] = [];
+  for (const space of listSpaces(projectDir)) {
+    for (const intent of listIntents(projectDir, space.name)) {
+      if (intent.status === "complete" || !intent.dirName) continue;
+      const path = stateFilePath(projectDir, intent.dirName, space.name);
+      if (regularFile(path)) {
+        const status = getField(readFileSync(path, "utf-8"), "Status");
+        if (status === "Completed") continue;
+      }
+      active.push(`${space.name}/${intent.dirName}`);
+    }
+  }
+  return active;
+}
+
+function assertRefreshSafe(projectDir: string): void {
+  const activeWorkflows = activeWorkflowDescriptions(projectDir);
+  if (activeWorkflows.length === 0) return;
+  throw new Error(
+    `refusing to refresh while ${activeWorkflows.length} workflow(s) are active: ${
+      activeWorkflows.join(", ")
+    }. Complete the workflow before rerunning aidlc init; upgrade and rollback do not modify project files.`,
+  );
 }
 
 function blockMarkers(path: string, identity: string): { begin: string; end: string } {
@@ -830,6 +878,13 @@ function planManagedFiles(
       const targetExists = pathPresent(target);
       const targetRegular = targetExists && lstatSync(target).isFile();
       const hash = sha256File(source);
+      const adoptedManagedFile = prior === null &&
+        targetRegular &&
+        (
+          descriptor.legacyManagedFileHashes?.[rel]?.includes(
+            sha256File(target),
+          ) ?? false
+        );
       const seedOnly = rel === "aidlc/active-space" ||
         (rel.startsWith("aidlc/spaces/") && rel.includes("/memory/"));
       if (seedOnly) {
@@ -889,7 +944,10 @@ function planManagedFiles(
       const priorHash = prior?.files[rel];
       if (
         targetExists &&
-        (!targetRegular || !priorHash || sha256File(target) !== priorHash) &&
+        (
+          !targetRegular ||
+          (!adoptedManagedFile && (!priorHash || sha256File(target) !== priorHash))
+        ) &&
         !force
       ) {
         actions.push({ path: rel, action: "conflict", detail: "locally modified or unowned" });
@@ -903,7 +961,11 @@ function planManagedFiles(
         expected: expected(target),
         mode: statSync(source).mode & 0o777,
       });
-      actions.push({ path: rel, action: targetExists ? "update" : "create" });
+      actions.push({
+        path: rel,
+        action: targetExists ? "update" : "create",
+        detail: adoptedManagedFile ? "adopted exact copy-channel signature" : undefined,
+      });
     }
   }
   for (const [rel, priorHash] of Object.entries(prior?.files ?? {})) {
@@ -1336,6 +1398,7 @@ export async function main(input: string[]): Promise<void> {
     if (existing.distribution && existing.distribution !== stamp.distribution) {
       throw new Error(`project uses ${existing.distribution}; refusing ${stamp.distribution}`);
     }
+    if (existing.distribution) assertRefreshSafe(projectDir);
     if (regularFile(pinPath) && readFileSync(pinPath, "utf-8").trim() !== stamp.frameworkVersion) {
       throw new Error(
         `project pin requires ${readFileSync(pinPath, "utf-8").trim()}, but source is ${stamp.frameworkVersion}; run aidlc versions install ${readFileSync(pinPath, "utf-8").trim()}`,
@@ -1472,7 +1535,20 @@ export async function main(input: string[]): Promise<void> {
       ), options);
       return;
     }
-    executePlan(plan);
+    if (existing.distribution) {
+      withAuditLock(
+        projectDir,
+        () => {
+          assertRefreshSafe(projectDir);
+          executePlan(plan);
+        },
+        undefined,
+        undefined,
+        600,
+      );
+    } else {
+      executePlan(plan);
+    }
     emitResult(success(
       `initialized ${projectDir} for ${descriptor.productName} ${stamp.frameworkVersion}; next: ${descriptor.initNextStep}`,
       {

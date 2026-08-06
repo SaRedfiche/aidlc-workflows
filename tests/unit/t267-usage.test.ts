@@ -1358,7 +1358,7 @@ describe("offset-aware fold, holdback, byteOffset", () => {
       ...groupLines("g3", 400, 12),
       ...groupLines("g4", 9999, 321),
     ];
-    const full = allLines.join("\n") + "\n";
+    const full = `${allLines.join("\n")}\n`;
     const fullBytes = Buffer.from(full, "utf-8");
 
     const cuts = [37, 150, 320, 500, 900, fullBytes.length - 10, fullBytes.length];
@@ -1611,12 +1611,12 @@ describe("offset-aware fold, holdback, byteOffset", () => {
     );
     const led = foldTranscriptIntoLedger(dir, main, "stage-z", true);
     expect(led.totals.tokens.output).toBe(150);
-    expect(led.byAgent["main"].tokens.output).toBe(100);
+    expect(led.byAgent.main.tokens.output).toBe(100);
     expect(led.byAgent["code-reviewer"].tokens.output).toBe(50);
     // Cursors are keyed by FILE PATH (main + the sub-agent file), not "main"/"agent-abc".
     expect(led.cursors[main]).toBeDefined();
     expect(led.cursors[subFile]).toBeDefined();
-    expect(led.cursors["main"]).toBeUndefined();
+    expect(led.cursors.main).toBeUndefined();
   });
 
   test("cross-session: a longer second session folds ADDITIVELY with NO skipped turns", () => {

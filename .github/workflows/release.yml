@@ -199,7 +199,7 @@ jobs:
           }
           Start-Sleep -Milliseconds 500
           try {
-            & ./build/release/install.ps1 -ReleaseBaseUrl "http://localhost:$port" -Harness claude -Quiet
+            & ./build/release/install.ps1 -ReleaseBaseUrl "http://localhost:$port" --harness claude -Quiet
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           } finally {
             Stop-Job $server -ErrorAction SilentlyContinue
@@ -218,7 +218,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $command completions powershell | Out-Null
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & ./build/release/install.ps1 -From $releaseRoot -Offline -Harness claude -Quiet
+          & ./build/release/install.ps1 -From $releaseRoot -Offline --harness claude -Quiet
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $pointer = Get-Content -Raw (Join-Path $env:AIDLC_INSTALL_ROOT 'active-executable')
           if ($pointer.Trim() -notmatch '\\versions\\[0-9]+\.[0-9]+\.[0-9]+\\aidlc\.exe$') {
@@ -282,20 +282,22 @@ jobs:
           env PATH="/usr/bin:/bin" "$offline" version
           env PATH="/usr/bin:/bin" "$offline" harness list --json |
             grep -q '"opencode"'
-      - name: Exercise the interactive harness picker through a PTY
+      - name: Exercise the piped interactive harness picker through a PTY
         shell: bash
         run: |
           set -euo pipefail
           release="$PWD/build/release"
           export AIDLC_INSTALL_ROOT="$RUNNER_TEMP/aidlc-picker"
           export AIDLC_BIN_DIR="$RUNNER_TEMP/aidlc-picker-bin"
+          export AIDLC_INSTALLER="$release/install.sh"
+          export AIDLC_RELEASE="$release"
           transcript="$RUNNER_TEMP/aidlc-picker.log"
           if [[ "$(uname -s)" == "Darwin" ]]; then
             printf '1\n' | script -q "$transcript" \
-              sh "$release/install.sh" --from "$release" --offline
+              sh -c 'cat "$AIDLC_INSTALLER" | sh -s -- --from "$AIDLC_RELEASE" --offline'
           else
             printf '1\n' | script -qec \
-              "sh '$release/install.sh' --from '$release' --offline" \
+              'cat "$AIDLC_INSTALLER" | sh -s -- --from "$AIDLC_RELEASE" --offline' \
               "$transcript"
           fi
           grep -q "Select the harness distribution to install:" "$transcript"

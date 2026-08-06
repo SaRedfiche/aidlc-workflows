@@ -1,6 +1,7 @@
-[CmdletBinding()]
+[CmdletBinding(PositionalBinding = $false)]
 param(
   [Parameter()]
+  [Alias('-harness')]
   [ValidatePattern('^[a-z0-9][a-z0-9-]*$')]
   [string[]]$Harness,
 
@@ -34,10 +35,14 @@ param(
   [switch]$Json,
 
   [Parameter()]
-  [switch]$NoColor
+  [switch]$NoColor,
+
+  [Parameter(ValueFromRemainingArguments = $true)]
+  [string[]]$LiteralArguments
 )
 
 $ErrorActionPreference = 'Stop'
+$HostNonInteractive = [Environment]::CommandLine -match '(?i)(?:^|\s)-(?:noninteractive|noni)(?=\s|$)'
 $ProgressPreference = 'SilentlyContinue'
 
 function Write-Result {
@@ -124,6 +129,29 @@ function Confirm-NotAdministrator {
   $principal = [Security.Principal.WindowsPrincipal]::new($identity)
   if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Stop-Install 4 'failed' 'refusing an Administrator install; run as the target user'
+  }
+}
+
+if ($LiteralArguments) {
+  for ($index = 0; $index -lt $LiteralArguments.Count; $index++) {
+    if ($LiteralArguments[$index] -ne '--harness') {
+      Stop-Install 2 'usage' "unknown argument: $($LiteralArguments[$index])"
+    }
+    if ($index + 1 -ge $LiteralArguments.Count) {
+      Stop-Install 2 'usage' '--harness requires a name'
+    }
+    $index += 1
+    $name = $LiteralArguments[$index]
+    if ($name -notmatch '^[a-z0-9][a-z0-9-]*$') {
+      Stop-Install 2 'usage' "invalid harness name: $name"
+    }
+    $Harness = @($Harness) + $name
+  }
+}
+
+if (-not $Harness -or $Harness.Count -eq 0) {
+  if ($HostNonInteractive -or [Console]::IsInputRedirected -or $Json -or $Quiet -or $Yes) {
+    Stop-Install 2 'usage' 'a harness is required in non-interactive installs; pass --harness <name>'
   }
 }
 
@@ -233,12 +261,10 @@ try {
   $Version = $manifest.version
 
   if (-not $Harness -or $Harness.Count -eq 0) {
-    if ([Console]::IsInputRedirected -or $Json -or $Quiet -or $Yes) {
-      Stop-Install 2 'usage' 'a harness is required in non-interactive installs; pass -Harness <name>'
-    }
     $available = @($manifest.distributions)
+    Write-Host 'Select the harness distribution to install:'
     for ($index = 0; $index -lt $available.Count; $index++) {
-      Write-Host "$($index + 1)) $($available[$index].name) - $($available[$index].productName)"
+      Write-Host "  $($index + 1)) $($available[$index].name) - $($available[$index].productName)"
     }
     $selection = Read-Host "Harness [1-$($available.Count)]"
     if ($selection -notmatch '^[0-9]+$' -or [int]$selection -lt 1 -or [int]$selection -gt $available.Count) {

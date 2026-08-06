@@ -62,70 +62,70 @@
   "hooks": {
     "agentSpawn": [
       {
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts session-start"
+        "command": "bun .kiro/tools/aidlc.ts adapter kiro session-start"
       }
     ],
     "userPromptSubmit": [
       {
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts verb-intercept",
+        "command": "bun .kiro/tools/aidlc.ts adapter kiro verb-intercept",
         "timeout_ms": 30000
       }
     ],
     "preToolUse": [
       {
         "matcher": "execute_bash",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts state-transition-guard",
+        "command": "bun .kiro/tools/aidlc.ts adapter kiro state-transition-guard",
         "timeout_ms": 15000
       },
       {
         "matcher": "execute_bash",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts guard-tool-call",
+        "command": "bun .kiro/tools/aidlc.ts adapter kiro pretool-block",
         "timeout_ms": 15000
       },
       {
         "matcher": "fs_write",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts review-freeze",
+        "command": "bun .kiro/tools/aidlc.ts adapter kiro review-freeze",
         "timeout_ms": 15000
       },
       {
         "matcher": "execute_bash",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts review-freeze",
+        "command": "bun .kiro/tools/aidlc.ts adapter kiro review-freeze",
         "timeout_ms": 15000
       },
       {
         "matcher": "subagent",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts deliver-stage-rules",
+        "command": "bun .kiro/tools/aidlc.ts adapter kiro dispatch-rules",
         "timeout_ms": 15000
       },
       {
         "matcher": "subagent",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard",
+        "command": "bun .kiro/tools/aidlc.ts adapter kiro plan-approval-guard",
         "timeout_ms": 15000
       }
     ],
     "postToolUse": [
       {
         "matcher": "fs_write",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts audit-and-sensors",
+        "command": "bun .kiro/tools/aidlc.ts adapter kiro audit-and-sensors",
         "timeout_ms": 120000
       },
       {
         "matcher": "execute_bash",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts rebuild-stage-graph",
+        "command": "bun .kiro/tools/aidlc.ts adapter kiro runtime-compile",
         "timeout_ms": 45000
       },
       {
         "matcher": "todo_list",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts sync-workflow-state"
+        "command": "bun .kiro/tools/aidlc.ts adapter kiro state-sync"
       },
       {
         "matcher": "subagent",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts log-subagent"
+        "command": "bun .kiro/tools/aidlc.ts adapter kiro log-subagent"
       }
     ],
     "stop": [
       {
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts continue-workflow",
+        "command": "bun .kiro/tools/aidlc.ts adapter kiro stop",
         "timeout_ms": 30000
       }
     ]

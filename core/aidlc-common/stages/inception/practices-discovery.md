@@ -199,7 +199,7 @@ After integration, emit `PRACTICES_DISCOVERED`:
 Run the section 13 learnings ritual, then:
 
 1. Open the gate before the question:
-   `bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage
+   `{{INVOKE}} __delegate orchestrate report --stage
    practices-discovery --result awaiting-approval`.
 2. Do not log the affirmation gate with `aidlc-log.ts decision` or
    `aidlc-log.ts answer`; the lifecycle `report` calls own its audit events.
@@ -225,7 +225,7 @@ Run the section 13 learnings ritual, then:
 The orchestrator does not edit active-space memory directly. Run:
 
 ```bash
-bun {{HARNESS_DIR}}/tools/aidlc-state.ts practices-promote \
+{{INVOKE}} __delegate state practices-promote \
   --team-practices <record>/inception/practices-discovery/team-practices.md \
   --discovered-rules <record>/inception/practices-discovery/discovered-rules.md \
   --affirming-user "<user>"
