@@ -30,7 +30,7 @@
 // the `next --args` wrapper is absent).
 //
 // FIXTURE DISCIPLINE: each case builds a fresh temp project via
-// createTestProject() + seedStateFile() (the .ts analogues of fixtures.sh's
+// createOrchestrationTestProject() + seedStateFile() (the .ts analogues of fixtures.sh's
 // create_test_project / seed_state_file), torn down in afterEach. resetAidlcEnv()
 // clears AWS_AIDLC_DEFAULT_SCOPE so a developer's exported value can't shadow the
 // fixtures — exactly the .sh's top-of-file reset_aidlc_env. The env-precedence
@@ -303,6 +303,50 @@ describe("t114 help-request routing", () => {
     const out = runNext(proj, ["/aidlc intent help"]).out;
     expect(out).toContain('"kind":"ask"');
     expect(out).not.toContain("aidlc-utility.ts intent");
+  });
+});
+
+describe("t114 plugin terminal routing", () => {
+  test("plugin list preserves --json and never enters the workflow funnel", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, ["plugin", "list", "--json"]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("aidlc-utility.ts plugin-list --json");
+    expect(out).not.toContain('"kind":"run-stage"');
+  });
+
+  test("plugin sync routes to the terminal utility", () => {
+    proj = createOrchestrationTestProject();
+    const out = runNext(proj, ["plugin", "sync"]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("aidlc-utility.ts plugin-sync");
+  });
+
+  test("plugin select preserves the selected names", () => {
+    proj = createOrchestrationTestProject();
+    const out = runNext(proj, ["plugin", "select", "aidlc,test-pro"]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("aidlc-utility.ts select-plugins aidlc,test-pro");
+  });
+
+  test("plugin help routes to global help", () => {
+    proj = createOrchestrationTestProject();
+    const out = runNext(proj, ["plugin", "help"]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("aidlc-utility.ts help");
+    expect(out).not.toContain('"kind":"ask"');
+  });
+
+  test("missing and unknown plugin verbs are deterministic errors", () => {
+    proj = createOrchestrationTestProject();
+    const missing = runNext(proj, ["plugin"]).out;
+    const unknown = runNext(proj, ["plugin", "remove"]).out;
+    expect(missing).toContain('"kind":"error"');
+    expect(missing).toContain("missing verb for noun 'plugin'");
+    expect(unknown).toContain('"kind":"error"');
+    expect(unknown).toContain("unknown verb 'remove' for noun 'plugin'");
+    expect(`${missing}${unknown}`).not.toContain('"kind":"ask"');
   });
 });
 
