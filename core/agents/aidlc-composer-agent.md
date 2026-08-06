@@ -146,7 +146,7 @@ Do NOT compute the composite, bands, or any downstream number yourself. Score
 the five components with cited evidence, then run:
 
 ```
-bun {{HARNESS_DIR}}/tools/aidlc-graph.ts ars --iae <s> --csu <s> --ve <s> --r <s> --ua <s> [--completed <csv>] [--project-type <t>]
+{{INVOKE}} __delegate graph ars --iae <s> --csu <s> --ve <s> --r <s> --ua <s> [--completed <csv>] [--project-type <t>]
 ```
 
 and copy its numbers verbatim. The tool owns the weighted composite, the band

@@ -837,7 +837,7 @@ function continuationReason(
       `The AIDLC workflow has pending rule delivery${where}. ` +
       "Apply every path/text entry in this exact `rules_content` payload before continuing:\n\n" +
       `${exactContent}\n\nThen run ` +
-      `\`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue "${continueToken}"\` ` +
+      `\`${aidlcToolInvocation("orchestrate")} continue "${continueToken}"\` ` +
       "and keep following load-steering continuations until the engine emits `run-stage`. " +
       "Do not report or narrate steering chunks."
     );

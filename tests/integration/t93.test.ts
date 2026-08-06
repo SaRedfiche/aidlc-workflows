@@ -205,7 +205,7 @@ describe("t93 aidlc-sensor describe (migrated from t93-sensor-list-describe.sh, 
     expect(
       hasLine(
         r.out,
-        "command: bun .claude/tools/aidlc-sensor-claim-sources.ts",
+        "command: bun .claude/tools/aidlc.ts __delegate sensor-claim-sources",
       ),
     ).toBe(true);
     expect(hasLine(r.out, "matches: **/{aidlc-docs,intents}/**")).toBe(true);

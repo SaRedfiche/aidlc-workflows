@@ -200,10 +200,12 @@ describe("t86 stage-protocol §13 + MEMORY_EMPTY + SKILL.md gate wiring (migrate
     expect(body.includes("Never ask for this confirmation as bare prose")).toBe(true);
     expect(
       body.includes(
-        "aidlc-log.ts decision --stage <slug>\n  --checkpoint summary-confirmation --questions-file",
+        "bun .claude/tools/aidlc.ts __delegate log decision --stage <slug>\n  --checkpoint summary-confirmation --questions-file",
       ),
     ).toBe(true);
-    expect(body.includes("aidlc-log.ts answer --stage <slug>")).toBe(true);
+    expect(
+      body.includes("bun .claude/tools/aidlc.ts __delegate log answer --stage <slug>"),
+    ).toBe(true);
     expect(body.includes('**"What should change?"**')).toBe(true);
     expect(body.includes("Editing the source file does not waive")).toBe(true);
     expect(

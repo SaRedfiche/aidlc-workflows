@@ -24,7 +24,7 @@
 //     is IDENTICAL (verified live), so it passes through verbatim.
 //
 // Usage (registered in the conductor and delegated .kiro/agents/*.json configs):
-//   bun .kiro/hooks/aidlc-kiro-adapter.ts <target>
+//   {{INVOKE}} adapter kiro <target>
 // where <target> ∈ session-start | audit-and-sensors | runtime-compile |
 //                  state-sync | log-subagent | stop | verb-intercept |
 //                  pretool-block | state-transition-guard | reviewer-scope
@@ -478,8 +478,12 @@ if (target === "state-transition-guard") {
   const tool = kiro.tool_name ?? "";
   if (tool !== "shell" && tool !== "execute_bash") process.exit(0);
   const command = String(kiro.tool_input?.command ?? "");
+  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  const hookCommand = executable
+    ? [executable, "hook", "state-transition-guard"]
+    : [process.execPath, join(HOOKS_DIR, "aidlc-state-transition-guard.ts")];
   const r = Bun.spawnSync(
-    [process.execPath, join(HOOKS_DIR, "aidlc-state-transition-guard.ts")],
+    hookCommand,
     {
       stdin: Buffer.from(
         JSON.stringify({
@@ -489,9 +493,10 @@ if (target === "state-transition-guard") {
         }),
         "utf-8",
       ),
-      cwd: kiro.cwd ?? process.cwd(),
+      cwd: childCwd,
       stdout: "pipe",
       stderr: "pipe",
+      env: projectEnv,
     },
   );
   if (r.exitCode === 2) {

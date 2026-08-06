@@ -61,7 +61,7 @@ git for AI-DLC itself. `aidlc init` projects the Kiro shell before the first
 chat session. Use `--from <release-directory> --offline` with the installer
 for an air-gapped package.
 On Windows, download the matching release `install.ps1` and run
-`install.ps1 -Harness kiro`; `-From <release-directory> -Offline` consumes the
+`install.ps1 --harness kiro`; `-From <release-directory> -Offline` consumes the
 same flat package.
 
 Then start a session in your project:

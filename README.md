@@ -11,7 +11,7 @@ A native implementation of the **AI-DLC methodology** (AI-Driven Development Lif
 
 The methodology lives once, in a harness-neutral `core/`; each harness adds a thin surface that decides how it shows up on that harness. So you edit the methodology in one place, and every harness distribution is generated from it — no harness gets special treatment. (See [Repository layout](#repository-layout) for how the pieces fit together.)
 
-![version](https://img.shields.io/badge/version-2.5.44-blue)
+![version](https://img.shields.io/badge/version-2.5.45-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
 ![Kiro IDE](https://img.shields.io/badge/harness-Kiro%20IDE-orange)
 ![Kiro CLI](https://img.shields.io/badge/harness-Kiro%20CLI-orange)
@@ -63,7 +63,7 @@ The deterministic engine — state machine, audit log, and the referee that coor
 
 > [!NOTE]
 > Release assets support self-contained macOS, Linux, and Windows installs:
-> `install.sh --harness <name>` or `install.ps1 -Harness <name>` installs the native `aidlc` command, and
+> `install.sh --harness <name>` or `install.ps1 --harness <name>` installs the native `aidlc` command, and
 > `aidlc init` safely initializes or refreshes a project. The documented copy
 > install remains supported and continues to require bun.
 

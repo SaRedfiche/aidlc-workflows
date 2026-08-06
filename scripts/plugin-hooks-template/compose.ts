@@ -122,6 +122,32 @@ function pluginNameFromRoot(): string {
   return parts[parts.length - 2] || parts[parts.length - 1] || "plugin";
 }
 
+function firstPluginFieldInPlugin(): string | null {
+  const roots = ["stages", "scopes", "contributions"];
+  const visit = (dir: string): string | null => {
+    if (!existsSync(dir)) return null;
+    for (const entry of readdirSync(dir).sort()) {
+      const path = join(dir, entry);
+      if (statSync(path).isDirectory()) {
+        const nested = visit(path);
+        if (nested) return nested;
+        continue;
+      }
+      if (!entry.endsWith(".md")) continue;
+      const match = readFileSync(path, "utf-8").match(
+        /^plugin:\s*([a-z][a-z0-9-]*)\s*$/m,
+      );
+      if (match) return match[1];
+    }
+    return null;
+  };
+  for (const root of roots) {
+    const found = visit(join(PLUGIN_ROOT, root));
+    if (found) return found;
+  }
+  return null;
+}
+
 // The plugin's stable IDENTITY, computed once up front so every per-plugin
 // artifact (the drops file, the retry marker) is keyed the same way — including
 // on the early-exit guards, which flush drops before the main body runs. NOT the

@@ -122,7 +122,7 @@ copy installs is not required. Merge the generated `.codex/config.toml`
 settings into your user config as needed. For an air-gapped install, use
 `install.sh --from <release-directory> --offline --harness codex`.
 On Windows, download the matching release `install.ps1` and run
-`install.ps1 -Harness codex`; use `-From <release-directory> -Offline` for the
+`install.ps1 --harness codex`; use `-From <release-directory> -Offline` for the
 same flat air-gapped package.
 
 ## Use

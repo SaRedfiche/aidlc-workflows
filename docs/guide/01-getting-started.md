@@ -265,7 +265,7 @@ On Windows PowerShell:
 ```powershell
 $installer = Join-Path $env:TEMP install-aidlc.ps1
 irm https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.ps1 -OutFile $installer
-& $installer -Harness claude
+& $installer --harness claude
 cd your-project
 aidlc init --mcp none
 aidlc doctor

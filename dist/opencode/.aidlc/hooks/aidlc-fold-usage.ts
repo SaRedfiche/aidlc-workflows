@@ -58,65 +58,60 @@ function isLifecycleBoundaryToolCall(name: string, input: unknown): boolean {
   return typeof command === "string" && isLifecycleBoundaryCommand(command);
 }
 
-async function main(): Promise<void> {
-  // TTY guard - no Claude Code JSON is coming on a terminal (tests/debug).
-  if (process.stdin.isTTY) process.exit(0);
-
-  const projectDir = resolveProjectDirFromHook(import.meta.url);
-
-  const input = await Bun.stdin.text();
-  let sessionId = "";
-  let transcriptPath: string | null = null;
-  let foldMode: FoldMode = "holdback";
+export async function run(input: string): Promise<number> {
   try {
-    const raw: unknown = JSON.parse(input);
-    if (raw !== null && typeof raw === "object") {
-      const obj = raw as Record<string, unknown>;
-      if (typeof obj.session_id === "string") sessionId = obj.session_id;
-      if (obj.hook_event_name === "PreToolUse") {
-        const toolName = typeof obj.tool_name === "string" ? obj.tool_name : "";
-        foldMode = isLifecycleBoundaryToolCall(toolName, obj.tool_input)
-          ? "flush-all"
-          : "seal-main";
+    const projectDir = resolveProjectDirFromHook(import.meta.url);
+    let sessionId = "";
+    let transcriptPath: string | null = null;
+    let foldMode: FoldMode = "holdback";
+    try {
+      const raw: unknown = JSON.parse(input);
+      if (raw !== null && typeof raw === "object") {
+        const obj = raw as Record<string, unknown>;
+        if (typeof obj.session_id === "string") sessionId = obj.session_id;
+        if (obj.hook_event_name === "PreToolUse") {
+          const toolName = typeof obj.tool_name === "string" ? obj.tool_name : "";
+          foldMode = isLifecycleBoundaryToolCall(toolName, obj.tool_input)
+            ? "flush-all"
+            : "seal-main";
+        }
+        if (typeof obj.transcript_path === "string" && obj.transcript_path.length > 0) {
+          transcriptPath = obj.transcript_path;
+        }
       }
-      if (typeof obj.transcript_path === "string" && obj.transcript_path.length > 0) {
-        transcriptPath = obj.transcript_path;
+    } catch {
+      // Malformed / empty stdin - nothing to fold. Exit clean below.
+    }
+
+    if (!transcriptPath) return 0;
+
+    // Derive the current stage the same way aidlc-stop.ts does: read the state
+    // file directly. Absent state => null so byStage is not polluted.
+    let currentStage: string | null = null;
+    try {
+      const statePath = stateFilePath(projectDir);
+      if (existsSync(statePath)) {
+        currentStage = currentStageSlug(readFileSync(statePath, "utf-8")) || null;
       }
+    } catch {
+      currentStage = null;
     }
+
+    if (sessionId) writeCurrentSessionId(projectDir, sessionId);
+    writeCurrentTranscriptPath(projectDir, sessionId, transcriptPath);
+    // PreToolUse seals the main assistant message. Before an engine call it
+    // also closes completed subagent groups so lifecycle rollups include their
+    // final calls; other PreToolUse events retain subagent holdback.
+    foldTranscriptIntoLedger(projectDir, transcriptPath, currentStage, foldMode, {
+      sessionId,
+    });
   } catch {
-    // Malformed / empty stdin - nothing to fold. Exit clean below.
+    // Usage bookkeeping is best-effort and must never break a hook.
   }
-
-  if (!transcriptPath) process.exit(0);
-
-  // Derive the current stage the same way aidlc-stop.ts does: read the state
-  // file directly. Absent state => null so byStage is not polluted.
-  let currentStage: string | null = null;
-  try {
-    const statePath = stateFilePath(projectDir);
-    if (existsSync(statePath)) {
-      currentStage = currentStageSlug(readFileSync(statePath, "utf-8")) || null;
-    }
-  } catch {
-    currentStage = null;
-  }
-
-  if (sessionId) writeCurrentSessionId(projectDir, sessionId);
-  writeCurrentTranscriptPath(projectDir, sessionId, transcriptPath);
-  // PreToolUse seals the main assistant message. Before an engine call it also
-  // closes completed subagent groups so lifecycle rollups include their final
-  // calls; other PreToolUse events retain subagent holdback. PostToolUse is the
-  // normal delayed-write fallback.
-  foldTranscriptIntoLedger(projectDir, transcriptPath, currentStage, foldMode, {
-    sessionId,
-  });
+  return 0;
 }
 
-// Fully guarded: nothing this hook does may throw into Claude Code or print to
-// stdout on success. Any failure is swallowed and we exit 0.
-try {
-  await main();
-} catch {
-  // best-effort - usage bookkeeping never breaks a hook
+if (import.meta.main) {
+  const input = process.stdin.isTTY ? "" : await Bun.stdin.text();
+  process.exitCode = await run(input);
 }
-process.exit(0);

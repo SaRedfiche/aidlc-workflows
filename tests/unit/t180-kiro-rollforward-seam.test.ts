@@ -76,6 +76,19 @@ const forwardingPath = (dir: string) =>
   join(dir, "aidlc", ".aidlc-forwarding-latch");
 
 describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
+  test("native state-transition guard routes through the compiled hook ABI", () => {
+    const source = readFileSync(
+      join(REPO_ROOT, "harness", "kiro", "hooks", "aidlc-kiro-adapter.ts"),
+      "utf-8",
+    );
+    const branch = source.slice(
+      source.indexOf('if (target === "state-transition-guard")'),
+      source.indexOf("// --- plan-approval-guard"),
+    );
+    expect(branch).toContain("AIDLC_COMPILED_EXECUTABLE");
+    expect(branch).toContain('[executable, "hook", "state-transition-guard"]');
+  });
+
   test("1: read-only flag (--status) bumps counter to 1 and stamps the read-only-flag latch", () => {
     const dir = scratchProject();
     try {

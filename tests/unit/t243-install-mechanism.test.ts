@@ -751,6 +751,171 @@ describe("t243 project initialization", () => {
     expect(readFileSync(gitignore, "utf-8")).not.toContain("# local managed edit");
   }, 60_000);
 
+  test("refresh updates hand-authored orchestrator prose and protects local edits", () => {
+    const project = temp("aidlc-t243-skill-refresh-");
+    mkdirSync(join(project, ".git"));
+    const installed = run(INIT, [
+      "init",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+    ], project);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+
+    const rel = join(".claude", "skills", "aidlc", "SKILL.md");
+    const skill = join(project, rel);
+    const upstream = temp("aidlc-t243-skill-upstream-");
+    cpSync(CLAUDE_RELEASE, upstream, { recursive: true });
+    writeFileSync(join(upstream, rel), `${readFileSync(join(upstream, rel), "utf-8")}\nUpstream prose v1.\n`);
+
+    const refreshed = run(INIT, [
+      "init",
+      "--project-dir",
+      project,
+      "--from",
+      upstream,
+    ], project);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(readFileSync(skill, "utf-8")).toContain("Upstream prose v1.");
+
+    writeFileSync(skill, `${readFileSync(skill, "utf-8")}\nLocal orchestrator edit.\n`);
+    const newer = temp("aidlc-t243-skill-newer-");
+    cpSync(upstream, newer, { recursive: true });
+    writeFileSync(
+      join(newer, rel),
+      readFileSync(join(newer, rel), "utf-8").replace("Upstream prose v1.", "Upstream prose v2."),
+    );
+    const conflict = run(INIT, [
+      "init",
+      "--project-dir",
+      project,
+      "--from",
+      newer,
+    ], project);
+    expect(conflict.status).toBe(4);
+    expect(conflict.stdout + conflict.stderr).toContain("locally modified");
+    expect(readFileSync(skill, "utf-8")).toContain("Local orchestrator edit.");
+
+    const forced = run(INIT, [
+      "init",
+      "--project-dir",
+      project,
+      "--from",
+      newer,
+      "--force",
+    ], project);
+    expect(forced.status, forced.stdout + forced.stderr).toBe(0);
+    expect(readFileSync(skill, "utf-8")).toContain("Upstream prose v2.");
+    expect(readFileSync(skill, "utf-8")).not.toContain("Local orchestrator edit.");
+  }, 60_000);
+
+  test("pre-manifest adoption preserves all mutable harness policy keys", () => {
+    const project = temp("aidlc-t243-policy-adoption-");
+    cpSync(CLAUDE_COPY, project, { recursive: true });
+    mkdirSync(join(project, ".git"));
+    const harnessData = join(project, ".claude", "tools", "data", "harness.json");
+    const current = JSON.parse(readFileSync(harnessData, "utf-8")) as Record<string, unknown>;
+    current.plugins = ["aidlc"];
+    current.setup = {
+      models: { reviewingEffort: "medium" },
+      provider: { name: "bedrock", region: "eu-west-1" },
+    };
+    current.futurePolicy = { enabled: true };
+    writeFileSync(harnessData, `${JSON.stringify(current, null, 2)}\n`);
+
+    const adopted = run(INIT, [
+      "init",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+      "--json",
+    ], project);
+    expect(adopted.status, adopted.stdout + adopted.stderr).toBe(0);
+    const after = JSON.parse(readFileSync(harnessData, "utf-8")) as Record<string, unknown>;
+    expect(after.plugins).toEqual(["aidlc"]);
+    expect(after.setup).toEqual(current.setup);
+    expect(after.futurePolicy).toEqual(current.futurePolicy);
+    expect(after.distribution).toBe("claude");
+    expect(existsSync(join(project, ".claude", "tools", "data", "aidlc-manifest.json"))).toBe(true);
+    const result = JSON.parse(adopted.stdout) as {
+      data: { actions: Array<{ path: string; detail?: string }> };
+    };
+    expect(result.data.actions).toContainEqual(expect.objectContaining({
+      path: ".claude/skills/aidlc/SKILL.md",
+      detail: "adopted exact copy-channel signature",
+    }));
+  }, 60_000);
+
+  test("refresh refuses an active workflow without changing project bytes", () => {
+    const project = temp("aidlc-t243-active-refresh-");
+    mkdirSync(join(project, ".git"));
+    const installed = run(INIT, [
+      "init",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+    ], project);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+
+    const dirName = "active-refresh-probe";
+    const intentsDir = join(project, "aidlc", "spaces", "default", "intents");
+    const intentDir = join(intentsDir, dirName);
+    mkdirSync(intentDir, { recursive: true });
+    writeFileSync(
+      join(intentsDir, "intents.json"),
+      `${JSON.stringify([{
+        uuid: "deadbeef-0000-4000-8000-000000000001",
+        slug: "active-refresh",
+        dirName,
+        scope: "feature",
+        status: "in-flight",
+      }], null, 2)}\n`,
+    );
+    const state = join(intentDir, "aidlc-state.md");
+    writeFileSync(state, "# AI-DLC State Tracking\n\n## Current Status\n- **Status**: Running\n");
+
+    const newer = temp("aidlc-t243-active-upstream-");
+    cpSync(CLAUDE_RELEASE, newer, { recursive: true });
+    const rel = join(".claude", "tools", "aidlc-command.ts");
+    writeFileSync(join(newer, rel), `${readFileSync(join(newer, rel), "utf-8")}\n// active refresh marker\n`);
+    const target = join(project, rel);
+    const before = readFileSync(target);
+    const rootEntries = readdirSync(project).sort();
+
+    const refused = run(INIT, [
+      "init",
+      "--project-dir",
+      project,
+      "--from",
+      newer,
+      "--json",
+    ], project);
+    expect(refused.status).toBe(4);
+    expect(refused.stdout + refused.stderr).toContain("refusing to refresh while 1 workflow(s) are active");
+    expect(readFileSync(target)).toEqual(before);
+    expect(readdirSync(project).sort()).toEqual(rootEntries);
+
+    writeFileSync(state, readFileSync(state, "utf-8").replace("Status**: Running", "Status**: Completed"));
+    const completed = run(INIT, [
+      "init",
+      "--project-dir",
+      project,
+      "--from",
+      newer,
+    ], project);
+    expect(completed.status, completed.stdout + completed.stderr).toBe(0);
+    expect(readFileSync(target, "utf-8")).toContain("// active refresh marker");
+  }, 60_000);
+
   test("exact legacy root signatures are adopted while modified lookalikes still refuse", () => {
     const project = temp("aidlc-t240-legacy-adopt-");
     mkdirSync(join(project, ".git"));
@@ -1985,6 +2150,7 @@ describe("t243 projection channel", () => {
           "sha256:3da36b2d01551aeae2e366caa08be8cce0dbc9110e252445dcaa4e758e24a0b6",
           "sha256:4f1cd2e930bd37d2f5d715a06ea3fa1e2d39479fc662f0f0562116376132114b",
           "sha256:f2affb8b34499f057284852456cb8a24ae586b8e816595bf98346141f3516281",
+          "sha256:7716a5aced223e43b88ad8b29752fc0f6a022678ec2d8b91492c4a3ef478fcaa",
         ],
       },
       codex: {
@@ -1998,6 +2164,7 @@ describe("t243 projection channel", () => {
           "sha256:d8afae6a0813f5298cf873a047664cf485308c6e0dad41dde53d8dcb27dd7769",
           "sha256:f1deb7dc72a78fe7d39c71ad2fe6c0f41248c03cde7fb36b7a478f5b9233881c",
           "sha256:f7c55e9917d3801f676fba066fdd78d8df2c36311e8d6e78068965fc7b4371fa",
+          "sha256:f0c7f032e208274fc9eefa4252a39340297e8039fb86514d48b58264bd92c9dc",
         ],
       },
       kiro: {
@@ -2010,6 +2177,7 @@ describe("t243 projection channel", () => {
           "sha256:e01ac1caf52a59d25faf859a03cfb65b803853c99298bbcbc80ef565e7628de6",
           "sha256:e3de4a295f9b9404b40678c28c0773ae432ac8d4aeacc07613ecfcdfbb4c866b",
           "sha256:e85a5d7ce13b676282dc99572f89c81256f2dada50b1881f4c9641e61339f5a4",
+          "sha256:aab0524828d39edc88379678246042eec5696881763b6fcd63a1ca22bb7ddb48",
         ],
       },
       "kiro-ide": {
@@ -2022,6 +2190,7 @@ describe("t243 projection channel", () => {
           "sha256:c5d2188b046cd75d8cb7214f32faa85cbc1539cddda4a0fae9bfe8fad90c237c",
           "sha256:dead4d5ea47849f489e05baeae418d5d26efc6cd14dd2201351a474376f8efde",
           "sha256:e01ac1caf52a59d25faf859a03cfb65b803853c99298bbcbc80ef565e7628de6",
+          "sha256:d4e8494cdee5e151b1e2bf699ad41990efa77e3727b65940870540fef55683ce",
         ],
       },
     };

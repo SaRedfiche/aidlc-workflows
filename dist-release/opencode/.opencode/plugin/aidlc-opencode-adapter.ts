@@ -5,15 +5,15 @@
 // opencode has no settings.json/hooks.json hook registry; its extension seam is
 // the PLUGIN API (auto-discovered from .opencode/plugin/*.ts, loaded in-process
 // by the opencode runtime). This one plugin maps opencode's hook surface onto
-// the core hook bodies, each run through the projected dispatcher and fed the
-// ClaudeCodeHookInput JSON shape the core hooks parse
-// (live-verified on opencode 1.17.18):
+// the core hook bodies, each run as a bun subprocess fed the ClaudeCodeHookInput
+// JSON shape the core hooks parse (live-verified on opencode 1.17.18):
 //
 //   opencode moment                      → core hook (Claude event it mirrors)
 //   ------------------------------------------------------------------------
 //   chat.message (first per session)     → aidlc-session-start.ts  (SessionStart)
 //   chat.message (every human turn)      → aidlc-mint-presence.ts  (UserPromptSubmit)
-//   tool.execute.before                  → command boundary + aidlc-reviewer-scope.ts (PreToolUse)
+//   tool.execute.before task             → dispatch-rules rewrite + plan-approval guard (PreToolUse)
+//   tool.execute.before other tools      → entrypoint boundary + aidlc-reviewer-scope.ts (PreToolUse)
 //   tool.execute.after write|edit|patch  → aidlc-audit-logger.ts + aidlc-sensor-fire.ts (PostToolUse Write|Edit)
 //   tool.execute.after bash              → aidlc-runtime-compile.ts (PostToolUse Bash)
 //   tool.execute.after todowrite         → aidlc-sync-statusline.ts (PostToolUse TaskUpdate)
@@ -97,30 +97,94 @@ export type PluginInput = {
     };
   };
   directory: string;
+  /** Unit-test seam. Production uses the build-time list embedded by emit.ts. */
+  aidlcEntrypoints?: ReadonlySet<string>;
   /** Unit-test seam. Production uses the projected framework dispatcher. */
   aidlcCommand?: readonly string[];
 };
 
+const AIDLC_BUN_PREFIX = /^bun[ \t]+\.aidlc\/(?:tools|hooks)\//;
+const AIDLC_ENTRYPOINT = /^\.aidlc\/(tools|hooks)\/([A-Za-z0-9][A-Za-z0-9._-]*\.ts)$/;
+
+// emit.ts replaces the empty array with every packaged .aidlc/{tools,hooks}/*.ts
+// path. The adapter can then reject a newly-authored payload.ts even though the
+// host's coarse bash permission glob matches it.
+const shippedAidlcEntrypoints: ReadonlySet<string> = new Set<string>(
+  /* @aidlc-shipped-entrypoints@ */ [
+    "hooks/aidlc-audit-logger.ts",
+    "hooks/aidlc-dispatch-rules.ts",
+    "hooks/aidlc-fold-usage.ts",
+    "hooks/aidlc-log-subagent.ts",
+    "hooks/aidlc-mint-presence.ts",
+    "hooks/aidlc-plan-approval-guard.ts",
+    "hooks/aidlc-review-freeze.ts",
+    "hooks/aidlc-reviewer-scope.ts",
+    "hooks/aidlc-runtime-compile.ts",
+    "hooks/aidlc-sensor-fire.ts",
+    "hooks/aidlc-session-end.ts",
+    "hooks/aidlc-session-start.ts",
+    "hooks/aidlc-state-transition-guard.ts",
+    "hooks/aidlc-statusline.ts",
+    "hooks/aidlc-stop.ts",
+    "hooks/aidlc-sync-statusline.ts",
+    "hooks/aidlc-validate-state.ts",
+    "tools/aidlc-archive.ts",
+    "tools/aidlc-audit.ts",
+    "tools/aidlc-bolt.ts",
+    "tools/aidlc-command.ts",
+    "tools/aidlc-completions.ts",
+    "tools/aidlc-directive.ts",
+    "tools/aidlc-distribution.ts",
+    "tools/aidlc-doctor-bundle.ts",
+    "tools/aidlc-doctor.ts",
+    "tools/aidlc-graph.ts",
+    "tools/aidlc-includes.ts",
+    "tools/aidlc-init.ts",
+    "tools/aidlc-install-paths.ts",
+    "tools/aidlc-jump.ts",
+    "tools/aidlc-learnings.ts",
+    "tools/aidlc-lib.ts",
+    "tools/aidlc-lifecycle.ts",
+    "tools/aidlc-log.ts",
+    "tools/aidlc-machine-config.ts",
+    "tools/aidlc-metrics.ts",
+    "tools/aidlc-orchestrate.ts",
+    "tools/aidlc-plugin.ts",
+    "tools/aidlc-release.ts",
+    "tools/aidlc-rule-schema.ts",
+    "tools/aidlc-runner-gen.ts",
+    "tools/aidlc-runtime-paths.ts",
+    "tools/aidlc-runtime.ts",
+    "tools/aidlc-sensor-claim-sources.ts",
+    "tools/aidlc-sensor-linter.ts",
+    "tools/aidlc-sensor-required-sections.ts",
+    "tools/aidlc-sensor-schema.ts",
+    "tools/aidlc-sensor-type-check.ts",
+    "tools/aidlc-sensor-upstream-coverage.ts",
+    "tools/aidlc-sensor.ts",
+    "tools/aidlc-stage-schema.ts",
+    "tools/aidlc-state.ts",
+    "tools/aidlc-steering.ts",
+    "tools/aidlc-swarm.ts",
+    "tools/aidlc-tiers.ts",
+    "tools/aidlc-transaction.ts",
+    "tools/aidlc-update.ts",
+    "tools/aidlc-usage.ts",
+    "tools/aidlc-utility.ts",
+    "tools/aidlc-validate.ts",
+    "tools/aidlc-version.ts",
+    "tools/aidlc-windows-uninstall.ts",
+    "tools/aidlc-workspace-doctor.ts",
+    "tools/aidlc-workspace-manifest.ts",
+    "tools/aidlc-workspace-sync.ts",
+    "tools/aidlc-worktree.ts",
+    "tools/aidlc.ts"
+  ],
+);
+
 const PROJECTED_BUN_TOOLS = DEFAULT_AIDLC_COMMAND[0] === "bun"
   ? (DEFAULT_AIDLC_COMMAND[1] ?? "").replace(/aidlc\.ts$/, "")
   : null;
-
-function startsWithFrameworkPrefix(command: string): boolean {
-  if (PROJECTED_BUN_TOOLS !== null) {
-    return command.startsWith(`bun ${PROJECTED_BUN_TOOLS}`);
-  }
-  return /^aidlc(?:[ \t]|$)/.test(command);
-}
-
-function isDirectFrameworkInvocation(words: string[]): boolean {
-  if (PROJECTED_BUN_TOOLS !== null) {
-    return words[0] === "bun" &&
-      typeof words[1] === "string" &&
-      words[1].startsWith(PROJECTED_BUN_TOOLS) &&
-      /^aidlc(?:-[A-Za-z0-9_-]+)?\.ts$/.test(words[1].slice(PROJECTED_BUN_TOOLS.length));
-  }
-  return words[0] === "aidlc";
-}
 
 /** Parse one expansion-free shell command into argv, or reject shell syntax. */
 function directShellWords(command: string): string[] | null {
@@ -191,13 +255,30 @@ function directShellWords(command: string): string[] | null {
 /** Return a denial reason only when the static AIDLC allow-prefix would match. */
 function aidlcBashBoundaryViolation(
   command: string,
+  allowedEntrypoints: ReadonlySet<string> = shippedAidlcEntrypoints,
 ): string | null {
-  if (!startsWithFrameworkPrefix(command)) return null;
+  if (PROJECTED_BUN_TOOLS === null) {
+    if (!/^aidlc(?:[ \t]|$)/.test(command)) return null;
+    const words = directShellWords(command);
+    if (words?.[0] === "aidlc") return null;
+    return (
+      "AIDLC bash permission allows one direct invocation of a framework tool only. " +
+      "Do not use chaining, redirection, expansion, or command substitution."
+    );
+  }
+  if (!AIDLC_BUN_PREFIX.test(command)) return null;
   const words = directShellWords(command);
-  if (words && isDirectFrameworkInvocation(words)) return null;
+  const target = words?.[1]?.match(AIDLC_ENTRYPOINT);
+  if (
+    words?.[0] === "bun" &&
+    target &&
+    allowedEntrypoints.has(`${target[1]}/${target[2]}`)
+  ) {
+    return null;
+  }
   return (
-    "AIDLC bash permission allows one direct invocation of a framework tool only. " +
-    "Do not use chaining, redirection, expansion, or command substitution."
+    "AIDLC bash permission allows one direct invocation of a shipped tool or hook only. " +
+    "Use an unchanged .aidlc entrypoint without chaining, redirection, expansion, or command substitution."
   );
 }
 
@@ -291,6 +372,7 @@ function sessionStartHandled(stdout: string): boolean {
 export default async ({
   client,
   directory,
+  aidlcEntrypoints = shippedAidlcEntrypoints,
   aidlcCommand = DEFAULT_AIDLC_COMMAND,
 }: PluginInput) => {
   const runCore = (
@@ -298,6 +380,7 @@ export default async ({
     input: Record<string, unknown>,
     _cwd = directory,
   ) => runCoreHook(hookFile, input, directory, aidlcCommand);
+
   // Sessions whose session-start hook reached an active workflow.
   const started = new Set<string>();
   // Main sessions that delivered a real human turn. Stop enforcement keys on
@@ -357,9 +440,43 @@ export default async ({
       output: { args: Record<string, unknown> },
     ) => {
       const args = output.args ?? {};
+      if (input.tool === "task") {
+        const dispatch = await runCore(
+          "aidlc-dispatch-rules.ts",
+          {
+            hook_event_name: "PreToolUse",
+            tool_name: "task",
+            tool_input: args,
+            cwd: directory,
+          },
+          directory,
+        );
+        if (dispatch.code === 2) {
+          throw new Error(
+            dispatch.stderr.trim() ||
+              "required active-stage rules could not be loaded for subagent dispatch",
+          );
+        }
+        if (dispatch.stdout.trim()) {
+          try {
+            const parsed = JSON.parse(dispatch.stdout) as {
+              hookSpecificOutput?: {
+                updatedInput?: Record<string, unknown>;
+              };
+            };
+            if (parsed.hookSpecificOutput?.updatedInput) {
+              output.args = parsed.hookSpecificOutput.updatedInput;
+            }
+          } catch {
+            throw new Error(
+              "AIDLC dispatch-rules hook returned invalid rewrite output",
+            );
+          }
+        }
+      }
       if (input.tool === "bash") {
         const command = (args.command as string) ?? "";
-        const violation = aidlcBashBoundaryViolation(command);
+        const violation = aidlcBashBoundaryViolation(command, aidlcEntrypoints);
         if (violation) throw new Error(violation);
         // State-transition guard, parallel to the Claude/Kiro/Codex PreToolUse
         // wiring. The state CLI's ownership check remains the hard floor; this
@@ -380,6 +497,82 @@ export default async ({
             guard.stderr.trim() ||
               "direct aidlc-state.ts lifecycle transitions are engine-owned",
           );
+        }
+      }
+
+      // Review-freeze (§12a terminal-receipt write-freeze): runs for EVERY
+      // agent - unlike reviewer-scope there is no identity gate, because any
+      // produces[] write voids a fresh READY receipt regardless of who makes
+      // it. The core hook self-filters to write tools and fails open.
+      if (
+        input.tool === "bash" ||
+        input.tool === "write" ||
+        input.tool === "edit" ||
+        input.tool === "apply_patch"
+      ) {
+        const freezeCalls =
+          input.tool === "bash"
+            ? [{ toolName: "Bash", toolInput: { command: (args.command as string) ?? "" } }]
+            : (input.tool === "apply_patch" ? applyPatchPaths(args) : [
+                (args.filePath as string) ?? (args.path as string) ?? "",
+              ])
+                .filter((filePath) => filePath.length > 0)
+                .map((filePath) => ({
+                  toolName: input.tool === "edit" ? "Edit" : "Write",
+                  toolInput: { file_path: filePath },
+                }));
+        for (const call of freezeCalls) {
+          const freeze = await runCore(
+            "aidlc-review-freeze.ts",
+            {
+              hook_event_name: "PreToolUse",
+              tool_name: call.toolName,
+              tool_input: call.toolInput,
+              cwd: directory,
+            },
+            directory,
+          );
+          if (freeze.code === 2) {
+            throw new Error(
+              freeze.stderr.trim() ||
+                "review-freeze: this write would invalidate a fresh READY review receipt",
+            );
+          }
+        }
+      }
+
+      // Plan-approval guard, parallel to the Claude Task-matcher wiring:
+      // opencode's delegation surface is the task tool, whose args carry the
+      // target agent (subagent_type or agent) plus the prompt/description.
+      // Only developer-agent dispatches consult the core hook; it decides
+      // from workflow state whether code-generation's plan-before-generation
+      // ordering is satisfied, and a block surfaces as a thrown error (the
+      // plugin's reject contract).
+      if (input.tool === "task") {
+        const target =
+          (args.subagent_type as string) ?? (args.agent as string) ?? "";
+        if (target === "aidlc-developer-agent") {
+          const guard = await runCore(
+            "aidlc-plan-approval-guard.ts",
+            {
+              hook_event_name: "PreToolUse",
+              tool_name: "Task",
+              tool_input: {
+                subagent_type: target,
+                prompt: [(args.prompt as string) ?? "", (args.description as string) ?? ""]
+                  .filter((t) => t.length > 0)
+                  .join("\n"),
+              },
+              cwd: directory,
+            },
+            directory,
+          );
+          if (guard.code === 2) {
+            throw new Error(
+              guard.stderr.trim() ||
+                "code-generation requires an approved plan before dispatching the developer agent",
+            );
+          }
         }
       }
 

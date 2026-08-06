@@ -1,0 +1,11 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-session-start",
+      "trigger": "SessionStart",
+      "description": "Emits SESSION_STARTED and injects workflow context when a session begins.",
+      "action": { "type": "command", "command": "aidlc adapter kiro-ide session-start" }
+    }
+  ]
+}

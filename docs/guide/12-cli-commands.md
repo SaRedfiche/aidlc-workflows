@@ -38,6 +38,8 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | `/aidlc config set <key> <value>` | Change active workflow config (`depth`, `test-strategy`) |
 | `/aidlc config list` | List active workflow config (`--json` for structured output) |
 | `aidlc config global <get\|set\|clear\|list>` | Manage machine update and release settings |
+| `aidlc workspace codekb --repo <repo>` | Print the active space's code knowledge directory for a repository |
+| `aidlc plugin select [names]` | Show or set the enabled plugin list through the native dispatcher |
 | `/aidlc plugin list [--verbose\|--json]` | Compare host-installed plugins with this project's composition stamps |
 | `/aidlc plugin sync [--prune-missing]` | Transactionally compose installed plugins; explicitly prune missing owned content |
 | `aidlc init [options]` | Initialize or refresh a project from an installed or local harness projection |
@@ -664,9 +666,12 @@ Codex CLI.
 
 ### `aidlc-utility codekb-path` - resolve the code knowledge directory
 
-This is a **direct utility invocation**, not an `/aidlc codekb-path` command:
+This is a **direct utility invocation**, not an `/aidlc codekb-path` command.
+The native dispatcher exposes the same read-only query as
+`aidlc workspace codekb --repo <repo>`:
 
 ```bash
+aidlc workspace codekb --repo <repo>
 bun .claude/tools/aidlc-utility.ts codekb-path --repo <repo>
 bun .kiro/tools/aidlc-utility.ts codekb-path --repo <repo>
 bun .codex/tools/aidlc-utility.ts codekb-path --repo <repo>
@@ -727,10 +732,7 @@ the workspace root (see
 [Declaring the repo set](03-spaces-and-intents.md#declaring-the-repo-set-optional-manifest)):
 
 ```bash
-bun .claude/tools/aidlc-workspace-sync.ts [--force]
-bun .kiro/tools/aidlc-workspace-sync.ts [--force]
-bun .codex/tools/aidlc-workspace-sync.ts [--force]
-bun .aidlc/tools/aidlc-workspace-sync.ts [--force]
+aidlc __delegate workspace-sync [--force]
 ```
 
 It serializes reconciles with a workspace lock whose live owner is never reaped
@@ -787,7 +789,9 @@ settings are malformed instead of assuming every installed plugin is enabled;
 both hosts fall back when their proved registry source disappears. Kiro reports
 `host inventory unavailable` outside a hook that supplies the current plugin
 root. The check is always offline.
-`select-plugins` is a **direct utility invocation**, not an `/aidlc select-plugins` command.
+`select-plugins` is a **direct utility invocation**, not an `/aidlc select-plugins`
+command. The native dispatcher exposes the same operation as
+`aidlc plugin select [names]`.
 `bun .claude/tools/aidlc-utility.ts select-plugins` prints the current selection
 (`all enabled (no selection)` when the `plugins` key is absent) and the known
 plugin names. Pass a comma-separated list to set it:

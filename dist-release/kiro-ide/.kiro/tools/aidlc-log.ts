@@ -1,19 +1,34 @@
 // aidlc-log.ts — Interaction audit helper
 //
-// Records DECISION_RECORDED (before AskUserQuestion) and QUESTION_ANSWERED
-// (after the user answers). Orchestrator-callable; state tool doesn't own
-// these because they fire per-question, not per state transition.
+// Records DECISION_RECORDED (before AskUserQuestion), QUESTION_ANSWERED
+// (after ordinary answers), SUMMARY_CONFIRMATION_RECORDED (the reserved,
+// human-backed pre-generation receipt), and REVIEW_REQUESTED / REVIEW_COMPLETED
+// (the §12a reviewer step). Orchestrator-callable; state tool doesn't own these
+// because they fire per-question / per-review, not per state transition.
 
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { appendAuditEntry } from "./aidlc-audit.ts";
+import { relative, resolve, sep } from "node:path";
+import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
+  auditBlockField,
   emitError,
   errorMessage,
+  extractMarkdownSection,
+  holdsAuditLock,
   humanActedSinceLastAnswer,
   humanPresenceGuardDisabled,
   isAutonomousMode,
+  parseCheckboxes,
+  readAllAuditShards,
+  recordDir,
+  reviewArtifactFingerprint,
   resolveProjectDir,
+  resolveStage,
+  SUMMARY_CONFIRMATION_CHECKPOINT,
   stateFilePath,
+  toPosix,
+  withAuditLock,
 } from "./aidlc-lib.js";
 
 // Resolve the project dir AND assert that an active workflow exists before any
@@ -40,11 +55,19 @@ function resolveActiveProjectDir(explicit?: string): string {
   return pd;
 }
 
+// handleAnswer emits inside a withAuditLock section (classification and
+// emission share one snapshot); appendAuditEntry acquires the OS lock itself,
+// so route held-lock emits through the unlocked variant (the aidlc-state.ts
+// idiom) to avoid self-deadlocking on the lock dir we already hold.
 function emitAudit(
   pd: string,
   eventType: string,
   fields: Record<string, string>
 ): void {
+  if (holdsAuditLock(pd)) {
+    appendAuditEntryUnlocked(eventType, fields, pd);
+    return;
+  }
   appendAuditEntry(eventType, fields, pd);
 }
 
@@ -59,6 +82,10 @@ function parseFlags(
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a.startsWith("--")) {
+      if (a === "--single") {
+        flags.single = "true";
+        continue;
+      }
       if (i + 1 >= args.length) {
         error(`${a} expects a value, got end of arguments.`);
       }
@@ -75,22 +102,87 @@ function parseFlags(
   return { positional, flags };
 }
 
+function summaryQuestionEvidence(
+  pd: string,
+  flags: Record<string, string>,
+  expectedAnswer: string,
+): { relativePath: string; sha256: string } {
+  const supplied = flags["questions-file"];
+  if (!supplied) {
+    error(
+      "Summary confirmation requires --questions-file <path> so the receipt can bind to the reviewed answers.",
+    );
+  }
+  const absolute = resolve(pd, supplied);
+  const root = recordDir(pd);
+  if (
+    root === null ||
+    (absolute !== root && !absolute.startsWith(`${root}${sep}`))
+  ) {
+    error(
+      `Summary confirmation questions file must be inside the active intent record: ${supplied}`,
+    );
+  }
+  if (!absolute.endsWith("-questions.md") || !existsSync(absolute)) {
+    error(`Summary confirmation questions file does not exist: ${supplied}`);
+  }
+
+  const body = readFileSync(absolute, "utf-8");
+  const section = extractMarkdownSection(
+    body,
+    `## ${SUMMARY_CONFIRMATION_CHECKPOINT}`,
+  );
+  const answers = [...section.matchAll(/^\[Answer\]:[ \t]*(.*)$/gm)];
+  if (answers.length !== 1 || answers[0][1].trim() !== expectedAnswer) {
+    const rendered = expectedAnswer || "a blank value";
+    error(
+      `Summary confirmation section in ${supplied} must contain exactly one ` +
+      `\`[Answer]:\` line with ${rendered} before this command runs.`,
+    );
+  }
+
+  return {
+    relativePath: toPosix(relative(pd, absolute)),
+    sha256: createHash("sha256").update(body).digest("hex"),
+  };
+}
+
 // --- Subcommand: decision ---
-// Usage: aidlc-log decision --stage <slug> --decision <text> [--options <csv>] [--rationale <text>]
+// Usage: aidlc-log decision --stage <slug> --decision <text> [--options <csv>]
+//   [--rationale <text>] [--checkpoint summary-confirmation
+//   --questions-file <path> [--unit <unit>] [--single]]
 //
 // Fires BEFORE AskUserQuestion, recording what options will be shown.
 function handleDecision(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
   if (!flags.decision) error("Missing --decision <text>");
+  if (
+    flags.checkpoint !== undefined &&
+    flags.checkpoint !== "summary-confirmation"
+  ) {
+    error(
+      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation`,
+    );
+  }
 
   const pd = resolveActiveProjectDir(projectDir);
+  const summaryEvidence =
+    flags.checkpoint === "summary-confirmation"
+      ? summaryQuestionEvidence(pd, flags, "")
+      : null;
   const fields: Record<string, string> = {
     Stage: flags.stage,
     Decision: flags.decision,
   };
   if (flags.options) fields.Options = flags.options;
   if (flags.rationale) fields.Rationale = flags.rationale;
+  if (flags.checkpoint === "summary-confirmation") {
+    fields.Checkpoint = SUMMARY_CONFIRMATION_CHECKPOINT;
+    fields["Questions File"] = summaryEvidence!.relativePath;
+  }
+  if (flags.unit) fields.Unit = flags.unit;
+  if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
 
   try {
     emitAudit(pd, "DECISION_RECORDED", fields);
@@ -105,48 +197,359 @@ function handleDecision(args: string[]): void {
 
 // --- Subcommand: answer ---
 // Usage: aidlc-log answer --stage <slug> --details <text>
+//   [--checkpoint summary-confirmation --questions-file <path>
+//   [--unit <unit>] [--single]]
 //
 // Fires AFTER the user answers a question.
+
+// An answer at an open approval gate belongs to a non-gate question only when
+// the audit stream proves that question was asked: a DECISION_RECORDED for this
+// stage after the current STAGE_AWAITING_APPROVAL, with no later
+// QUESTION_ANSWERED. This structural signal handles arbitrary user wording and
+// avoids guessing from gate-option words that may also begin substantive
+// answers. Caller holds the audit lock, so this snapshot cannot race an emit.
+function hasPendingDecisionAtGate(pd: string, stage: string): boolean {
+  const audit = readAllAuditShards(pd);
+  if (audit.length === 0) return false;
+
+  const relevant = new Set([
+    "STAGE_AWAITING_APPROVAL",
+    "DECISION_RECORDED",
+    "QUESTION_ANSWERED",
+    "SUMMARY_CONFIRMATION_RECORDED",
+  ]);
+  const events = audit
+    .replace(/\r\n/g, "\n")
+    .split(/\n---\n/)
+    .map((block, position) => ({
+      event: auditBlockField(block, "Event") ?? "",
+      stage: auditBlockField(block, "Stage"),
+      timestamp: auditBlockField(block, "Timestamp") ?? "",
+      position,
+    }))
+    .filter((event) => relevant.has(event.event))
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) {
+        return a.timestamp < b.timestamp ? -1 : 1;
+      }
+      return a.position - b.position;
+    });
+
+  const gateOpen = events.findLastIndex(
+    (event) =>
+      event.event === "STAGE_AWAITING_APPROVAL" && event.stage === stage,
+  );
+  if (gateOpen === -1) return false;
+
+  let pending = false;
+  for (const event of events.slice(gateOpen + 1)) {
+    if (event.stage !== stage) continue;
+    if (event.event === "DECISION_RECORDED") {
+      pending = true;
+    } else if (
+      event.event === "QUESTION_ANSWERED" ||
+      event.event === "SUMMARY_CONFIRMATION_RECORDED"
+    ) {
+      pending = false;
+    }
+  }
+  return pending;
+}
+
+function pendingSummaryDecision(
+  pd: string,
+  stage: string,
+  unit: string | undefined,
+  workflow: string | undefined,
+  questionsFile: string,
+): { pending: boolean; humanAfterDecision: boolean } {
+  const audit = readAllAuditShards(pd);
+  if (audit.length === 0) {
+    return { pending: false, humanAfterDecision: false };
+  }
+
+  const entries = audit
+    .replace(/\r\n/g, "\n")
+    .split(/\n---\n/)
+    .map((block, position) => ({
+      block,
+      position,
+      event: auditBlockField(block, "Event") ?? "",
+      timestamp: auditBlockField(block, "Timestamp") ?? "",
+    }))
+    .filter((entry) =>
+      entry.event === "DECISION_RECORDED" ||
+      entry.event === "SUMMARY_CONFIRMATION_RECORDED" ||
+      entry.event === "STAGE_COMPLETED" ||
+      entry.event === "HUMAN_TURN"
+    )
+    .sort((a, b) =>
+      a.timestamp !== b.timestamp
+        ? (a.timestamp < b.timestamp ? -1 : 1)
+        : a.position - b.position
+    );
+
+  let decision = -1;
+  let answer = -1;
+  let human = -1;
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (
+      entry.event === "STAGE_COMPLETED" &&
+      auditBlockField(entry.block, "Stage") === stage &&
+      auditBlockField(entry.block, "Workflow") === workflow
+    ) {
+      decision = -1;
+      answer = -1;
+      human = -1;
+      continue;
+    }
+    if (entry.event === "HUMAN_TURN") {
+      human = i;
+      continue;
+    }
+    if (auditBlockField(entry.block, "Stage") !== stage) continue;
+    if (
+      auditBlockField(entry.block, "Checkpoint") !==
+        SUMMARY_CONFIRMATION_CHECKPOINT
+    ) {
+      continue;
+    }
+    if ((auditBlockField(entry.block, "Unit") ?? undefined) !== unit) continue;
+    if (
+      (auditBlockField(entry.block, "Workflow") ?? undefined) !== workflow
+    ) {
+      continue;
+    }
+    if (auditBlockField(entry.block, "Questions File") !== questionsFile) {
+      continue;
+    }
+    if (entry.event === "DECISION_RECORDED") decision = i;
+    if (entry.event === "SUMMARY_CONFIRMATION_RECORDED") answer = i;
+  }
+
+  return {
+    pending: decision > answer,
+    humanAfterDecision: human > decision && decision >= 0,
+  };
+}
+
 function handleAnswer(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
   if (!flags.details) error("Missing --details <text>");
+  if (
+    flags.checkpoint !== undefined &&
+    flags.checkpoint !== "summary-confirmation"
+  ) {
+    error(
+      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation`,
+    );
+  }
+  const summaryCheckpoint = flags.checkpoint === "summary-confirmation";
+  if (
+    summaryCheckpoint &&
+    flags.details !== "Looks correct" &&
+    flags.details !== "Request changes"
+  ) {
+    error(
+      'Summary confirmation --details must be exactly "Looks correct" or "Request changes".',
+    );
+  }
 
   const pd = resolveActiveProjectDir(projectDir);
+  const summaryEvidence = summaryCheckpoint
+    ? summaryQuestionEvidence(pd, flags, flags.details)
+    : null;
   const fields: Record<string, string> = {
     Stage: flags.stage,
     Details: flags.details,
   };
+  if (summaryCheckpoint) {
+    fields.Checkpoint = SUMMARY_CONFIRMATION_CHECKPOINT;
+    fields["Questions File"] = summaryEvidence!.relativePath;
+    fields["Questions SHA-256"] = summaryEvidence!.sha256;
+  }
+  if (flags.unit) fields.Unit = flags.unit;
+  if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
 
-  // Human-presence gate (ledger-event design): the interview answer is
-  // a human-judgement event, so require a HUMAN_TURN appended AFTER the last
-  // QUESTION_ANSWERED (ledger order) before recording another. The prior
-  // QUESTION_ANSWERED is the "since" boundary (its own consume-once: one human turn
-  // logs one answer), so no separate marker/consume step is needed. Autonomy
-  // carve-out FIRST (Construction swarm/Bolt answers are not human), then the scoped
-  // test off-switch. Fail-open when no ledger exists (presence not tracked yet).
-  const content = existsSync(stateFilePath(pd))
-    ? readFileSync(stateFilePath(pd), "utf-8")
-    : null;
-  if (isAutonomousMode(content)) {
-    // autonomous Construction: no human presence required
-  } else if (humanPresenceGuardDisabled()) {
-    // scoped test off-switch
-  } else if (!humanActedSinceLastAnswer(pd)) {
-    error(
-      "Refusing to record this answer: a real human has not acted at this checkpoint this turn. Type your answer in the session (which records a human turn) before logging it."
+  // Classification and emission run under ONE audit lock: a concurrent
+  // gate-start (itself locked) cannot flip the stage to [?] between the
+  // checkbox read below and the QUESTION_ANSWERED append, which would
+  // re-create the answer-consumes-the-turn deadlock this branch prevents.
+  // appendAuditEntry / emitError re-acquire reentrantly (per-pd depth).
+  withAuditLock(pd, () => {
+    // Human-presence gate (ledger-event design): the interview answer is
+    // a human-judgement event, so require a HUMAN_TURN appended AFTER the last
+    // QUESTION_ANSWERED (ledger order) before recording another. The prior
+    // QUESTION_ANSWERED is the "since" boundary (its own consume-once: one human turn
+    // logs one answer), so no separate marker/consume step is needed. Autonomy
+    // carve-out FIRST (Construction swarm/Bolt answers are not human), then the scoped
+    // test off-switch. Fail-open when no ledger exists (presence not tracked yet).
+    const content = existsSync(stateFilePath(pd))
+      ? readFileSync(stateFilePath(pd), "utf-8")
+      : null;
+    const workflow =
+      flags.single === "true" ? `single-stage:${flags.stage}` : undefined;
+
+    if (summaryCheckpoint) {
+      const pending = pendingSummaryDecision(
+        pd,
+        flags.stage,
+        flags.unit,
+        workflow,
+        summaryEvidence!.relativePath,
+      );
+      if (!pending.pending) {
+        error(
+          "Refusing to record summary confirmation: no matching unanswered " +
+          "summary-confirmation decision is recorded for this stage, unit, and run. " +
+          "Record the decision before presenting the summary prompt.",
+        );
+      }
+      if (
+        !humanPresenceGuardDisabled() &&
+        !pending.humanAfterDecision
+      ) {
+        error(
+          "Refusing to record summary confirmation: a real human has not responded " +
+          "after this summary prompt. End the turn, wait for the human's choice, " +
+          "then record it.",
+        );
+      }
+      try {
+        emitAudit(pd, "SUMMARY_CONFIRMATION_RECORDED", fields);
+      } catch (e) {
+        error(`Audit emission failed: ${errorMessage(e)}`);
+      }
+      console.log(
+        JSON.stringify({
+          emitted: "SUMMARY_CONFIRMATION_RECORDED",
+          checkpoint: "summary-confirmation",
+          stage: flags.stage,
+        }),
+      );
+      return;
+    }
+
+    // Approval choices are lifecycle transitions, not interview answers. A
+    // conductor may nevertheless route an approval through `answer` before
+    // `report`; emitting QUESTION_ANSWERED here would consume the same
+    // HUMAN_TURN that approval needs. When the target stage is at [?] and no
+    // unresolved non-gate decision was recorded after the gate opened,
+    // acknowledge without emitting so the report command can commit the gate.
+    // The human-presence requirement is NOT waived: a redundant answer with no
+    // fresh HUMAN_TURN refuses, so a fabricated `answer && report rejected`
+    // chain (reject carries no presence guard of its own) breaks at the answer.
+    const targetAtApprovalGate =
+      content !== null &&
+      parseCheckboxes(content).some(
+        (checkbox) =>
+          checkbox.slug === flags.stage &&
+          checkbox.state === "awaiting-approval",
+      );
+    const pendingDecision =
+      targetAtApprovalGate && hasPendingDecisionAtGate(pd, flags.stage);
+    if (targetAtApprovalGate && !pendingDecision) {
+      if (
+        !isAutonomousMode(content) &&
+        !humanPresenceGuardDisabled() &&
+        !humanActedSinceLastAnswer(pd)
+      ) {
+        error(
+          "Refusing to acknowledge this approval choice: a real human has not acted at this gate this turn. The gate is report-owned - after the human types their choice, call aidlc-orchestrate.ts report --result approved or rejected; do not log it as an answer."
+        );
+      }
+      console.log(
+        JSON.stringify({
+          skipped: "QUESTION_ANSWERED",
+          stage: flags.stage,
+          reason: "approval-gate-report-owned",
+        }),
+      );
+      return;
+    }
+
+    if (isAutonomousMode(content)) {
+      // autonomous Construction: no human presence required
+    } else if (humanPresenceGuardDisabled()) {
+      // scoped test off-switch
+    } else if (!humanActedSinceLastAnswer(pd)) {
+      error(
+        "Refusing to record this answer: a real human has not acted at this checkpoint this turn. Type your answer in the session (which records a human turn) before logging it."
+      );
+    }
+
+    try {
+      emitAudit(pd, "QUESTION_ANSWERED", fields);
+    } catch (e) {
+      error(`Audit emission failed: ${errorMessage(e)}`);
+    }
+
+    console.log(
+      JSON.stringify({ emitted: "QUESTION_ANSWERED", stage: flags.stage })
     );
+  });
+}
+
+// --- Subcommand: review ---
+// Usage:
+//   aidlc-log review --stage <slug> --reviewer <agent> [--unit <u>] --iteration <n>
+//       → REVIEW_REQUESTED (fires when the conductor dispatches the reviewer)
+//   aidlc-log review --stage <slug> --reviewer <agent> [--unit <u>] --iteration <n> --verdict <READY|NOT-READY>
+//       → REVIEW_COMPLETED (fires when the conductor reads the reviewer's verdict)
+//
+// The §12a reviewer step is otherwise prose-driven; these tool-actor rows make
+// it observable and let the engine enforce that a reviewer-bearing stage cannot
+// be approved without a terminal REVIEW_COMPLETED (see verifyReviewerPrecondition
+// in aidlc-state.ts). On a per-unit Construction stage the reviewer fires once
+// PER UNIT, so pass --unit; the approve guard requires one review per unit.
+const VALID_VERDICTS = new Set(["READY", "NOT-READY"]);
+
+function handleReview(args: string[]): void {
+  const { flags } = parseFlags(args);
+  if (!flags.stage) error("Missing --stage <slug>");
+  if (!flags.reviewer) error("Missing --reviewer <agent>");
+
+  const pd = resolveActiveProjectDir(projectDir);
+  const fields: Record<string, string> = {
+    Stage: flags.stage,
+    Reviewer: flags.reviewer,
+  };
+  if (flags.unit) fields.Unit = flags.unit;
+  if (flags.iteration) fields.Iteration = flags.iteration;
+  if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
+
+  let eventType: "REVIEW_REQUESTED" | "REVIEW_COMPLETED";
+  if (flags.verdict !== undefined) {
+    const verdict = flags.verdict.toUpperCase();
+    if (!VALID_VERDICTS.has(verdict)) {
+      error(
+        `Unknown --verdict "${flags.verdict}". Accepted: ${[...VALID_VERDICTS].join(", ")}.`
+      );
+    }
+    fields.Verdict = verdict;
+    const stage = resolveStage(flags.stage);
+    if (!stage) error(`Cannot record review: unknown stage "${flags.stage}"`);
+    const fingerprint = reviewArtifactFingerprint(pd, stage, flags.unit);
+    if (fingerprint === null) {
+      error(
+        `Cannot record review for "${flags.stage}": the declared artifact set could not be fingerprinted. Resolve the active intent and readable artifact paths, then record the verdict again.`,
+      );
+    }
+    fields["Artifact Fingerprint"] = fingerprint;
+    eventType = "REVIEW_COMPLETED";
+  } else {
+    eventType = "REVIEW_REQUESTED";
   }
 
   try {
-    emitAudit(pd, "QUESTION_ANSWERED", fields);
+    emitAudit(pd, eventType, fields);
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
   }
 
-  console.log(
-    JSON.stringify({ emitted: "QUESTION_ANSWERED", stage: flags.stage })
-  );
+  console.log(JSON.stringify({ emitted: eventType, stage: flags.stage }));
 }
 
 // --- CLI entry point ---
@@ -177,8 +580,11 @@ export function main(argv: string[]): void {
       case "answer":
         handleAnswer(filteredArgs.slice(1));
         break;
+      case "review":
+        handleReview(filteredArgs.slice(1));
+        break;
       default:
-        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer`);
+        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, review`);
     }
   } catch (e) {
     error(errorMessage(e));

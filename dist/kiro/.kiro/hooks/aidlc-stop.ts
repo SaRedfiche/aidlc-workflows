@@ -110,6 +110,7 @@ import {
   foldTranscriptIntoLedger,
   writeCurrentTranscriptPath,
 } from "../tools/aidlc-usage.ts";
+import { aidlcToolInvocation } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOK_NAME = "stop";
 
@@ -836,7 +837,7 @@ function continuationReason(
       `The AIDLC workflow has pending rule delivery${where}. ` +
       "Apply every path/text entry in this exact `rules_content` payload before continuing:\n\n" +
       `${exactContent}\n\nThen run ` +
-      `\`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue "${continueToken}"\` ` +
+      `\`${aidlcToolInvocation("orchestrate")} continue "${continueToken}"\` ` +
       "and keep following load-steering continuations until the engine emits `run-stage`. " +
       "Do not report or narrate steering chunks."
     );
@@ -844,11 +845,11 @@ function continuationReason(
   return (
     `The AIDLC workflow has a pending step (a ${kind} directive${where}). ` +
     "You haven't finished the forwarding loop yet. Run " +
-    `\`bun ${harnessDir()}/tools/aidlc-orchestrate.ts next\`, act on the directive it ` +
+    `\`${aidlcToolInvocation("orchestrate")} next\`, act on the directive it ` +
     "emits, then run `aidlc-orchestrate report --stage <stage> --result <outcome>` to commit " +
     "the transition. Repeat until the engine answers `done`. " +
     "If instead you mean to pause this workflow for now (and resume in a later " +
-    `session), run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts park\` to park it ` +
+    `session), run \`${aidlcToolInvocation("orchestrate")} park\` to park it ` +
     "cleanly at this inter-stage boundary - never mark stages complete just to end the turn."
   );
 }

@@ -185,6 +185,12 @@ export function directStateTransition(command: string): string | null {
     const verb = match[1];
     if (BLOCKED_STATE_TRANSITIONS.has(verb)) return verb;
   }
+  const nativeInvocation =
+    /(?:^|&&|\|\||[;|(\n{])[ \t]*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:"[^"\n]*\/aidlc(?:\.exe)?"|'[^'\n]*\/aidlc(?:\.exe)?'|[^\s"';&|({]*aidlc(?:\.exe)?)[ \t]+(?:(?:__delegate)[ \t]+)?state[ \t]+([a-z][a-z0-9-]*)\b/g;
+  for (const match of executableShellText(command).matchAll(nativeInvocation)) {
+    const verb = match[1];
+    if (BLOCKED_STATE_TRANSITIONS.has(verb)) return verb;
+  }
   return null;
 }
 
@@ -203,22 +209,30 @@ export function isLifecycleBoundaryCommand(command: string): boolean {
     if (tool === "state" && BLOCKED_STATE_TRANSITIONS.has(verb)) return true;
     if (tool === "jump" && verb === "execute") return true;
   }
+  const nativeInvocation =
+    /(?:^|&&|\|\||[;|(\n{])[ \t]*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:"[^"\n]*\/aidlc(?:\.exe)?"|'[^'\n]*\/aidlc(?:\.exe)?'|[^\s"';&|({]*aidlc(?:\.exe)?)[ \t]+(?:(?:__delegate)[ \t]+(orchestrate|state|jump)[ \t]+|(state|jump)[ \t]+)?([a-z][a-z0-9-]*)\b/g;
+  for (const match of executableShellText(command).matchAll(nativeInvocation)) {
+    const tool = match[1] ?? match[2] ?? "orchestrate";
+    const verb = match[3];
+    if (tool === "orchestrate" && (verb === "report" || verb === "park")) return true;
+    if (tool === "state" && BLOCKED_STATE_TRANSITIONS.has(verb)) return true;
+    if (tool === "jump" && verb === "execute") return true;
+  }
   return false;
 }
 
-async function main(): Promise<void> {
-  if (process.stdin.isTTY) return;
+export async function run(input: string): Promise<number> {
   let parsed: ClaudeCodeHookInput;
   try {
-    const raw: unknown = JSON.parse(await Bun.stdin.text());
-    if (!isClaudeCodeHookInput(raw)) return;
+    const raw: unknown = JSON.parse(input);
+    if (!isClaudeCodeHookInput(raw)) return 0;
     parsed = raw;
   } catch {
-    return;
+    return 0;
   }
-  if (parsed.tool_name !== "Bash") return;
+  if (parsed.tool_name !== "Bash") return 0;
   const verb = directStateTransition(parsed.tool_input?.command ?? "");
-  if (verb === null) return;
+  if (verb === null) return 0;
 
   process.stderr.write(
     `Direct aidlc-state.ts ${verb} is blocked: workflow lifecycle transitions are engine-owned. ` +
@@ -226,9 +240,10 @@ async function main(): Promise<void> {
       "<awaiting-approval|approved|rejected|revised|completed|skipped>; use " +
       "aidlc-orchestrate.ts park to park, and next/jump for routing changes.\n",
   );
-  process.exit(2);
+  return 2;
 }
 
 if (import.meta.main) {
-  await main();
+  const input = process.stdin.isTTY ? "" : await Bun.stdin.text();
+  process.exitCode = await run(input);
 }

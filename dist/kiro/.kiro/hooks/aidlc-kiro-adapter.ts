@@ -24,7 +24,7 @@
 //     is IDENTICAL (verified live), so it passes through verbatim.
 //
 // Usage (registered in the conductor and delegated .kiro/agents/*.json configs):
-//   bun .kiro/hooks/aidlc-kiro-adapter.ts <target>
+//   bun .kiro/tools/aidlc.ts adapter kiro <target>
 // where <target> ∈ session-start | audit-and-sensors | runtime-compile |
 //                  state-sync | log-subagent | stop | verb-intercept |
 //                  pretool-block | state-transition-guard | reviewer-scope
@@ -290,7 +290,7 @@ if (target === "verb-intercept") {
       process.stdout.write(
         "SYSTEM (deterministic argument forwarding): Your immediate first tool call " +
           "must be exactly the engine call below. Preserve every argument; do not run a bare `next`.\n\n" +
-          `bun .kiro/tools/aidlc-orchestrate.ts next ${invocation.raw}\n`,
+          `bun .kiro/tools/aidlc.ts __delegate orchestrate next ${invocation.raw}\n`,
       );
     }
     return 0; // non-terminal command — conductor handles the directive
@@ -425,7 +425,7 @@ if (target === "pretool-block") {
         if (!matches) {
           process.stderr.write(
             "The first aidlc-orchestrate next call dropped or changed the user's arguments. " +
-              `Run exactly: bun .kiro/tools/aidlc-orchestrate.ts next ${forwarding.raw ?? ""}\n`,
+              `Run exactly: bun .kiro/tools/aidlc.ts __delegate orchestrate next ${forwarding.raw ?? ""}\n`,
           );
           process.exit(2);
         }
@@ -478,8 +478,12 @@ if (target === "state-transition-guard") {
   const tool = kiro.tool_name ?? "";
   if (tool !== "shell" && tool !== "execute_bash") process.exit(0);
   const command = String(kiro.tool_input?.command ?? "");
+  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  const hookCommand = executable
+    ? [executable, "hook", "state-transition-guard"]
+    : [process.execPath, join(HOOKS_DIR, "aidlc-state-transition-guard.ts")];
   const r = Bun.spawnSync(
-    [process.execPath, join(HOOKS_DIR, "aidlc-state-transition-guard.ts")],
+    hookCommand,
     {
       stdin: Buffer.from(
         JSON.stringify({
@@ -489,9 +493,10 @@ if (target === "state-transition-guard") {
         }),
         "utf-8",
       ),
-      cwd: kiro.cwd ?? process.cwd(),
+      cwd: childCwd,
       stdout: "pipe",
       stderr: "pipe",
+      env: projectEnv,
     },
   );
   if (r.exitCode === 2) {

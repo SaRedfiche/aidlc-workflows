@@ -3,6 +3,7 @@ import {
   cpSync,
   existsSync,
   lstatSync,
+  mkdtempSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -12,6 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
@@ -119,6 +121,11 @@ import {
 } from "./aidlc-lib.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
+import {
+  copyProjectSurfaces,
+  projectDiffPlan,
+} from "./aidlc-plugin.ts";
+import { executePlan } from "./aidlc-transaction.ts";
 import {
   aidlcDispatcherInvocation,
   aidlcToolInvocation,
@@ -303,29 +310,6 @@ function handleVersion(): void {
 // select-plugins
 // ---------------------------------------------------------------------------
 
-interface FileSnapshot {
-  path: string;
-  exists: boolean;
-  bytes: string;
-}
-
-function snapshotFile(path: string): FileSnapshot {
-  return {
-    path,
-    exists: existsSync(path),
-    bytes: existsSync(path) ? readFileSync(path, "utf-8") : "",
-  };
-}
-
-function restoreSnapshot(snapshot: FileSnapshot): void {
-  if (snapshot.exists) {
-    mkdirSync(dirname(snapshot.path), { recursive: true });
-    writeFileSync(snapshot.path, snapshot.bytes, "utf-8");
-  } else if (existsSync(snapshot.path)) {
-    rmSync(snapshot.path, { force: true });
-  }
-}
-
 function resetSelectionSensitiveCaches(): void {
   _resetHarnessDataForTests();
   _resetStageGraphForTests();
@@ -335,20 +319,6 @@ function resetSelectionSensitiveCaches(): void {
 function mutableHarnessDataPath(projectDir: string): string {
   return resolveHarnessPath(
     ["tools", "data", "harness.json"],
-    { mutable: true, projectDir },
-  );
-}
-
-function stageGraphDataPath(projectDir: string): string {
-  return resolveHarnessPath(
-    ["tools", "data", "stage-graph.json"],
-    { mutable: true, projectDir },
-  );
-}
-
-function scopeGridDataPath(projectDir: string): string {
-  return resolveHarnessPath(
-    ["tools", "data", "scope-grid.json"],
     { mutable: true, projectDir },
   );
 }
@@ -516,7 +486,10 @@ function replaceGeneratedRegion(
   if (after !== before) writeFileSync(path, after, "utf-8");
 }
 
-function regenerateSelectionSurfaces(projectDir: string): void {
+function regenerateSelectionSurfaces(
+  projectDir: string,
+  displayProjectDir = projectDir,
+): void {
   runBunTool(projectDir, "aidlc-graph.ts", ["compile"], "aidlc-graph compile");
   resetSelectionSensitiveCaches();
   const skillsDir = resolveSkillsPath([], { mutable: true, projectDir });
@@ -525,7 +498,9 @@ function regenerateSelectionSurfaces(projectDir: string): void {
     runBunTool(projectDir, "aidlc-runner-gen.ts", ["scopes"], "aidlc-runner-gen scopes");
   } else {
     process.stdout.write(
-      `note: runner regeneration skipped: ${skillsDir} not present in this install\n`,
+      `note: runner regeneration skipped: ${
+        resolveSkillsPath([], { mutable: true, projectDir: displayProjectDir })
+      } not present in this install\n`,
     );
   }
   resetSelectionSensitiveCaches();
@@ -638,21 +613,14 @@ function removePluginFragments(content: string, plugin: string): string {
   return out;
 }
 
-// Strip the merged contributions of every named plugin from installed stage
-// source. Mutated stage files are snapshotted into `snapshots` FIRST so the
-// caller's rollback restores them; consumed sidecars are snapshotted then
-// deleted (compose re-records on re-enable).
+// Strip the merged contributions of every named plugin from staged stage
+// source. The caller commits the resulting staged-project diff through the
+// shared transaction engine; consumed sidecars are deleted in staging and
+// compose recreates them when the plugin is re-enabled.
 function stripDisabledPluginContributions(
   plugins: readonly string[],
-  snapshots: FileSnapshot[],
 ): string[] {
   const stagesRoot = installedStagesRoot();
-  const touched = new Set<string>();
-  const snapshotOnce = (path: string): void => {
-    if (touched.has(path)) return;
-    snapshots.push(snapshotFile(path));
-    touched.add(path);
-  };
   const stripped: string[] = [];
   for (const plugin of plugins) {
     const sidecar = pluginContribSidecarPath(plugin);
@@ -685,14 +653,12 @@ function stripDisabledPluginContributions(
         }
         content = removePluginFragments(content, plugin);
         if (content !== before) {
-          snapshotOnce(path);
           writeFileSync(path, content, "utf-8");
           pluginTouched = true;
         }
       }
     }
     if (existsSync(sidecar)) {
-      snapshotOnce(sidecar);
       rmSync(sidecar, { force: true });
       pluginTouched = true;
     }
@@ -800,25 +766,52 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
     // plugin has no composed contributions to strip).
     const disabling = known.filter((n) => n !== "aidlc" && !nameSet.has(n));
 
-    const snapshots = [
-      snapshotFile(mutableHarnessDataPath(projectDir)),
-      snapshotFile(stageGraphDataPath(projectDir)),
-      snapshotFile(scopeGridDataPath(projectDir)),
-    ];
-
+    const stagingRoot = mkdtempSync(join(tmpdir(), "aidlc-plugin-select-"));
+    const stagedProject = join(stagingRoot, "project");
     try {
-      // Strip disabled plugins' merged contributions BEFORE recompiling, so the
-      // regenerated graph no longer carries their produces/sensors/consumes/
-      // scopes on core stages. Mutated stage files join `snapshots`, so the catch-side
-      // rollback restores them too. Re-enabling restores contributions on the
-      // next session start (the plugin's own compose hook re-merges).
-      const strippedPlugins = stripDisabledPluginContributions(disabling, snapshots);
-      writePluginSelection(projectDir, names);
-      regenerateSelectionSurfaces(projectDir);
-      appendAuditEvent(projectDir, "PLUGIN_SELECTION_CHANGED", {
-        "Previous Selection": previousSelection,
-        "New Selection": newSelection,
+      const selectedHarness = harnessDir();
+      copyProjectSurfaces(projectDir, stagedProject, selectedHarness);
+      const envKeys = [
+        "AIDLC_RUNTIME_PROJECT_DIR",
+        "AIDLC_PROJECT_DIR",
+        "AIDLC_HARNESS_DIR",
+        "AIDLC_RUNTIME_HARNESS_ROOT",
+      ] as const;
+      const saved = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+      let strippedPlugins: string[] = [];
+      try {
+        process.env.AIDLC_RUNTIME_PROJECT_DIR = stagedProject;
+        process.env.AIDLC_PROJECT_DIR = stagedProject;
+        process.env.AIDLC_HARNESS_DIR = selectedHarness;
+        process.env.AIDLC_RUNTIME_HARNESS_ROOT = join(stagedProject, selectedHarness);
+        resetSelectionSensitiveCaches();
+        // Strip disabled contributions in staging before recompiling. The live
+        // project remains byte-untouched until the shared transaction commits.
+        strippedPlugins = stripDisabledPluginContributions(disabling);
+        writePluginSelection(stagedProject, names);
+        regenerateSelectionSurfaces(stagedProject, projectDir);
+      } finally {
+        for (const key of envKeys) {
+          const value = saved[key];
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+        resetSelectionSensitiveCaches();
+      }
+      const plan = projectDiffPlan(projectDir, stagedProject, selectedHarness);
+      const failAfter = Number(process.env.AIDLC_PLUGIN_SELECT_FAIL_AFTER ?? "0");
+      executePlan(plan, {
+        failAfter: Number.isInteger(failAfter) && failAfter > 0
+          ? failAfter
+          : undefined,
+        validateCommitted: () => {
+          appendAuditEvent(projectDir, "PLUGIN_SELECTION_CHANGED", {
+            "Previous Selection": previousSelection,
+            "New Selection": newSelection,
+          });
+        },
       });
+      resetSelectionSensitiveCaches();
       if (strippedPlugins.length > 0) {
         process.stdout.write(
           `Stripped merged contributions of disabled plugin(s): ${strippedPlugins.join(", ")} (re-enabling restores them on the next session start)\n`,
@@ -826,19 +819,10 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
       }
       process.stdout.write(`Enabled plugins: ${names.join(", ")}\n`);
     } catch (err) {
-      const original = errorMessage(err);
-      let recoveryMessage = "";
-      try {
-        for (const snapshot of snapshots) restoreSnapshot(snapshot);
-        resetSelectionSensitiveCaches();
-        regenerateSelectionSurfaces(projectDir);
-        recoveryMessage =
-          " Restored harness.json, stage-graph.json, scope-grid.json, and any stripped stage files, then re-ran the regeneration chain against the restored selection.";
-      } catch (recoveryErr) {
-        recoveryMessage =
-          ` Restore was attempted, but regeneration against the restored selection also failed: ${errorMessage(recoveryErr)}.`;
-      }
-      die(`select-plugins failed: ${original}.${recoveryMessage}`);
+      resetSelectionSensitiveCaches();
+      die(`select-plugins failed: ${errorMessage(err)}`);
+    } finally {
+      rmSync(stagingRoot, { recursive: true, force: true });
     }
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
@@ -5402,22 +5386,18 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
 // set-status — atomically update statusline fields at stage start
 // ---------------------------------------------------------------------------
 
-function handleSetStatus(projectDir: string, flags: Record<string, string>): void {
-  if (
-    process.env.AIDLC_STATUSLINE_OWNER !== `statusline:${process.ppid}`
-  ) {
-    die(
-      "Direct aidlc-utility set-status is blocked: status synchronization is owned by the sync-statusline hook.",
-    );
-  }
+export function setStatus(
+  projectDir: string,
+  flags: Record<string, string>,
+): { phase: string; stage: string; agent: string } {
   const sp = stateFilePath(projectDir, flags.intent, flags.space);
-  if (!existsSync(sp)) die("No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").");
+  if (!existsSync(sp)) throw new Error(NO_STATE_FILE_MESSAGE);
 
   const stage = flags.stage;
-  if (!stage) die("--stage is required for set-status");
+  if (!stage) throw new Error("--stage is required for set-status");
 
   const entry = findStageBySlug(stage);
-  if (!entry) die(`Unknown stage: ${stage}`);
+  if (!entry) throw new Error(`Unknown stage: ${stage}`);
 
   const phase = (flags.phase || entry.phase).toUpperCase();
   const agent = flags.agent || entry.lead_agent;
@@ -5432,7 +5412,23 @@ function handleSetStatus(projectDir: string, flags: Record<string, string>): voi
   content = setCheckbox(content, stage, "in-progress");
   writeStateFile(projectDir, content, flags.intent, flags.space);
 
-  process.stdout.write(`${JSON.stringify({ updated: true, phase, stage, agent })}\n`);
+  return { phase, stage, agent };
+}
+
+function handleSetStatus(projectDir: string, flags: Record<string, string>): void {
+  if (
+    process.env.AIDLC_STATUSLINE_OWNER !== `statusline:${process.ppid}`
+  ) {
+    die(
+      "Direct aidlc-utility set-status is blocked: status synchronization is owned by the sync-statusline hook.",
+    );
+  }
+  try {
+    const result = setStatus(projectDir, flags);
+    process.stdout.write(`${JSON.stringify({ updated: true, ...result })}\n`);
+  } catch (error) {
+    die(errorMessage(error));
+  }
 }
 
 // ---------------------------------------------------------------------------

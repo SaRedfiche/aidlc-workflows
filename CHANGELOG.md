@@ -1,6 +1,17 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.45] - 2026-08-06
+
+AI-DLC now ships a checksum-verified native distribution lifecycle alongside the existing Bun copy channel: per-user installation, transactional upgrades and rollback, retained versions and project pins, offline packages, safe project initialization, harness management, update discovery, shell completions, and installed-plugin synchronization. **Upgrade:** native users run the release installer with `--harness <name>`, then run `aidlc init` in each project between workflows; existing copy-install users can continue using `dist/<harness>/` through Bun unchanged.
+
+* `install.sh` and `install.ps1` verify authenticated release metadata and SHA-256 checksums before installing a version-locked binary and harness runtime. Interactive installs select a harness from the controlling terminal, including piped curl-to-shell runs; automation must pass the canonical `--harness <name>` spelling.
+* `aidlc init` creates or refreshes a project through the shared transaction engine, preserves project-owned memory and root-file content, carries all mutable `harness.json` policy keys across upgrades and pre-manifest adoption, updates hand-authored orchestrator prose while regenerating compiled tables, and refuses refresh while a workflow is active.
+* `aidlc upgrade`, `rollback`, `use`, `versions`, `harness`, `package`, `uninstall`, `config global`, and `completions` provide side-by-side transactional lifecycle management, offline and mirror support, explicit update checks, and machine-readable output without requiring Bun, Node.js, or Git at runtime.
+* `aidlc plugin list|sync|select` compares host inventory with project composition stamps, synchronizes enabled plugin content transactionally, and moves selection changes from bespoke live snapshots onto the same fault-injected project transaction engine.
+* Native projections route all framework tools and all 17 hooks through the compiled dispatcher, including workspace sync, claim-source sensors, usage folding, and state-transition enforcement. Copy projections retain dispatcher-form Bun invocation; `bun scripts/package.ts --check` drift-guards both channels.
+* Release automation builds native targets, publishes data archives, installers, checksums, and provenance attestations, then exercises installation, initialization, rollback, package verification, plugin state, and host-specific trust wiring before publication.
+
 ## [2.5.44] - 2026-08-06
 
 Human-readable AI-DLC artifacts now follow the conversation language instead of defaulting to English. The framework rule layer gains four `## Mandated` rules in `org.md` that define how the conversation language is resolved, why it stays stable across short turns like `Approve`, which artifacts are localized, and which protocol tokens stay English. The rules travel to delegated agents and reviewers inside the active-stage rule bundle the dispatch-rules hook already delivers, so a subagent that never sees the conversation can still resolve the language from the rule layer, `aidlc-state.md`, or the upstream artifacts it consumes. **Upgrade:** fresh installs receive the rules with their seeded `default` space. An existing workspace keeps its own memory tree — runtime self-healing intentionally does not overwrite one — so merge the four rules into each `aidlc/spaces/<space>/memory/org.md` by hand and start a fresh session for them to load.

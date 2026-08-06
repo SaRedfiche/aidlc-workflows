@@ -79,7 +79,7 @@ is opened and merges the native `aidlc *` trust entry into
 `--from <release-directory> --offline` with the installer for an air-gapped
 package.
 On Windows, download the matching release `install.ps1` and run
-`install.ps1 -Harness kiro-ide`; `-From <release-directory> -Offline` consumes
+`install.ps1 --harness kiro-ide`; `-From <release-directory> -Offline` consumes
 the same flat package.
 
 Open `your-project/` in Kiro IDE. The install ships:

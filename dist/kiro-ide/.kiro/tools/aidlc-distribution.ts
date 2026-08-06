@@ -28,6 +28,7 @@ export type ProjectionDescriptor = {
   initNextStep: string;
   harnessDir: string;
   managedDirectories: string[];
+  legacyManagedFileHashes?: Record<string, string[]>;
   rootIntegrations: RootIntegration[];
 };
 
@@ -92,6 +93,32 @@ function validateDescriptor(root: string, stamp: ProjectionStamp, descriptor: Pr
     const path = join(root, safe);
     if (!existsSync(path) || !lstatSync(path).isDirectory()) {
       throw new Error(`${root}: managed directory is missing or invalid: ${safe}`);
+    }
+  }
+  if (descriptor.legacyManagedFileHashes !== undefined) {
+    const signatures = descriptor.legacyManagedFileHashes;
+    if (
+      !signatures ||
+      typeof signatures !== "object" ||
+      Array.isArray(signatures) ||
+      Object.keys(signatures).length === 0
+    ) {
+      throw new Error(`${root}: legacy managed-file signatures are invalid`);
+    }
+    for (const [file, hashes] of Object.entries(signatures)) {
+      const safe = safeRelativePath(file, "legacy managed file");
+      if (
+        !descriptor.managedDirectories.some((directory) =>
+          safe === directory || safe.startsWith(`${directory}/`)
+        )
+      ) {
+        throw new Error(`${root}: legacy managed file is outside managed directories: ${safe}`);
+      }
+      const path = join(root, safe);
+      if (!existsSync(path) || !lstatSync(path).isFile()) {
+        throw new Error(`${root}: legacy managed file is missing or invalid: ${safe}`);
+      }
+      validateHashes(hashes, `${root}: ${safe} legacy managed-file signatures`);
     }
   }
   for (const integration of descriptor.rootIntegrations) {

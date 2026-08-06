@@ -33,6 +33,12 @@ const TEST_AIDLC_COMMAND = [
   process.execPath,
   join(REPO_ROOT, "tests", "harness", "aidlc-hook-driver.ts"),
 ] as const;
+const TEST_ENTRYPOINTS = new Set([
+  "tools/aidlc-orchestrate.ts",
+  "tools/aidlc-state.ts",
+  "tools/aidlc-utility.ts",
+  "hooks/aidlc-stop.ts",
+]);
 const scratch: string[] = [];
 
 afterEach(() => {
@@ -115,6 +121,7 @@ function createTestAdapter(
   return createAdapter({
     client,
     directory,
+    aidlcEntrypoints: TEST_ENTRYPOINTS,
     aidlcCommand: TEST_AIDLC_COMMAND,
   });
 }
@@ -263,6 +270,7 @@ describe("t241 OpenCode adapter state-transition guard", () => {
     const adapter = await createAdapter({
       client,
       directory: root,
+      aidlcEntrypoints: TEST_ENTRYPOINTS,
       aidlcCommand: TEST_AIDLC_COMMAND,
     });
     const before = adapter["tool.execute.before"];
@@ -288,7 +296,7 @@ describe("t241 OpenCode adapter dispatch rules", () => {
     const root = freshInstalledProject();
     seedAidlcMemory(root);
     const { client } = fakeClient();
-    const adapter = await createAdapter({ client, directory: root });
+    const adapter = await createTestAdapter(client, root);
     const output = {
       args: {
         subagent_type: "aidlc-product-agent",

@@ -135,10 +135,12 @@ describe("t154 codekb promotion — RE outputs land at aidlc/spaces/<active-spac
     expect(decisionsStart).toBeGreaterThan(-1);
     expect(aggregateStart).toBeGreaterThan(decisionsStart);
     expect(body.slice(decisionsStart, aggregateStart)).not.toContain(
-      "aidlc-orchestrate.ts report",
+      "bun .claude/tools/aidlc.ts __delegate orchestrate report",
     );
     const aggregate = body.slice(aggregateStart, step2Start);
-    expect(aggregate.match(/aidlc-orchestrate\.ts report/g)).toHaveLength(1);
+    expect(
+      aggregate.match(/bun \.claude\/tools\/aidlc\.ts __delegate orchestrate report/g),
+    ).toHaveLength(1);
     expect(aggregate).toMatch(/report the stage as\s+skipped exactly once/);
     expect(aggregate).toContain("directive.single === true");
     expect(aggregate).toContain('report --single --stage "reverse-engineering" --result completed');

@@ -175,6 +175,7 @@ export function resolveSensorScriptPath(id: string): string {
 }
 
 const BUNDLED_SENSOR_IDS = new Set([
+	"claim-sources",
 	"linter",
 	"required-sections",
 	"type-check",
@@ -416,12 +417,12 @@ function handleFire(args: string[]): void {
 				.map(consumeWithProducer)
 				.join(","),
 		);
-		// Coverage is evaluated over the stage's whole deliverable set (the
-		// sensor unions the sibling files named here), not the single fired
-		// file - a multi-artifact stage splits its upstream citations across
-		// siblings. Same eligibility filter as required-sections: the
-		// `*-questions`/`*-timestamp` scaffolding is excluded so a citation
-		// that appears only in the Q&A file never counts as coverage.
+	}
+	// Stage-level document sensors evaluate the union of existing deliverables,
+	// not only the file whose write triggered the hook. Questions/timestamp
+	// scaffolding is excluded from that union. claim-sources still locates the
+	// sibling questions file explicitly as its source universe.
+	if (id === "upstream-coverage" || id === "claim-sources") {
 		scriptArgs.push(
 			"--deliverables",
 			templateEligibleArtifacts([
@@ -555,6 +556,20 @@ function handleFire(args: string[]): void {
 	process.exit(0);
 }
 
+// --- Stdout noise stripping ---
+//
+// Slice leading stdout noise down to the first structural JSON character
+// (startChar). Package managers such as pnpm print run banners and lockfile
+// warnings before a wrapped tool's JSON when a sensor runs against a sibling
+// repo; without this the payload never parses and the verdict is silently
+// discarded as script-error: bad-output. When startChar is absent the string
+// is returned unchanged so the caller's JSON.parse still throws and degrades
+// gracefully.
+export function stripStdoutNoise(stdout: string, startChar: string): string {
+	const idx = stdout.indexOf(startChar);
+	return idx >= 0 ? stdout.slice(idx) : stdout;
+}
+
 // --- Truth table ---
 //
 // Branch ordering is LOAD-BEARING: branch a (timeout) precedes branch 0
@@ -609,7 +624,7 @@ function decideOutcome(
 			// spawnSync's overload set isn't narrowed by encoding alone; check
 			// with typeof to keep TS narrowing.
 			const stdout = typeof result.stdout === "string" ? result.stdout : "";
-			parsed = JSON.parse(stdout);
+			parsed = JSON.parse(stripStdoutNoise(stdout, "{"));
 		} catch {
 			return {
 				kind: "passed",
