@@ -78,8 +78,11 @@ import {
   parseStageFrontmatter,
   parseStateStageSuffixes,
   readAllAuditShards,
+  readActiveDirectiveMarker,
+  recordHookDrop,
   readCurrentSessionId,
   readStateFile,
+  refreshActiveDirectiveMarker,
   resolveBirthRepoSet,
   resolveProjectDir,
   setActiveIntentCursor,
@@ -5232,15 +5235,32 @@ function handleSetStatus(projectDir: string, flags: Record<string, string>): voi
   const phase = (flags.phase || entry.phase).toUpperCase();
   const agent = flags.agent || entry.lead_agent;
 
-  let content = readStateFile(projectDir, flags.intent, flags.space);
+  const previousContent = readStateFile(projectDir, flags.intent, flags.space);
+  const currentStage = (getField(previousContent, "Current Stage") ?? "").trim();
+  const activeDirective = readActiveDirectiveMarker(projectDir, previousContent);
+  const preserveUnitMajorCursor =
+    getField(previousContent, "Construction Iteration")?.trim() === "unit-major" &&
+    phase === "CONSTRUCTION" &&
+    activeDirective?.stage === stage &&
+    activeDirective.unit !== undefined &&
+    currentStage.length > 0 &&
+    currentStage !== stage;
+  let content = previousContent;
   content = setField(content, "Lifecycle Phase", phase);
-  content = setField(content, "Current Stage", stage);
   content = setField(content, "Active Agent", agent);
-  content = setField(content, "In Progress", stage);
   content = setField(content, "Status", "Running");
   content = setField(content, "Last Updated", isoTimestamp());
-  content = setCheckbox(content, stage, "in-progress");
+  if (!preserveUnitMajorCursor) {
+    content = setField(content, "Current Stage", stage);
+    content = setField(content, "In Progress", stage);
+    content = setCheckbox(content, stage, "in-progress");
+  }
   writeStateFile(projectDir, content, flags.intent, flags.space);
+  try {
+    refreshActiveDirectiveMarker(projectDir, stage, previousContent, content);
+  } catch (e) {
+    recordHookDrop(projectDir, "active-directive", errorMessage(e));
+  }
 
   process.stdout.write(`${JSON.stringify({ updated: true, phase, stage, agent })}\n`);
 }
