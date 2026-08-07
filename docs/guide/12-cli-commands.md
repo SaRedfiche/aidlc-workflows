@@ -34,8 +34,9 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | `/aidlc --scope <name>` | Change the active scope |
 | `/aidlc --depth <level>` | Override depth level (minimal, standard, comprehensive) |
 | `/aidlc --test-strategy <level>` | Override test strategy (minimal, standard, comprehensive) |
-| `/aidlc config get <key>` | Print active workflow config (`depth`, `test-strategy`) |
-| `/aidlc config set <key> <value>` | Change active workflow config (`depth`, `test-strategy`) |
+| `/aidlc --review <class>` | Cap stage reviews for this run (adversarial, advisory, none) |
+| `/aidlc config get <key>` | Print active workflow config (`depth`, `test-strategy`, `review`) |
+| `/aidlc config set <key> <value>` | Change active workflow config (`depth`, `test-strategy`, `review`) |
 | `/aidlc config list` | List active workflow config (`--json` for structured output) |
 | `/aidlc plugin select [names]` | Show or set the enabled plugin list for this install |
 | `/aidlc plugin list` | List installed plugins and enabled state |
@@ -450,7 +451,7 @@ Change the active scope of a running workflow.
 /aidlc --scope enterprise
 ```
 
-**Behavior:** Updates the scope configuration in `aidlc-state.md`, recalculates which stages should execute and which should be skipped, and logs a `SCOPE_CHANGED` audit event. Can be combined with `--depth` to override the new scope's default depth.
+**Behavior:** Updates the scope configuration in `aidlc-state.md`, recalculates which stages should execute and which should be skipped, and logs a `SCOPE_CHANGED` audit event. Can be combined with `--depth`, `--test-strategy`, and `--review`; all supplied overrides are applied in the same change.
 
 Refused under autonomous Construction (`Construction Autonomy Mode: autonomous`), the same rule as `recompose`: re-shaping the plan needs a human at the gate, and an unattended run has none. Switch to gated Construction first (`aidlc-bolt set-autonomy --mode gated`) or let the swarm finish.
 
@@ -513,6 +514,48 @@ See [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md#the-3-test-strateg
 /aidlc --test-strategy minimal                         Minimal testing for active workflow
 /aidlc --depth standard --test-strategy minimal        Full artifacts, minimal tests
 /aidlc --scope bugfix --test-strategy comprehensive    Bugfix with thorough testing
+```
+
+---
+
+### `/aidlc --review <class>` — Cap stage reviews for this run
+
+Set the per-run review override: a ceiling on how heavyweight the §12a stage
+reviews run for the active workflow.
+
+**Syntax:**
+
+```
+/aidlc --review adversarial
+/aidlc --review advisory
+/aidlc --review none
+```
+
+**Behavior:** Each reviewer-bearing stage declares a review class in its
+frontmatter — `adversarial` (the reviewer refutes the artifact and the lead
+fixes findings across up to `reviewer_max_iterations` passes) or `advisory`
+(one review pass; findings are quoted verbatim at the approval gate for you to
+triage). The effective class per stage is the LOWEST of the stage's
+declaration, the scope's `review_cap` (bugfix, poc, and workshop cap to
+`advisory`), and this override — so `--review advisory` turns every remaining
+adversarial loop into a single decision-support pass, `--review none` skips
+reviewer dispatch entirely, and `--review adversarial` clears the override
+(it cannot raise a class above the stage declaration or the scope cap).
+Autonomous swarm construction is exempt: inside a Bolt the reviewer is the
+only pre-merge verification, so the declared class always applies there.
+Updates the `Review Override` field in `aidlc-state.md` and logs a
+`REVIEW_CLASS_CHANGED` audit event. It can be supplied when a workflow is
+born or alongside `--scope`; a same-as-current scope applies the review
+override as a config change instead of discarding it.
+
+**Valid values:** `adversarial`, `advisory`, `none` (case-insensitive).
+
+**Examples:**
+
+```
+/aidlc --review advisory              Single-pass reviews, findings at the gate
+/aidlc --review none                  No stage reviews this run
+/aidlc --review adversarial           Clear the override (stage defaults apply)
 ```
 
 ---

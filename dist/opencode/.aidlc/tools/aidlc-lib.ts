@@ -36,6 +36,7 @@ export interface StageEntry {
   condition?: string;
   reviewer?: string;
   reviewer_max_iterations?: number;
+  review_class?: "adversarial" | "advisory";
   // Summary-confirmation policy for stages using the unified question flow.
   // `required` means every execution owes a questions file and receipt;
   // `if-present` enforces a receipt only when the conditional flow created one.
@@ -3152,6 +3153,7 @@ export function freshReviewReceipts(
     "GATE_REJECTED",
     "ARTIFACT_CREATED",
     "ARTIFACT_UPDATED",
+    "REVIEW_REQUESTED",
     "REVIEW_COMPLETED",
   ]);
   const blocks = audit.replace(/\r\n/g, "\n").split(/\n---\n/);
@@ -3189,6 +3191,7 @@ export function freshReviewReceipts(
   // an ambiguous matching path fails closed by clearing every unit receipt.
   const recordedRepos = new Set(intentRepos(projectDir));
   const unitVerdicts = new Map<string, ReviewVerdict>();
+  const pendingRequests = new Set<string>();
   let stageVerdict: ReviewVerdict | null = null;
   for (let i = floorIdx + 1; i < events.length; i++) {
     const e = events[i];
@@ -3206,13 +3209,26 @@ export function freshReviewReceipts(
       }
       continue;
     }
-    if (e.event !== "REVIEW_COMPLETED") continue;
+    if (
+      e.event !== "REVIEW_REQUESTED" &&
+      e.event !== "REVIEW_COMPLETED"
+    ) {
+      continue;
+    }
     if (auditBlockField(e.block, "Workflow")?.startsWith("single-stage:")) continue;
     if (auditBlockField(e.block, "Stage") !== stage.slug) continue;
     if (auditBlockField(e.block, "Reviewer") !== reviewer) continue;
+    const iteration = auditBlockField(e.block, "Iteration");
+    if (!iteration || !/^[1-9][0-9]*$/.test(iteration)) continue;
+    const unit = auditBlockField(e.block, "Unit") || undefined;
+    const requestKey = `${unit ?? ""}\u0000${iteration}`;
+    if (e.event === "REVIEW_REQUESTED") {
+      pendingRequests.add(requestKey);
+      continue;
+    }
     const verdict = auditBlockField(e.block, "Verdict");
     if (verdict !== "READY" && verdict !== "NOT-READY") continue;
-    const unit = auditBlockField(e.block, "Unit") || undefined;
+    if (!pendingRequests.delete(requestKey)) continue;
     const recordedFingerprint = auditBlockField(e.block, "Artifact Fingerprint");
     const currentFingerprint = reviewArtifactFingerprint(projectDir, stage, unit);
     if (
@@ -3813,6 +3829,31 @@ export const AUTONOMY_MODE_FIELD = "Construction Autonomy Mode";
 
 export function isAutonomousMode(stateContent: string | null): boolean {
   return !!stateContent && getField(stateContent, AUTONOMY_MODE_FIELD)?.trim() === "autonomous";
+}
+
+// True only for the topology the engine can dispatch as an autonomous swarm.
+// A truthy `--unit` is not proof: the four inline Construction design stages
+// are also per-unit. Keep this predicate shared by receipt and budget guards so
+// scope/run review caps are bypassed only for a real Bolt-capable stage.
+export function isAutonomousSwarmStage(
+  projectDir: string,
+  stateContent: string | null,
+  stage: {
+    slug: string;
+    phase: string;
+    for_each?: string;
+    mode?: string;
+  },
+): boolean {
+  if (stage.phase !== "construction") return false;
+  if (stage.for_each !== "unit-of-work" || stage.mode !== "subagent") return false;
+  if (!isAutonomousMode(stateContent)) return false;
+  const scope = stateContent ? getField(stateContent, "Scope") : null;
+  if (!scope) return false;
+  const first = firstInScopeStageOfPhase("construction", scope);
+  if (first !== null && first.slug === stage.slug) return false;
+  const resolution = resolveBoltDag(projectDir);
+  return resolution.state === "ok" && resolution.units.length > 0;
 }
 
 // Deterministic off-switch for the human-presence gate (mirrors
@@ -4840,12 +4881,11 @@ export function loadStageGraphAll(): StageEntry[] {
   return parsed;
 }
 
-// Per-scope prose metadata read from each .claude/scopes/*.md frontmatter:
-// name/depth/keywords/description (+ optional testStrategy). Core scopes use
+// Per-scope metadata read from each .claude/scopes/*.md frontmatter: identity,
+// defaults, routing metadata, and the optional review cap. Core scopes use
 // aidlc-<name>.md; plugin scopes use <plugin>-<name>.md, with the frontmatter
-// name matching the filename stem.
-// This is the depth/keywords/description half of a ScopeDefinition; the
-// EXECUTE/SKIP `.stages` half comes from the compiled grid. Cached.
+// name matching the filename stem. The EXECUTE/SKIP `.stages` half of a
+// ScopeDefinition comes from the compiled grid. Cached.
 interface ScopeMetadata {
   name: string;
   plugin?: string;
@@ -4855,6 +4895,12 @@ interface ScopeMetadata {
   testStrategy?: string;
   runner?: boolean;
   skeleton: boolean;
+  /** Ceiling on how heavyweight stage reviews run under this scope:
+   *  "adversarial" (no cap - stages run as declared), "advisory" (adversarial
+   *  stages degrade to a single advisory pass), or "none" (no reviewer
+   *  dispatch at all). Absent = adversarial (no cap). Resolution lives in
+   *  resolveReviewClass. */
+  reviewCap?: "adversarial" | "advisory" | "none";
   /** When true, this scope is the enabled plugin's freeform/default fallback
    *  (plugin-only installs where the core `feature`/`poc` defaults are
    *  deselected). At most one enabled scope should set this. */
@@ -4953,10 +4999,71 @@ export function loadScopeMetadataAll(): Record<string, ScopeMetadata> {
       meta.skeleton = skeleton === "on";
     }
     if (scalarField(fm, "freeform_default") === "true") meta.freeformDefault = true;
+    const reviewCap = scalarField(fm, "review_cap");
+    if (reviewCap) {
+      if (
+        reviewCap !== "adversarial" &&
+        reviewCap !== "advisory" &&
+        reviewCap !== "none"
+      ) {
+        throw new Error(
+          `Scope file ${filePath} has invalid review_cap value "${reviewCap}". Expected "adversarial", "advisory", or "none".`
+        );
+      }
+      meta.reviewCap = reviewCap;
+    }
     out[name] = meta;
   }
   _scopeMetadataAll = out;
   return out;
+}
+
+// --- Review-class resolution (stage-protocol §12a) ---
+//
+// Three inputs, one effective class, resolved LOW-WINS along the same
+// precedence idea as the tier cap (aidlc-tiers.ts): the stage declares its
+// default, the scope may cap it, and a per-run override (state field
+// `Review Override`, written by `aidlc-utility config-change --review`)
+// beats both. Ordering: none < advisory < adversarial. A stage with no
+// reviewer is always "none" - no cap or override can conjure a reviewer.
+export const REVIEW_CLASSES = ["none", "advisory", "adversarial"] as const;
+export type ReviewClass = (typeof REVIEW_CLASSES)[number];
+
+const REVIEW_RANK: Record<ReviewClass, number> = {
+  none: 0,
+  advisory: 1,
+  adversarial: 2,
+};
+
+function asReviewClass(v: string | null | undefined): ReviewClass | null {
+  return v === "none" || v === "advisory" || v === "adversarial" ? v : null;
+}
+
+/** The effective review class for one stage run. `stageClass` is the compiled
+ *  node's review_class (undefined when the stage declares no reviewer -
+ *  resolves to "none"). `scope` names the active scope (its review_cap is
+ *  read from scope metadata; unknown scope or absent cap = no cap).
+ *  `stateContent` supplies the per-run `Review Override` field when present.
+ *  An override or cap can only LOWER the stage's declared class, never raise
+ *  it: min() everywhere, so `--review adversarial` on an advisory stage keeps
+ *  advisory, and neither can revive a reviewer the stage never declared. */
+export function resolveReviewClass(
+  stageClass: string | undefined,
+  scope: string,
+  stateContent?: string | null
+): ReviewClass {
+  const declared = asReviewClass(stageClass);
+  if (declared === null) return "none"; // no reviewer on the stage
+  let effective: ReviewClass = declared;
+  const cap = loadScopeMetadata()[scope]?.reviewCap;
+  if (cap && REVIEW_RANK[cap] < REVIEW_RANK[effective]) effective = cap;
+  const override = asReviewClass(
+    stateContent ? getField(stateContent, "Review Override") : null
+  );
+  if (override && REVIEW_RANK[override] < REVIEW_RANK[effective]) {
+    effective = override;
+  }
+  return effective;
 }
 
 export function loadScopeMetadata(): Record<string, ScopeMetadata> {
@@ -5647,6 +5754,7 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
     "summary_confirmation",
     "reviewer",
     "reviewer_max_iterations",
+    "review_class",
     "for_each",
     "workspace_requires",
     "produces",

@@ -111,7 +111,7 @@ Two drift guards keep the on-disk runner sets pinned to their sources: `aidlc-ru
 
 Scope is a file-authored primitive, the same muscle memory as authoring a sensor or an agent. There is **no `scope-mapping.json`** — it has been removed from the shipped tree. Scope identity and stage membership are split across two file-authored surfaces, transposed into a compiled grid:
 
-1. **Identity** lives in one file per scope at `dist/claude/.claude/scopes/aidlc-<name>.md` — frontmatter (`name`, `depth`, `keywords`, `description`, optional `runner`) plus prose describing the scope. The shipped set is `bugfix`, `enterprise`, `feature`, `infra`, `mvp`, `poc`, `refactor`, `security-patch`, `workshop`.
+1. **Identity** lives in one file per scope at `dist/claude/.claude/scopes/aidlc-<name>.md` — frontmatter (required `name` and `depth`, plus optional `keywords`, `description`, `testStrategy`, `review_cap`, and `runner`) plus prose describing the scope. The shipped set is `bugfix`, `enterprise`, `feature`, `infra`, `mvp`, `poc`, `refactor`, `security-patch`, `workshop`.
 2. **Membership** lives in each stage's `scopes:` frontmatter — the list of scopes for which that stage is EXECUTE.
 
 `bun .claude/tools/aidlc-graph.ts compile` (the same compile path that produces `stage-graph.json`) transposes these into the grid at `tools/data/scope-grid.json` — a `scope → {stages: {slug: EXECUTE|SKIP}}` map that the engine reads for all scope-level routing. The engine's `validScopes()` derives its canonical scope-name set from that compiled grid.
@@ -132,7 +132,7 @@ The referee is **stateless** — no iteration counter, no persisted progress —
 | `check <unit> --check-cmd <cmd> [--test-file <path>]` | Stateless single-unit verdict: run the project's own check command (exit 0 = green, the authoritative signal — a worker's self-claim is never trusted) plus an anti-tamper compare of the protected file against its forked-git baseline. Prints `{converged, tampered, reason}`; exits 0 iff genuinely converged. | None (advisory; informs the conductor's retry decision). |
 | `finalize --batch <n> --units <a,b,c> --claimed <a,b> --check-cmd <cmd> [--test-file <path>] [--reasons <unit>=<reason>,…]` | The authoritative gate: **re-run the check on every claimed unit** and, when the current stage declares a reviewer, require that unit's matching terminal receipt after its Bolt started. A claimed unit that is red, tampered, or unreviewed is refused before merge (the lying-conductor guard), then genuine passes merge back under the serial HOLD-MERGE lock. Exits 0 (batch converged and merged) or 2 (failure envelope). A converged unit whose merge-back failed lands in `merge_failures` and gets NO `SWARM_UNIT_CONVERGED` row until a finalize retry scoped to that unit merges it. | `SWARM_UNIT_CONVERGED` / `SWARM_UNIT_FAILED` / `SWARM_BATON_RETURNED` / `SWARM_COMPLETED`. |
 
-These six `SWARM_*` events are part of the 77-event audit taxonomy (see [State Machine](12-state-machine.md)). On an exit-2 envelope the conductor takes the baton back - failure always halts and re-engages the human regardless of autonomy mode.
+These six `SWARM_*` events are part of the 78-event audit taxonomy (see [State Machine](12-state-machine.md)). On an exit-2 envelope the conductor takes the baton back - failure always halts and re-engages the human regardless of autonomy mode.
 
 **The driver seam.** `AIDLC_USE_SWARM=1` selects an inline Dynamic Workflow driver (the conductor authors a `Workflow` whose JS owns the per-unit pipeline and the iteration cap); unset selects the subagent floor (N parallel `Task` calls in one message, one per unit). If `=1` but the Workflow tool is unavailable, the conductor **loud-degrades** to the floor and passes `--degraded-from ultracode` so the referee emits `SWARM_DEGRADED`. The runaway backstop is not a cap inside the tool - it is the harness's Stop-hook ceiling, which is 8 blocks on this autonomous-Construction path (§3).
 
@@ -144,6 +144,6 @@ These six `SWARM_*` events are part of the 77-event audit taxonomy (see [State M
 
 - **The conductor's own chapter** — the forwarding loop, the gate ritual, and the learnings ritual in full. See [Orchestrator](03-orchestrator.md).
 - **The execution-truth artefact the engine and swarm read** — `runtime-graph.json` and its `bolt_dag` node. See [Runtime Graph](13-runtime-graph.md).
-- **The transitions `report` commits** - the workflow / phase / stage machines and the 77-event audit taxonomy. See [State Machine](12-state-machine.md).
+- **The transitions `report` commits** - the workflow / phase / stage machines and the 78-event audit taxonomy. See [State Machine](12-state-machine.md).
 - **The deterministic spine** — the Stop hook and the other framework hooks and tools. See [Hooks and Tools](06-hooks-and-tools.md).
 - **Using the runners day to day** — the typeable `/aidlc-<stage>` and `/aidlc-<scope>` commands. See the User Guide's [Skills and Runner Commands](../guide/17-skills.md).

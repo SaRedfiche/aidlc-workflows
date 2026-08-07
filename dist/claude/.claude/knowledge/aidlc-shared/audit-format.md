@@ -13,7 +13,7 @@ commands a stage or conductor invokes directly.
 
 All event names follow `SUBJECT_PAST_VERB` — every event answers "what happened?"
 
-## Event Registry (77 events, 20 categories)
+## Event Registry (78 events, 20 categories)
 
 ### Workflow Lifecycle (4 events)
 
@@ -62,7 +62,7 @@ All event names follow `SUBJECT_PAST_VERB` — every event answers "what happene
 | `WORKSPACE_SCANNED` | Workspace detection done | Timestamp, Project type, Details | `tools/aidlc-utility.ts` handleInit |
 | `WORKSPACE_INITIALISED` | State file created | Timestamp, Details | `tools/aidlc-utility.ts` handleInit |
 
-### Navigation Events (6 events)
+### Navigation Events (7 events)
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
@@ -70,6 +70,7 @@ All event names follow `SUBJECT_PAST_VERB` — every event answers "what happene
 | `PLUGIN_SELECTION_CHANGED` | `select-plugins` changed enabled plugins | Timestamp, Previous Selection, New Selection | `tools/aidlc-utility.ts select-plugins` |
 | `DEPTH_CHANGED` | `--depth` changed depth level | Timestamp, Old depth, New depth | `tools/aidlc-utility.ts` |
 | `TEST_STRATEGY_CHANGED` | `--test-strategy` changed test strategy | Timestamp, Old strategy, New strategy | `tools/aidlc-utility.ts` |
+| `REVIEW_CLASS_CHANGED` | `--review` changed the per-run review override | Timestamp, Old Override, New Override | `tools/aidlc-utility.ts` |
 | `SCOPE_DETECTED` | Auto-detected from freeform text | Timestamp, Detected scope, Input text, Source, Matched keywords (optional; present when `Source=keyword`) | `tools/aidlc-utility.ts detect-scope` |
 | `RECOMPOSED` | The adaptive composer re-shaped a running workflow's pending stages (suffix flips via `recompose`) | Timestamp, Scope, Stages skipped, Stages added, Stages in Scope | `tools/aidlc-utility.ts recompose` |
 
@@ -82,8 +83,8 @@ All event names follow `SUBJECT_PAST_VERB` — every event answers "what happene
 | `GATE_REJECTED` | Human requested changes | Timestamp, Stage, Feedback, optional `Recovered=true` (backfilled by the approve-time revision backstop) | `tools/aidlc-state.ts reject`, `tools/aidlc-state.ts approve` (backstop backfill) |
 | `QUESTION_ANSWERED` | Non-gate question answered by user | Timestamp, Stage, Details | `tools/aidlc-log.ts answer` |
 | `SUMMARY_CONFIRMATION_RECORDED` | Consolidated-summary choice recorded after the matching prompt and a fresh human turn; reserved from the public audit CLI | Timestamp, Stage, Details, Checkpoint, Questions File, Questions SHA-256; optional Unit, Workflow | `tools/aidlc-log.ts answer --checkpoint summary-confirmation` |
-| `REVIEW_REQUESTED` | Conductor dispatches the §12a reviewer sub-agent | Timestamp, Stage, Reviewer, optional Unit (per-unit stages), optional Iteration | `tools/aidlc-log.ts review` |
-| `REVIEW_COMPLETED` | Reviewer verdict read; gates the approval of a reviewer-bearing stage | Timestamp, Stage, Reviewer, Verdict, Artifact Fingerprint (`sha256:<hex>` over declared artifact paths and bytes), optional Unit (per-unit stages), optional Iteration | `tools/aidlc-log.ts review --verdict` |
+| `REVIEW_REQUESTED` | Conductor dispatches the §12a reviewer sub-agent; reserved from the public audit CLI | Timestamp, Stage, Reviewer, Iteration, optional Unit (per-unit stages), optional Retry (`pending-request` recovery of an unmatched request) | `tools/aidlc-log.ts review` |
+| `REVIEW_COMPLETED` | Reviewer verdict read; gates the approval of a reviewer-bearing stage, must pair to the same request iteration, and is reserved from the public audit CLI | Timestamp, Stage, Reviewer, Iteration, Verdict, Artifact Fingerprint (`sha256:<hex>` over declared artifact paths and bytes), optional Unit (per-unit stages) | `tools/aidlc-log.ts review --verdict` |
 
 ### Artifact Events (3 events — hook-emitted)
 

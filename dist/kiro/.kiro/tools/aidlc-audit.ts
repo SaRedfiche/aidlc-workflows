@@ -90,6 +90,9 @@ const VALID_EVENT_TYPES = new Set([
   "PLUGIN_SELECTION_CHANGED",
   "DEPTH_CHANGED",
   "TEST_STRATEGY_CHANGED",
+  // Per-run review-class override changed (config-change --review). The
+  // effective class each stage runs at is resolved at directive emission.
+  "REVIEW_CLASS_CHANGED",
   // Adaptive composer: an in-flight plan re-shape (pending-stage suffix flips
   // via the recompose verb). Emitted by aidlc-utility.ts handleRecompose.
   "RECOMPOSED",
@@ -191,6 +194,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   PLUGIN_SELECTION_CHANGED: "Plugin Selection Change",
   DEPTH_CHANGED: "Depth Change",
   TEST_STRATEGY_CHANGED: "Test Strategy Change",
+  REVIEW_CLASS_CHANGED: "Review Class Change",
   RECOMPOSED: "Plan Recomposed",
   ERROR_LOGGED: "Error Logged",
   RECOVERY_COMPLETED: "Recovery Completed",
@@ -256,6 +260,8 @@ const CLI_RESERVED_EVENT_TYPES = new Set([
   "SUMMARY_CONFIRMATION_RECORDED",
   "ARTIFACT_CREATED",
   "ARTIFACT_UPDATED",
+  "REVIEW_REQUESTED",
+  "REVIEW_COMPLETED",
 ]);
 
 function refuseReservedCliEvent(eventType: string): void {
@@ -297,6 +303,13 @@ function validateAuditEntry(entry: AuditEntryInput): void {
     throw new Error(
       `Invalid event type: ${entry.eventType}. Must be one of: ${[...VALID_EVENT_TYPES].join(", ")}`
     );
+  }
+  for (const key of Object.keys(entry.fields)) {
+    if (key === "Event") {
+      throw new Error(
+        `Reserved field key: ${key}. The audit emitter owns this field.`
+      );
+    }
   }
 }
 
@@ -488,6 +501,14 @@ function handleAppendRaw(
   body: string,
   projectDir: string
 ): void {
+  const expandedBody = body.replace(/\\n/g, "\n");
+  for (const rawLine of expandedBody.split("\n")) {
+    const line = rawLine.startsWith("- ") ? rawLine.slice(2) : rawLine;
+    if (!line.startsWith("**Event**:")) continue;
+    const eventType = line.slice("**Event**:".length).trim();
+    refuseReservedCliEvent(eventType);
+  }
+
   const ts = isoTimestamp();
 
   if (!acquireAuditLock(projectDir)) {
@@ -498,8 +519,6 @@ function handleAppendRaw(
     const path = ensureAuditFile(projectDir);
 
     // Interpret literal \n sequences in the body as actual newlines
-    const expandedBody = body.replace(/\\n/g, "\n");
-
     let block = `\n## ${heading}\n`;
     block += `**Timestamp**: ${ts}\n`;
     block += `${expandedBody}\n`;

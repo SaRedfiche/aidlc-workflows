@@ -140,7 +140,60 @@ const VALID_TEST_STRATEGIES: Record<string, string> = {
   comprehensive: "Comprehensive",
 };
 
-const CONFIG_KEYS = ["depth", "test-strategy"] as const;
+const CONFIG_KEYS = ["depth", "test-strategy", "review"] as const;
+type ReviewOverride = "adversarial" | "advisory" | "none";
+
+function parseReviewOverride(raw: string | undefined): ReviewOverride | undefined {
+  if (!raw) return undefined;
+  const value = raw.toLowerCase();
+  if (value !== "adversarial" && value !== "advisory" && value !== "none") {
+    die(`Unknown review class: "${raw}". Valid: adversarial, advisory, none.`);
+  }
+  return value;
+}
+
+function storedReviewOverride(value: ReviewOverride): string {
+  // "adversarial" means no per-run ceiling; stage declarations and scope caps
+  // still apply, so represent it with the same empty field as config-change.
+  return value === "adversarial" ? "" : value;
+}
+
+function applyReviewOverride(
+  content: string,
+  value: ReviewOverride | undefined,
+): {
+  content: string;
+  oldReview: string | null;
+  storedReview: string | undefined;
+  changed: boolean;
+} {
+  const oldReview = getField(content, "Review Override");
+  if (value === undefined) {
+    return { content, oldReview, storedReview: undefined, changed: false };
+  }
+  const storedReview = storedReviewOverride(value);
+  const changed = storedReview !== (oldReview ?? "");
+  if (!changed) return { content, oldReview, storedReview, changed };
+  if (oldReview === null) {
+    const beforeInsert = content;
+    content = content.replace(
+      /^(- \*\*Test Strategy\*\*:[^\n]*)$/m,
+      "$1\n- **Review Override**:",
+    );
+    if (content === beforeInsert) {
+      content = content.replace(
+        /^(- \*\*Scope\*\*:[^\n]*)$/m,
+        "$1\n- **Review Override**:",
+      );
+    }
+    if (content === beforeInsert) {
+      content = `${content.trimEnd()}\n- **Review Override**:\n`;
+    }
+  }
+  content = setField(content, "Review Override", storedReview);
+  return { content, oldReview, storedReview, changed };
+}
+
 // These workspace transactions can legitimately queue behind a full plugin
 // compose (compile + runner regeneration), so they share its ~60s lock budget.
 const WORKSPACE_MUTATION_LOCK_RETRIES = 600;
@@ -215,8 +268,8 @@ Utilities:
   space list        List spaces (read-only; --json for structured output)
   space switch <name>  Switch the active space (bare space <name> still works)
   space create <name>  Create a new space (space-create <name> still works)
-  config get <key>  Show active workflow config (depth, test-strategy)
-  config set <key> <value>  Change active workflow config (depth, test-strategy)
+  config get <key>  Show active workflow config (depth, test-strategy, review)
+  config set <key> <value>  Change active workflow config (depth, test-strategy, review)
   config list       List active workflow config (--json for structured output)
   plugin select [names]  Show or set the enabled plugin list
   plugin list       List installed plugins and enabled state (--json for structured output)
@@ -228,6 +281,7 @@ Utilities:
   --scope <scope>   Set or change scope (standalone or with --stage/--phase)
   --depth <level>   Override depth (minimal, standard, comprehensive)
   --test-strategy <level>  Override test strategy (minimal, standard, comprehensive)
+  --review <class>  Cap stage reviews for this run (adversarial, advisory, none)
   --version         Show the framework version
   --help            Show this help message
 
@@ -239,14 +293,15 @@ Examples:
   /aidlc feature                                Start a feature workflow
   /aidlc Fix the login timeout bug              Auto-detected as bugfix scope
   /aidlc compose "harden the deploy pipeline"   Composer proposes a tailored plan
-  /aidlc config list                         Show depth and test strategy
+  /aidlc config list                         Show depth, test strategy, and review override
   /aidlc plugin list                         Show installed plugin selection
   /aidlc                                        Resume or begin
   /aidlc --stage code-generation                Jump to code-generation stage
   /aidlc --phase construction --scope bugfix    Jump to construction with bugfix scope
   /aidlc --scope bugfix --depth comprehensive  Bugfix with comprehensive depth
   /aidlc --depth minimal                       Change depth of active workflow
-  /aidlc --depth standard --test-strategy minimal  Full artifacts, minimal tests`;
+  /aidlc --depth standard --test-strategy minimal  Full artifacts, minimal tests
+  /aidlc --review advisory                     Single-pass reviews, findings at the gate`;
 
 /** Exported for t67 unit tests. */
 export function renderHelpText(): string {
@@ -3541,6 +3596,7 @@ function handleIntentBirth(projectDir: string, flags: Record<string, string>): v
   if (testStrategyOverride && !VALID_TEST_STRATEGIES[testStrategyOverride.toLowerCase()]) {
     die(`Unknown test strategy: "${testStrategyOverride}". Valid: minimal, standard, comprehensive.`);
   }
+  const reviewOverride = parseReviewOverride(flags.review);
 
   // Resolve the repo set the intent touches (P7 multi-repo): an explicit
   // `--repos a,b` wins; absent it, sibling auto-discovery scans the workspace
@@ -3572,6 +3628,14 @@ function handleIntentBirth(projectDir: string, flags: Record<string, string>): v
     const migration = migrateFlatLayout(projectDir);
     if (migration) {
       gitRmFlatTree(projectDir, migration.movedFrom);
+      const migratedState = readStateFile(projectDir);
+      const reviewUpdate = applyReviewOverride(
+        migratedState,
+        reviewOverride,
+      );
+      if (reviewUpdate.changed) {
+        writeStateFile(projectDir, reviewUpdate.content);
+      }
       // The migrated record carries its prior state + audit history. Record that
       // the workspace was migrated into this intent (lands in the migrated
       // intent's audit shard — the cursor points there now). No state rebuild.
@@ -3579,7 +3643,20 @@ function handleIntentBirth(projectDir: string, flags: Record<string, string>): v
         Request: `/aidlc ${flags.arguments || scope}`,
         Scope: scope,
         Details: `Migrated flat aidlc-docs/ into ${migration.intentDirName}`,
+        ...(reviewOverride !== undefined
+          ? {
+              "Review Override":
+                reviewUpdate.storedReview || "adversarial (stage defaults)",
+            }
+          : {}),
       });
+      if (reviewUpdate.changed) {
+        appendAuditEvent(projectDir, "REVIEW_CLASS_CHANGED", {
+          "Old Override": reviewUpdate.oldReview || "none set",
+          "New Override":
+            reviewUpdate.storedReview || "cleared (stage defaults apply)",
+        });
+      }
       process.stdout.write(
         `Migrated flat workspace into intent: ${migration.intentDirName} (space: ${DEFAULT_SPACE})\n`,
       );
@@ -3631,6 +3708,12 @@ function handleIntentBirth(projectDir: string, flags: Record<string, string>): v
     appendAuditEvent(projectDir, "WORKFLOW_STARTED", {
       Scope: scope,
       Request: `/aidlc ${flags.arguments || scope}`,
+      ...(reviewOverride !== undefined
+        ? {
+            "Review Override":
+              storedReviewOverride(reviewOverride) || "adversarial (stage defaults)",
+          }
+        : {}),
       // Record the intent's repo span at birth (P7). Omitted when no repos were
       // captured (legacy single-repo / fresh greenfield → the lone repo is inferred).
       ...(repos.length > 0 ? { Repos: repos.join(", ") } : {}),
@@ -3685,7 +3768,7 @@ function handleIntentBirth(projectDir: string, flags: Record<string, string>): v
       Details: "Per-intent artifact dirs + space-level knowledge/ ensured",
     });
 
-    handleIntentBirthStateBuild(projectDir, flags, scope, ts);
+    handleIntentBirthStateBuild(projectDir, flags, scope, ts, reviewOverride);
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
 
@@ -3698,6 +3781,7 @@ function handleIntentBirthStateBuild(
   flags: Record<string, string>,
   scope: string,
   ts: string,
+  reviewOverride: ReviewOverride | undefined,
 ): void {
   const depthOverride = flags.depth;
   const testStrategyOverride = flags["test-strategy"];
@@ -3889,6 +3973,7 @@ function handleIntentBirthStateBuild(
 - **Stages to Skip**: ${skipStages.length > 0 ? skipStages.join(", ") : "none"}
 - **Depth**: ${effectiveDepth}
 - **Test Strategy**: ${effectiveTestStrategy}
+- **Review Override**: ${reviewOverride === undefined ? "" : storedReviewOverride(reviewOverride)}
 
 ## Workspace State
 - **Project Root**: ${projectDir}
@@ -4538,6 +4623,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
   if (testStrategyOverride && !VALID_TEST_STRATEGIES[testStrategyOverride.toLowerCase()]) {
     die(`Unknown test strategy: "${testStrategyOverride}". Valid: minimal, standard, comprehensive.`);
   }
+  const reviewOverride = parseReviewOverride(flags.review);
 
   const sp = stateFilePath(projectDir, flags.intent, flags.space);
   if (!existsSync(sp)) die("No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").");
@@ -4569,6 +4655,10 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
   if (!oldScope) die("Cannot read current Scope from state file.");
 
   if (oldScope === newScope) {
+    if (depthOverride || testStrategyOverride || reviewOverride !== undefined) {
+      handleConfigChange(projectDir, flags);
+      return;
+    }
     process.stdout.write(`Scope is already ${newScope}\n`);
     return;
   }
@@ -4660,6 +4750,8 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     ? VALID_TEST_STRATEGIES[testStrategyOverride.toLowerCase()]
     : (newScopeDef.testStrategy ?? effectiveDepth);
   content = setField(content, "Test Strategy", effectiveTestStrategy);
+  const reviewUpdate = applyReviewOverride(content, reviewOverride);
+  content = reviewUpdate.content;
   content = setField(content, "Total Stages", String(executeStages.length));
 
   // Recount completed based on actual [x] count of in-scope EXECUTE stages
@@ -4715,13 +4807,22 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     "Approval Gates": String(gates),
     Depth: effectiveDepth,
   });
+  if (reviewUpdate.changed) {
+    appendAuditEvent(projectDir, "REVIEW_CLASS_CHANGED", {
+      "Old Override": reviewUpdate.oldReview || "none set",
+      "New Override":
+        reviewUpdate.storedReview || "cleared (stage defaults apply)",
+    });
+  }
 
   process.stdout.write(
     `Scope changed: ${oldScope} → ${newScope}
 Stages in scope: ${executeStages.length} (${deltaStr})
 Approval gates: ${gates}
 Depth: ${effectiveDepth}
-Completed: ${completedCount}/${executeStages.length}
+${reviewOverride === undefined
+      ? ""
+      : `Review override: ${reviewUpdate.storedReview || "adversarial (stage defaults)"}\n`}Completed: ${completedCount}/${executeStages.length}
 `
   );
 }
@@ -4980,13 +5081,14 @@ function handleRecompose(projectDir: string, flags: Record<string, string>): voi
 // config get/list/set - read or update active workflow config
 // ---------------------------------------------------------------------------
 
-function configFieldForKey(key: string): "Depth" | "Test Strategy" | null {
+function configFieldForKey(key: string): "Depth" | "Test Strategy" | "Review Override" | null {
   if (key === "depth") return "Depth";
   if (key === "test-strategy") return "Test Strategy";
+  if (key === "review") return "Review Override";
   return null;
 }
 
-function readConfigField(projectDir: string, flags: Record<string, string>, field: "Depth" | "Test Strategy"): string {
+function readConfigField(projectDir: string, flags: Record<string, string>, field: "Depth" | "Test Strategy" | "Review Override"): string {
   const sp = stateFilePath(projectDir, flags.intent, flags.space);
   if (!existsSync(sp)) die(NO_STATE_FILE_MESSAGE);
   const content = readStateFile(projectDir, flags.intent, flags.space);
@@ -5003,19 +5105,21 @@ function handleConfigGet(projectDir: string, positional: string[], flags: Record
 function handleConfigList(projectDir: string, flags: Record<string, string>): void {
   const depth = readConfigField(projectDir, flags, "Depth");
   const testStrategy = readConfigField(projectDir, flags, "Test Strategy");
+  const review = readConfigField(projectDir, flags, "Review Override");
   if (flags.json === "true") {
-    process.stdout.write(`${JSON.stringify({ depth, "test-strategy": testStrategy })}\n`);
+    process.stdout.write(`${JSON.stringify({ depth, "test-strategy": testStrategy, review })}\n`);
     return;
   }
-  process.stdout.write(`depth: ${depth}\ntest-strategy: ${testStrategy}\n`);
+  process.stdout.write(`depth: ${depth}\ntest-strategy: ${testStrategy}\nreview: ${review}\n`);
 }
 
 function handleConfigChange(projectDir: string, flags: Record<string, string>): void {
   const rawDepth = flags.depth;
   const rawStrategy = flags["test-strategy"];
+  const rawReview = flags.review;
 
-  if (!rawDepth && !rawStrategy) {
-    die("config-change requires --depth and/or --test-strategy");
+  if (!rawDepth && !rawStrategy && !rawReview) {
+    die("config-change requires --depth, --test-strategy, and/or --review");
   }
 
   let newDepth: string | undefined;
@@ -5029,6 +5133,10 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
     newStrategy = VALID_TEST_STRATEGIES[rawStrategy.toLowerCase()];
     if (!newStrategy) die(`Unknown test strategy: "${rawStrategy}". Valid: minimal, standard, comprehensive.`);
   }
+
+  // --review sets the per-run Review Override (a CEILING on the effective
+  // review class, low-wins against stage declaration and scope review_cap).
+  const newReview = parseReviewOverride(rawReview);
 
   const sp = stateFilePath(projectDir, flags.intent, flags.space);
   if (!existsSync(sp)) die(NO_STATE_FILE_MESSAGE);
@@ -5045,10 +5153,14 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
   if (newStrategy !== undefined && newStrategy !== oldStrategy) {
     content = setField(content, "Test Strategy", newStrategy);
   }
+  const reviewUpdate = applyReviewOverride(content, newReview);
+  content = reviewUpdate.content;
+  const { oldReview, storedReview } = reviewUpdate;
   const depthChanging = newDepth !== undefined && newDepth !== oldDepth;
   const strategyChanging =
     newStrategy !== undefined && newStrategy !== oldStrategy;
-  if (depthChanging || strategyChanging) {
+  const reviewChanging = reviewUpdate.changed;
+  if (depthChanging || strategyChanging || reviewChanging) {
     content = setField(content, "Last Updated", isoTimestamp());
     writeStateFile(projectDir, content, flags.intent, flags.space);
   }
@@ -5065,6 +5177,12 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
       "New Strategy": newStrategy,
     });
   }
+  if (reviewChanging) {
+    appendAuditEvent(projectDir, "REVIEW_CLASS_CHANGED", {
+      "Old Override": oldReview || "none set",
+      "New Override": storedReview || "cleared (stage defaults apply)",
+    });
+  }
 
   if (newDepth !== undefined) {
     process.stdout.write(
@@ -5078,6 +5196,14 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
       strategyChanging
         ? `Test strategy changed: ${oldStrategy} → ${newStrategy}\n`
         : `Test strategy is already ${newStrategy}\n`
+    );
+  }
+  if (newReview !== undefined) {
+    const display = storedReview === "" ? "adversarial (stage defaults)" : storedReview;
+    process.stdout.write(
+      reviewChanging
+        ? `Review override changed: ${oldReview || "none"} → ${display}\n`
+        : `Review override is already ${display}\n`
     );
   }
 }
@@ -5546,7 +5672,7 @@ export async function main(argv: string[]): Promise<void> {
     process.stdout.write(
       "Usage: aidlc-utility intent-birth --scope <scope> " +
         '[--arguments "<description>"] [--label "<short label>"] ' +
-        "[--depth <level>] [--test-strategy <level>] [--repos <name,...>] " +
+        "[--depth <level>] [--test-strategy <level>] [--review <class>] [--repos <name,...>] " +
         "[--project-dir <path>]\n",
     );
     return;

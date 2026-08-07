@@ -116,6 +116,14 @@ export interface RunStageDirective {
   // reviewer_max_iterations — how many review cycles before escalating to the
   // human. Default 2 when reviewer is present. Absent when no reviewer.
   reviewer_max_iterations?: number;
+  // review_class — how the §12a review runs, RESOLVED by the engine (stage
+  // declaration lowered by the scope's review_cap and any per-run Review
+  // Override): "adversarial" = refute + fix loop up to the cap; "advisory" =
+  // one pass, findings quoted verbatim at the approval gate, no fix loop
+  // (reviewer_max_iterations is 1). A "none" resolution never reaches the
+  // conductor - the engine omits the whole reviewer block instead. Absent
+  // when reviewer is absent.
+  review_class?: "adversarial" | "advisory";
   // conductor_persona — set ONLY on the first run-stage of a workflow (decision
   // D-E, SPIKE 6). The engine reads `.claude/aidlc-common/conductor.md` and bakes
   // its contents here so the conductor receives its execution-quality charter
@@ -196,6 +204,11 @@ export interface InvokeSwarmDirective {
   stage_file?: string;
   reviewer?: string;
   reviewer_max_iterations?: number;
+  // review_class — the stage's DECLARED class, carried for observability.
+  // Swarm reviews are exempt from scope caps and run overrides (the reviewer
+  // is the only pre-merge verification inside a Bolt), so unlike run-stage
+  // this is not a resolved value.
+  review_class?: "adversarial" | "advisory";
   // repo — OPTIONAL. The sibling repo NAME this batch targets, present only when
   // the engine can resolve it deterministically: the intent records exactly one
   // repo (the lone sibling). Absent for a legacy/single-projectDir intent (no
@@ -295,6 +308,7 @@ export const VALID_KINDS = [
 // aidlc-stage-schema.ts VALID_MODES (the directive's mode is read straight off
 // the stage node, so the value set is identical).
 export const VALID_MODES = ["inline", "subagent", "pipeline", "mob", "agent-team"] as const;
+export const VALID_REVIEW_CLASSES = ["adversarial", "advisory"] as const;
 
 // Per-kind allowed-key sets. A field outside its kind's set is rejected as an
 // unknown key (mirrors aidlc-stage-schema.ts KNOWN_FIELDS). `kind` is always
@@ -319,6 +333,7 @@ const RUN_STAGE_FIELDS = [
   "stage_file",
   "reviewer",
   "reviewer_max_iterations",
+  "review_class",
   "conductor_persona",
   "next_stage",
   "unit",
@@ -349,6 +364,7 @@ const INVOKE_SWARM_FIELDS = [
   "stage_file",
   "reviewer",
   "reviewer_max_iterations",
+  "review_class",
   "repo",
 ] as const;
 const PRESENT_GATE_FIELDS = ["kind", "stage", "phase", "memory_path"] as const;
@@ -446,6 +462,11 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkOptionalString(o, "stage_file", kind, errors);
       checkOptionalString(o, "reviewer", kind, errors);
       checkOptionalPositiveInteger(o, "reviewer_max_iterations", kind, errors);
+      checkOptionalString(o, "review_class", kind, errors);
+      checkEnum(o, "review_class", VALID_REVIEW_CLASSES, kind, errors);
+      if ("review_class" in o && typeof o.reviewer !== "string") {
+        errors.push(`${kind}: review_class requires reviewer`);
+      }
       checkOptionalString(o, "repo", kind, errors);
       break;
     case "present-gate":
@@ -521,6 +542,11 @@ function checkRunStageShared(
   // an optional string, reviewer_max_iterations an optional positive integer.
   checkOptionalString(o, "reviewer", kind, errors);
   checkOptionalPositiveInteger(o, "reviewer_max_iterations", kind, errors);
+  checkOptionalString(o, "review_class", kind, errors);
+  checkEnum(o, "review_class", VALID_REVIEW_CLASSES, kind, errors);
+  if ("review_class" in o && typeof o.reviewer !== "string") {
+    errors.push(`${kind}: review_class requires reviewer`);
+  }
   // unit: optional on a run-stage directive (present only on a per-unit
   // Construction directive resolved to a concrete Unit of Work). A present
   // value must be a string; absent is valid.
