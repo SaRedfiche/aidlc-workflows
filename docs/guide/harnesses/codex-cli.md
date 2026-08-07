@@ -16,6 +16,9 @@ never hand-edit it (the drift guard fails CI).
   `/aidlc --doctor` enforces the pin. Check with `codex --version`.
 - **bun** for the copy channel; its tools and hooks run through Bun. The
   native channel is self-contained.
+- **A Git repository for the target project** — Codex discovers project
+  `.codex/hooks.json` only inside one. The native installer and AI-DLC runtime
+  themselves do not depend on Git.
 - **A model provider** — the shipped `config.toml` defaults to **Amazon
   Bedrock** (`openai.gpt-5.5`; agents on `openai.gpt-5.4`). Set the AWS
   profile/region in `[model_providers.amazon-bedrock.aws]`. For OpenAI auth,
@@ -24,7 +27,45 @@ never hand-edit it (the drift guard fails CI).
 
 ## Install
 
-### Copy channel
+### Native channel (recommended)
+
+```bash
+curl -fsSL https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh \
+  | bash -s -- --harness codex
+cd your-project
+aidlc init
+aidlc doctor
+codex
+```
+
+The installer verifies the release metadata, executable, and Codex data against
+the published SHA-256 checksums. The installed AI-DLC runtime does not require
+Bun, Node.js, or Git. This scripted example uses the literal `--harness` flag
+because automation requires it. An interactive run without the flag opens a
+controlling-terminal picker, including when the Unix script is piped.
+
+On Windows, download `install.ps1` and run
+`& $installer --harness codex`. An interactive run may omit the flag;
+redirected input, `pwsh -NonInteractive`, `--yes`, `--json`, and `--quiet`
+require it. For an air-gapped package, use
+`install.sh --from <release-directory> --offline --harness codex` on Unix or
+`& $installer -From <release-directory> -Offline --harness codex` on Windows.
+
+`aidlc init` projects the Codex shell, merges the AI-DLC blocks in `.gitignore`
+and `AGENTS.md`, and writes `.codex/config.toml`, hooks, permission rules, and
+the matching `.codex/trust-seed.toml`. Codex requires one project-specific hook
+trust action before those hooks run:
+
+- Start `codex` and choose **Trust all and continue** at the hooks dialog; or
+- Replace `<PROJECT_DIR>` in `.codex/trust-seed.toml` with the absolute project
+  path and merge its complete `[hooks.state]` set into
+  `$CODEX_HOME/config.toml`. Replace an existing set for that hooks path rather
+  than appending duplicate TOML tables.
+
+Merge the generated `.codex/config.toml` settings into your user config as
+needed. Then run `$aidlc --doctor` in Codex.
+
+### Source/development copy alternative
 
 The copies below come from a clone of the
 [aidlc-workflows](https://github.com/awslabs/aidlc-workflows) repository on the
@@ -101,29 +142,28 @@ git checkout v2
    bun .codex/tools/aidlc-utility.ts doctor
    ```
 
-### Native channel
+This source/development channel requires Git and Bun. It does not use
+`aidlc init`; the copied tree already contains the project shell. Its
+source-checkout trust generator is specific to Bun-shaped hook commands and is
+not used by the native channel.
+
+## Refresh and version skew
+
+`aidlc upgrade` updates the machine runtime but does not rewrite projects.
+`aidlc doctor` compares the project runtime stamp with the selected engine.
+Between workflows, preview and apply the project refresh:
 
 ```bash
-curl -fsSL https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh \
-  | sh -s -- --harness codex
-cd your-project
+aidlc init --dry-run
 aidlc init
-aidlc doctor
-codex
 ```
 
-This channel verifies release checksums and does not require Bun or Node.js.
-The release projection wires hooks through `aidlc adapter codex ...` and
-ships a `trust-seed.toml` template with matching hashes. Either choose
-**Trust all and continue** in the first Codex session, or replace
-`<PROJECT_DIR>` in that template and merge its complete `[hooks.state]` set
-into `$CODEX_HOME/config.toml`; the source-checkout trust generator used by
-copy installs is not required. Merge the generated `.codex/config.toml`
-settings into your user config as needed. For an air-gapped install, use
-`install.sh --from <release-directory> --offline --harness codex`.
-On Windows, download the matching release `install.ps1` and run
-`install.ps1 --harness codex`; use `-From <release-directory> -Offline` for the
-same flat air-gapped package.
+Init preserves user-owned content and reports local framework edits as
+conflicts. It refuses refresh while any workflow is active; complete the
+workflow first. Upgrade and rollback remain safe during a workflow because
+they do not touch project files. A refresh can change Codex hook identities, so
+approve the new trust dialog or replace the matching trust-seed entries after
+init when Codex requests it.
 
 ## Use
 

@@ -22,7 +22,43 @@ configs, hook wiring, activation) differs.
 
 ## Install
 
-### Copy channel
+### Native channel (recommended)
+
+```bash
+curl -fsSL https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh \
+  | bash -s -- --harness kiro
+cd your-project
+aidlc init
+aidlc doctor
+```
+
+The installer verifies the release metadata, executable, and Kiro data against
+the published SHA-256 checksums. The installed runtime does not require Bun,
+Node.js, or Git. This scripted example uses the literal `--harness` flag because
+automation requires it. In an interactive terminal, running the installer
+without arguments opens a harness picker that reads from `/dev/tty`, even when
+the script is piped.
+
+On Windows, download `install.ps1` and run
+`& $installer --harness kiro`. An interactive run may omit the flag and use the
+picker; redirected input, `pwsh -NonInteractive`, `--yes`, `--json`, and
+`--quiet` require it. For an air-gapped package, use
+`install.sh --from <release-directory> --offline --harness kiro` on Unix or
+`& $installer -From <release-directory> -Offline --harness kiro` on Windows.
+
+`aidlc init` projects the Kiro shell before the first chat session. Then start
+Kiro from the project root:
+
+```bash
+kiro-cli chat
+```
+
+The native projection allows `aidlc *` engine commands. It also ships
+`.kiro/settings/cli.json` with `chat.defaultAgent: "aidlc"`, so `/aidlc` is
+active without an agent flag. Run `/aidlc --doctor` in chat before the first
+workflow.
+
+### Source/development copy alternative
 
 The copies below come from a clone of the
 [aidlc-workflows](https://github.com/awslabs/aidlc-workflows) repository on the
@@ -46,29 +82,8 @@ The `aidlc/` directory is the workspace shell — it ships the pre-built
 of `.kiro/`, so copy it separately (or copy the whole `dist/kiro/` tree at once).
 `/aidlc --doctor` fails its "workspace shell ready" check if it is missing.
 
-### Native channel
-
-```bash
-curl -fsSL https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh \
-  | sh -s -- --harness kiro
-cd your-project
-aidlc init
-aidlc doctor
-```
-
-This channel verifies release checksums and does not require Bun, Node.js, or
-git for AI-DLC itself. `aidlc init` projects the Kiro shell before the first
-chat session. Use `--from <release-directory> --offline` with the installer
-for an air-gapped package.
-On Windows, download the matching release `install.ps1` and run
-`install.ps1 --harness kiro`; `-From <release-directory> -Offline` consumes the
-same flat package.
-
-Then start a session in your project:
-
-```bash
-cd your-project && kiro-cli chat
-```
+This source/development channel requires Git and Bun. It does not use
+`aidlc init`; the copied tree already contains the workspace shell.
 
 The install ships `.kiro/settings/cli.json` with `chat.defaultAgent: "aidlc"`,
 so the AI-DLC conductor agent is active by default — `/aidlc` just works.
@@ -89,6 +104,22 @@ per session with `/effort <level>` in chat or `kiro-cli chat --effort
 <level>` (low|medium|high|xhigh|max) — a session flag and your user-level
 `~/.kiro/settings/cli.json` both take precedence over the workspace default.
 
+## Refresh and version skew
+
+`aidlc upgrade` updates the machine runtime but leaves project files unchanged.
+`aidlc doctor` reports a project stamp that differs from the selected engine.
+Between workflows, preview and apply the refresh with:
+
+```bash
+aidlc init --dry-run
+aidlc init
+```
+
+Init preserves user-owned content and reports local framework edits as
+conflicts. It refuses refresh while any workflow is active; complete the
+workflow first. Upgrade and rollback remain safe during a workflow because
+they do not modify the project.
+
 ## Usage
 
 Start `kiro-cli chat` in the project, then invoke the conductor with
@@ -98,15 +129,10 @@ navigation uses `/aidlc intent [name]`, `/aidlc space [name]`, and
 `/aidlc space-create <name>`. The per-stage (`/aidlc-application-design`) and
 per-scope (`/aidlc-feature`) runner skills are installed too.
 
-**Start the session from the project root.** The conductor's engine calls are
-pre-approved as project-relative `bun .kiro/tools/<tool>.ts` commands, so a
-session whose working directory is elsewhere pushes the conductor toward
-command forms that need approval. Absolute paths, `KIRO_PROJECT_DIR` expansion,
-and `cd <dir> && bun .kiro/tools/...` chains deliberately remain gated. A path
-only has to be shaped like a tool path to match a pattern, not be trustworthy:
-pre-approving any `/.../.kiro/tools/*.ts` would also pre-approve a file planted
-in a world-writable directory, and neither a variable's value nor a chained
-working directory is knowable from the pattern.
+**Start the session from the project root.** Native installs pre-approve the
+installed `aidlc` command. Source/development copies pre-approve only
+project-relative `bun .kiro/tools/<tool>.ts` commands; absolute paths,
+`KIRO_PROJECT_DIR` expansion, and command chains remain gated.
 
 **Sessions with no approver stall rather than prompt.** Anything outside the
 pre-approved set needs an interactive answer. Under `kiro-cli chat
@@ -134,7 +160,8 @@ inside a disposable sandbox where blanket shell access is acceptable.
 Everything else — state machine, audit trail, artifacts under the intent
 record dirs (`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`), the learnings
 ritual, sensors, scopes, depth/test-strategy — behaves identically, because it
-IS identical: the same tools run from `.kiro/tools/`.
+IS identical: native installs dispatch through `aidlc`, while source copies run
+the corresponding tools from `.kiro/tools/`.
 
 A project's `aidlc/` workspace is harness-neutral. Moving a project between
 harnesses (or running both side by side) is supported-but-untested; `/aidlc

@@ -28,7 +28,7 @@ bun install --frozen-lockfile
 ```
 core/                # Hand-authored, harness-neutral source (tools, stages, agents, rules, knowledge, hooks)
 harness/<name>/      # Per-harness authored surfaces; claude/, kiro/, kiro-ide/, codex/, opencode/
-scripts/package.ts   # The build: regenerates dist/<harness>/ from core/ + harness/ (`--check` drift-guards it)
+scripts/package.ts   # The build: regenerates dist/ + dist-release/ from core/ + harness/ (`--check` guards both)
 scripts/build-binaries.ts # Release-only compiled CLI artifacts in ignored build/binaries/ after package --check
 scripts/package-release.ts # Release data archives, manifest, checksums, and installer
 dist/<harness>/      # GENERATED: dist/claude/, dist/kiro/, dist/kiro-ide/, dist/codex/, dist/opencode/ — never hand-edit
@@ -44,12 +44,12 @@ For the full architecture, see [reference/01-architecture.md](01-architecture.md
 
 ## Development Workflow
 
-1. **Fork and branch** from `main`, then run `bun install --frozen-lockfile`
+1. **Fork and branch** from `v2` (the integration branch and PR target), then run `bun install --frozen-lockfile`
 2. **Read the architecture** -- [reference/01-architecture.md](01-architecture.md) explains the execution model, agent delegation, and hook system
 3. **Understand the entry points** -- the deterministic engine `core/tools/aidlc-orchestrate.ts` (with exactly four subcommands: `next`, `continue`, `report`, and `park`; `continue` is internal steering transport) owns routing; the conductor `harness/claude/skills/aidlc/SKILL.md` is a thin forwarding loop that acts on its directives. For the normative engine / directive / conductor / swarm contract see [The Skill System](17-skill-system.md)
-4. **Make changes** -- Edit the harness-neutral source in `core/` (tools, stages, agents, hooks, rules, knowledge) or a harness surface in `harness/<name>/` (the orchestrator skill, settings). Then run `bun scripts/package.ts` to regenerate `dist/` — never hand-edit `dist/`, the drift guard (`package.ts --check`) will fail CI
+4. **Make changes** -- Edit the harness-neutral source in `core/` (tools, stages, agents, hooks, rules, knowledge) or a harness surface in `harness/<name>/` (the orchestrator skill, settings). Then run `bun scripts/package.ts` to regenerate both `dist/` and `dist-release/` — never hand-edit either generated root, because `package.ts --check` independently rebuilds and compares both
 5. **Test** -- Run `bun tests/run-tests.ts` before submitting
-6. **Submit** -- Open a PR against `main`
+6. **Submit** -- Open a PR against `v2`
 
 Release binary artifacts are not part of `dist/` and are not produced by the
 packager. After `bun scripts/package.ts --check` is clean, run
@@ -70,8 +70,21 @@ must target an installed project harness. Any failed gate fails the build.
 
 After the target binaries are present, `bun scripts/package-release.ts`
 packages the committed `dist-release/` projections into per-harness archives
-and emits `version.json`, `checksums.txt`, `install.sh`, and `install.ps1`. The generated flat
-directory is the contract consumed by the installer and `aidlc package`.
+and emits `version.json`, `checksums.txt`, `install.sh`, and `install.ps1`. The
+per-target `runtime/` directories are smoke-gate staging; release data archives
+are rebuilt from the committed native projections, not copied from those
+sidecars. `--require-release-matrix` requires all seven targets and a matching
+verification record for each binary. The generated flat directory is the
+contract consumed by the installer and `aidlc package`.
+
+The tag-triggered release workflow is deliberately candidate-preserving:
+verification and installer lint run first; target-native jobs produce binaries
+and evidence; `package-release.ts` runs once to create `release-candidate`;
+Unix/Windows lifecycle jobs consume that artifact; and the publish job downloads
+the same candidate, checks tag/version parity, runs `sha256sum -c`, publishes,
+and creates GitHub build-provenance attestations. Never rebuild or repackage in
+the publish job, because that would attest bytes the lifecycle jobs did not
+exercise.
 
 ## Testing
 
@@ -100,6 +113,44 @@ bash tests/run-tests.sh --e2e          # Workflow, worktree, and terminal journe
 ```
 
 For the full test strategy, stubs, and how to add new tests, see [reference/09-testing.md](09-testing.md).
+
+## Changing Dispatcher Routes
+
+`core/tools/aidlc.ts` is the registry for public, hidden, and host-only command
+routes. A new route must declare all policy dimensions rather than inheriting
+behavior accidentally:
+
+1. Set `projectRequirement`, `outputModes`, `visibility`, `networkPolicy`, and
+   `mutationScope`.
+2. Choose `pinPolicy` deliberately: `active` for machine lifecycle/management,
+   `inspect` for active-binary diagnosis and repair, or `pinned` for project
+   engine behavior.
+3. Map the route to an existing tool or add the tool to `TOOLS`; hooks,
+   statusline, adapters, and low-level delegates use route-only entries rather
+   than public aliases.
+4. Add route and policy assertions to
+   `tests/unit/t230-dispatcher-routes.test.ts`, including global-flag ordering
+   and compiled/dev parity when applicable.
+5. If authored prose invokes the command, use `{{INVOKE}}` or
+   `{{TOOL_PREFIX}}` so copy and native projections stay distinct. Regenerate
+   both channels and run the package drift guard.
+
+## Adding an Install-Mechanism Mutation
+
+Project and machine mutations in init, lifecycle, pinning, and plugin management
+must use `core/tools/aidlc-transaction.ts`. Build a `TransactionPlan` from
+root-relative, non-overlapping operations; include `expected` destination state
+and source hashes for copy/tree operations. Put semantic checks in
+`validateCandidates` or `validateCommitted`, not after a successful transaction
+returns. A committed validator failure is part of the transaction and therefore
+rolls back.
+
+Add fault-injection coverage before shipping: fail before/after staging,
+snapshot, commit, and committed validation as appropriate; assert every prior
+byte and mode is restored, the lock is released, and incomplete rollback leaves
+named recovery evidence. `t243-install-mechanism.test.ts` is the engine pattern;
+`t224-plugin-selection.test.ts` and `t242-plugin-state.test.ts` are project
+mutation examples.
 
 ## Adding a Utility Handler
 
@@ -281,7 +332,7 @@ When adding, removing, or renaming files, directories, commands, or flags:
 
 ## Submitting Changes
 
-1. Open a PR against `main` with a clear description of what changed and why
+1. Open a PR against `v2` with a clear description of what changed and why
 2. Ensure L1 tests pass: `bash tests/run-tests.sh`
 3. For hook changes: run `bash tests/run-tests.sh --unit`
 4. For integration tests: run `bash tests/run-tests.sh --integration` (requires `claude` CLI tool)

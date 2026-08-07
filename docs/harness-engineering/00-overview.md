@@ -113,30 +113,33 @@ by `/aidlc --doctor` as an advisory so authors can rename the file or fix `name`
 Everything a harness engineer authors lives in **`core/`** — the hand-authored,
 harness-neutral source of truth (stages under `core/aidlc-common/stages/`,
 agents under `core/agents/`, scopes, rules, sensors, knowledge, tools, hooks).
-The per-harness `dist/<harness>/` trees you actually run (`dist/claude/.claude/`,
-`dist/kiro/.kiro/`, `dist/kiro-ide/.kiro/`, `dist/codex/`, and
-`dist/opencode/`) are **generated**
-from `core/` plus a thin `harness/<name>/` surface, and they are
-**drift-guarded** — a hand-edit there is rejected by CI. The loop is always:
+Two per-harness channels are **generated** from `core/` plus a thin
+`harness/<name>/` surface: `dist/<harness>/` is the Bun copy channel, while
+`dist-release/<harness>/` is the native `aidlc` channel used by release data
+archives. The concrete Bun roots are `dist/claude/`, `dist/kiro/`,
+`dist/kiro-ide/`, `dist/codex/`, and `dist/opencode/`; each has a matching
+native root. Both channels are committed and drift-guarded, so a hand-edit is
+rejected by CI. The loop is always:
 
 ```bash
 # 1. edit the source in core/ (never dist/)
 $EDITOR core/aidlc-common/stages/inception/my-stage.md
 
-# 2. regenerate every harness tree from core/ + harness/
+# 2. regenerate both channels for every harness from core/ + harness/
 bun scripts/package.ts
 
 # 3. confirm no drift (the CI guard; run before committing)
 bun scripts/package.ts --check
 ```
 
-Commit the `core/` edit and the regenerated `dist/` together. When a recipe in
+Commit the `core/` edit and both regenerated roots together. When a recipe in
 the chapters below says to run `aidlc __delegate graph compile` (or another
-tool), the installed native command resolves that tool against the project's
-active harness tree. It is not where you author. **You author in `core/`; the
-native dispatcher runs tools against the installed projection.** That split
-between authored source and generated runtime is the one to keep straight
-throughout this guide. For the full build contract see
+tool), the installed command resolves that tool against the project's active
+harness tree. Generated copy-channel prose uses the Bun dispatcher and native
+prose uses `aidlc`; authors use the channel-neutral route. It is not where you
+author. **You author in `core/`; the dispatcher runs tools against the installed
+projection.** That split between authored source and generated runtime is the
+one to keep straight throughout this guide. For the full build contract see
 [Porting to a New Harness](09-porting-to-a-new-harness.md) and the Developer
 Reference's [Architecture § Source vs distribution](../reference/01-architecture.md#source-vs-distribution-one-core-many-harnesses).
 

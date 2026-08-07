@@ -8,7 +8,7 @@ This chapter documents the hook system architecture, all seventeen hook scripts,
 
 ## Hook System Architecture
 
-This implementation uses seventeen TypeScript hook sources in `.claude/hooks/` (run via `bun`). All seventeen are **project-wide** — registered in `settings.json` (the statusline via the top-level `statusLine` key, the other sixteen via the `hooks` block), they fire regardless of which skill is active. They were previously split (six declared in `aidlc/SKILL.md` frontmatter as skill-scoped, the rest project-wide); v0.6.0 moved the skill-scoped six into `settings.json` so every entry point — the orchestrator, each packaged scope/stage runner, and any hand-written customer runner — inherits the deterministic spine with no per-runner `hooks:` block.
+This implementation uses seventeen TypeScript hook sources in `.claude/hooks/`. The copy channel invokes them through `bun`; the native channel routes them through `aidlc hook`, `aidlc statusline`, or a harness adapter target. All seventeen are **project-wide** — registered in `settings.json` (the statusline via the top-level `statusLine` key, the other sixteen via the `hooks` block), they fire regardless of which skill is active. They were previously split (six declared in `aidlc/SKILL.md` frontmatter as skill-scoped, the rest project-wide); v0.6.0 moved the skill-scoped six into `settings.json` so every entry point — the orchestrator, each packaged scope/stage runner, and any hand-written customer runner — inherits the deterministic spine with no per-runner `hooks:` block.
 
 Eleven of the seventeen are **non-blocking**. Six are **flow-altering**: the `Stop` hook keeps the forwarding loop running, the dispatch-rules hook attaches exact active-stage rules to subagent briefs where the harness supports input rewriting, the plan-approval guard refuses premature code-generation dispatches, the reviewer-scope hook refuses sibling-unit reviewer access, the review-freeze hook refuses a produces[] write that would void a fresh READY review receipt before the gate, and the state-transition guard refuses direct lifecycle calls that bypass `aidlc-orchestrate.ts report`.
 
@@ -57,9 +57,9 @@ Eleven of the seventeen are **non-blocking**. Six are **flow-altering**: the `St
 
 ### Shared Characteristics
 
-All seventeen TypeScript hooks:
+All seventeen TypeScript hook sources:
 
-- Written in TypeScript, run via `bun`
+- Are written in TypeScript and invoked through the channel's dispatcher
 - Do not need executable permissions — work identically on macOS, Linux, and native Windows PowerShell
 - Receive JSON on stdin from Claude Code
 - Use native JSON parsing (no `jq` dependency)
@@ -145,7 +145,7 @@ These six hooks (the audit/sensor/statusline/runtime-compile/state-validation/su
 3. **activeForm filter:** Exits silently if no `activeForm` field or no `[slug]` suffix pattern.
 4. **State file guard:** Exits silently if `aidlc-state.md` does not exist (pre-init).
 5. **Health heartbeat:** Writes to `.aidlc-hooks-health/sync-statusline.last`.
-6. **State sync:** Calls `bun aidlc-utility.ts set-status --stage <slug>` (updates Phase, Stage, Agent, checkbox).
+6. **State sync:** Calls the utility dispatch route `set-status --stage <slug>` (updates Phase, Stage, Agent, checkbox).
 
 **Design notes:**
 - Stage Jump tasks (no `[slug]`) and dependency-wiring TaskUpdates (no activeForm) are naturally filtered out.
@@ -162,7 +162,7 @@ These six hooks (the audit/sensor/statusline/runtime-compile/state-validation/su
 1. **Project directory resolution:** Same multi-fallback pattern as audit-logger.ts.
 2. **Audit + state guards:** Exits silently if the `audit/` shard or `aidlc-state.md` does not exist (pre-init).
 3. **Active-stage read:** Reads the active stage's `sensors_applicable` array off `stage-graph.json` — the compile-resolved sensor list for that stage node (empty for stages like workspace-scaffold).
-4. **Dispatch:** For each applicable Sensor, spawns `aidlc-sensor.ts fire <id> --stage <slug> --output-path <path>`. The dispatcher applies each Sensor's `matches` glob hook-side; a non-matching write is skipped. Outcomes are advisory — the hook never blocks the write.
+4. **Dispatch:** For each applicable Sensor, invokes `aidlc __delegate sensor fire <id> --stage <slug> --output-path <path>` through the selected channel. The dispatcher applies each Sensor's `matches` glob hook-side; a non-matching write is skipped. Outcomes are advisory — the hook never blocks the write.
 5. **Health heartbeat:** Writes `.aidlc-hooks-health/sensor-fire.last` on a fire, so the doctor can distinguish a healthy idle hook from a silent failure.
 
 See [Sensor System](07-sensor-system.md) for the manifest schema and the fire lifecycle.
@@ -175,12 +175,12 @@ See [Sensor System](07-sensor-system.md) for the manifest schema and the fire li
 
 **Processing steps:**
 
-1. **Command filter:** Only `bun .claude/tools/aidlc-(state|jump|bolt|utility).ts` invocations pass the early exit. `aidlc-runtime.ts` is rejected explicitly (recursion guard).
+1. **Command filter:** Only engine commands routed to state, jump, Bolt, or utility handling pass the early exit. Runtime-compile dispatch is rejected explicitly (recursion guard).
 2. **Audit-existence guard:** Exits cleanly before init (no `audit/` shard yet).
 3. **Health heartbeat:** Writes `.aidlc-hooks-health/runtime-compile.last`.
 4. **Tail-read:** Splits the merged `audit/` shards on `\n---\n` and takes the last 3 blocks (the upper bound a single `approve` call appends).
 5. **Event-class filter:** Recompiles only when one of the last 3 blocks carries `GATE_APPROVED`, `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `AUDIT_MERGED`, or `WORKFLOW_COMPLETED`. Exits on no match.
-6. **Dispatch:** Spawns `bun aidlc-runtime.ts compile`. On non-zero exit, records a hook drop for `--doctor`; never blocks the parent Bash call.
+6. **Dispatch:** Runs `aidlc __delegate runtime compile` through the selected channel. On non-zero exit, records a hook drop for `--doctor`; never blocks the parent Bash call.
 
 See [Runtime Graph](13-runtime-graph.md) for the compile lifecycle and the locked schema.
 
@@ -237,7 +237,7 @@ This is one of the framework's five flow-altering hooks, alongside the four PreT
 
 1. **stdin idiom:** Mirrors `log-subagent.ts` — a TTY means no Claude Code JSON is coming (test/debug), so it allows the stop. Otherwise it reads the Stop-hook JSON, from which it needs only `stop_hook_active`.
 2. **No-op outside AIDLC:** If there is no active intent's `aidlc-state.md` under the project dir, there is nothing to enforce — it allows the stop. The frontmatter `Stop` matcher already scopes the hook to `/aidlc`; this is defence in depth so a non-AIDLC session is never blocked.
-3. **Compose the engine:** Runs `bun .claude/tools/aidlc-orchestrate.ts next --project-dir <dir>` and parses the directive `kind`. It does not re-derive state — it composes the engine.
+3. **Compose the engine:** Runs `aidlc __delegate orchestrate next --project-dir <dir>` through the selected channel and parses the directive `kind`. It does not re-derive state — it composes the engine.
 4. **`done` → allow:** If the directive is `done`, the workflow is complete; the hook emits nothing and exits 0 (the precedent non-blocking pattern), then clears the recursion counter.
 5. **`parked` -> allow:** If the directive is `parked`, the workflow was intentionally parked mid-flow for a later session (`aidlc-orchestrate park`); the hook allows the stop and clears the counter, exactly like `done`. This is the supported multi-session exit: without it, the only clean stop is `done`, which an agent on a long workflow can only reach by rubber-stamping the remaining stages (#367). **Autonomy guard (#365):** the `parked` allow is suppressed under autonomous Construction (`Construction Autonomy Mode: autonomous`), so a `parked` directive there falls through to the cap-bounded block and the loop keeps moving.
 6. **Human-wait -> allow:** If the directive is pending but the conductor is correctly parked on the human (or simply chatting), the hook allows the stop and records a drop rather than spamming the nudge. Four cases qualify: the current stage's checkbox is positively `[?]` awaiting-approval, `[R]` revising, `[-]` in-progress **with** an unanswered `[Answer]:` tag in its `<slug>-questions.md` (a pending mid-stage clarifying question), or the ending turn was conversational (the human's most recent prompt was answered with no workflow-engine call, read from the harness transcript) - the last two suppressed under autonomous Construction. Positive-confirmation only: any other state, no checkbox row, no open question, no transcript / no human prompt / any engine call in the responding turn, or a parse error falls through to the block below. See "Human-wait carve-out" below.
@@ -512,11 +512,17 @@ roles (market research, design references, regulatory frameworks).
 
 ## Deterministic Utility Tool
 
-The file `.claude/tools/aidlc-utility.ts` is a Bun/TypeScript CLI tool that handles utility commands deterministically (no LLM reasoning needed). The conductor dispatches to it with a single Bash call:
+The file `core/tools/aidlc-utility.ts` handles utility commands deterministically
+(no LLM reasoning needed). Generated framework prose uses the dispatcher seam:
 
 ```bash
-bun .claude/tools/aidlc-utility.ts <subcommand>
+aidlc __delegate utility <subcommand>
 ```
+
+In committed `dist/` copies, `{{INVOKE}}` expands that call to
+`bun <harness-dir>/tools/aidlc.ts`; in `dist-release/` and installed native
+projects it expands to `aidlc`. Do not author a harness-specific direct script
+path for a framework command.
 
 ### Implemented Subcommands
 
@@ -527,12 +533,12 @@ bun .claude/tools/aidlc-utility.ts <subcommand>
 | `status` | Read-only status check from `aidlc-state.md`. Surfaces `[?]` / `[R]` gate awareness in the Status line. | — |
 | `doctor` | Health check: verify hooks, prerequisites, file structure | `HEALTH_CHECKED` |
 | `intent-birth` | Birth a new intent and run the three deterministic Initialization stages. | `WORKFLOW_STARTED`, `PHASE_STARTED`, `PHASE_SKIPPED`, `STAGE_STARTED`, `STAGE_COMPLETED`, `WORKSPACE_*`, and the init-to-first-post-init phase hand-off events |
-| `init` | Transition error only in this release; start work by describing what to build so the engine routes to `intent-birth`. | none |
+| `init` | Legacy utility transition error; public project install/refresh is the separate `aidlc init` route backed by `aidlc-init.ts`. Start workflow work by describing what to build so the engine routes to `intent-birth`. | none |
 | `intent [name]` | List intents (`--json`) or switch the active-intent cursor. Normally routed from `/aidlc intent [name]`. | — |
 | `space [name]` | List spaces (`--json`) or switch the active-space cursor and harness include. Normally routed from `/aidlc space [name]`. | — |
 | `space-create <name>` | Create a new space from the framework memory baseline. Normally routed from `/aidlc space-create <name>`. | — |
-| `codekb-path [--repo <name>] [--json]` | Direct-only, read-only query that prints the deterministic per-repo codekb directory. There is no `/aidlc codekb-path` route. | — |
-| `select-plugins [names]` | Direct-only query/update for the install's enabled plugin set. There is no `/aidlc select-plugins` route. | `PLUGIN_SELECTION_CHANGED` in set mode |
+| `codekb-path [--repo <name>] [--json]` | Read-only query behind `aidlc workspace codekb`; prints the deterministic per-repo codekb directory. | — |
+| `select-plugins [names]` | Query/update behind `aidlc plugin select`; stages all selected surfaces and commits their diff through the transaction engine. | `PLUGIN_SELECTION_CHANGED` in set mode |
 | `scope-change` | Atomic scope updates mid-workflow (recalculate stage inclusion). Re-plans which stages are EXECUTE/SKIP. | `SCOPE_CHANGED` |
 | `config-get`, `config-list` | Read active workflow config (`depth`, `test-strategy`); `config-list --json` emits the structured shape. | none |
 | `config-change` | Write active workflow config. Dispatcher form: `/aidlc config set depth <value>` or `/aidlc config set test-strategy <value>`. | `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED` |
@@ -548,10 +554,9 @@ bun .claude/tools/aidlc-utility.ts <subcommand>
 
 The user-facing `intent`, `space`, and `space-create` forms are covered in
 [CLI Commands](../guide/12-cli-commands.md) and
-[Spaces and Intents](../guide/03-spaces-and-intents.md). `codekb-path` and
-`select-plugins` are intentionally invoked directly as
-`bun <harness-dir>/tools/aidlc-utility.ts <verb>`; neither is an orchestrator
-command.
+[Spaces and Intents](../guide/03-spaces-and-intents.md). Use
+`aidlc workspace codekb` and `aidlc plugin select` for the corresponding
+dispatcher forms; the utility verb names are internal delegate targets.
 
 ## Plugin State Tool
 
@@ -563,6 +568,18 @@ surface. Sync composes in staging and applies one `aidlc-transaction.ts` plan;
 `--prune-missing` additionally requires full inventory, confirmation, and a
 hash-valid `plugin-owned-<key>.json` record. These paths never open a network
 connection.
+
+## Transaction Tool
+
+`core/tools/aidlc-transaction.ts` is the shared commit engine for project and
+machine mutations. Callers construct root-relative operations with expected
+destination state and source hashes, stage the complete candidate, and
+optionally validate before and after commit. The engine owns serialization,
+durability syncs, rollback, and recovery-evidence quarantine. Init, lifecycle,
+pin registration, plugin selection, and plugin sync use this implementation;
+new install-mechanism mutations must do the same rather than adding a private
+snapshot convention. See
+[Architecture: Shared transaction engine](01-architecture.md#shared-transaction-engine).
 
 ### Design Rationale
 
@@ -667,7 +684,7 @@ The transcript reader is **Claude-Code-format-specific**, and only the Claude ha
 
 ## Prerequisites
 
-1. **bun (copy channel only)** -- Required for all 16 hooks and every TypeScript CLI tool in a copied `dist/<harness>/` tree (`aidlc-utility.ts`, `aidlc-state.ts`, `aidlc-jump.ts`, `aidlc-orchestrate.ts`, `aidlc-audit.ts`, `aidlc-validate.ts`, `aidlc-graph.ts`, `aidlc-sensor.ts`, `aidlc-learnings.ts`, `aidlc-runtime.ts`). Native release installs route the same hooks and tools through the self-contained `aidlc` binary. For copy installs, install bun via `curl -fsSL https://bun.sh/install | bash`; on Windows use `npm install -g bun` or `powershell -c "irm bun.sh/install.ps1 | iex"`. It must be on PATH for non-interactive shells.
+1. **bun (copy channel only)** -- Required for all 17 hook sources and every TypeScript CLI tool in a copied `dist/<harness>/` tree (`aidlc-utility.ts`, `aidlc-state.ts`, `aidlc-jump.ts`, `aidlc-orchestrate.ts`, `aidlc-audit.ts`, `aidlc-validate.ts`, `aidlc-graph.ts`, `aidlc-sensor.ts`, `aidlc-learnings.ts`, `aidlc-runtime.ts`). Native release installs route the same hooks and tools through the self-contained `aidlc` binary. For copy installs, install bun via `curl -fsSL https://bun.sh/install | bash`; on Windows use `npm install -g bun` or `powershell -c "irm bun.sh/install.ps1 | iex"`. It must be on PATH for non-interactive shells.
 2. **$CLAUDE_PROJECT_DIR** -- Set by Claude Code to the project root. All hooks use it to locate the `aidlc/` workspace (and the active intent's record dir within it).
 
 No other prerequisites: copy installs run every hook and tool through bun, while native installs use the compiled dispatcher. Neither channel requires `jq`, `sed`, `awk`, Git Bash, or WSL for hook execution.

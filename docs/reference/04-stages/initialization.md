@@ -2,7 +2,14 @@
 
 ## Phase Overview
 
-The Initialization phase is the first of five phases in the AI-DLC workflow. It runs stages 0.1 through 0.3, **birthing the intent** — minting its record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (written `<record>/` below) with state files, directory scaffolding, workspace classification, and routing configuration. There is no separate scaffold command: the workspace shell ships pre-built in `dist/<harness>/`, and the engine auto-births the first intent on the first `/aidlc` (or when you describe what to build).
+The Initialization phase is the first of five phases in the AI-DLC workflow. It
+runs stages 0.1 through 0.3, **birthing the intent** — minting its record dir at
+`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (written `<record>/` below)
+with state files, directory scaffolding, workspace classification, and routing
+configuration. Project-level `aidlc init` installs or refreshes the generated
+harness projection; it does not run these workflow stages. Once the project is
+installed, the engine auto-births the first intent on the first `/aidlc` (or
+when you describe what to build).
 
 All 3 stages in this phase execute for EVERY scope — there are no conditional stages. All stages auto-proceed with no approval gates.
 

@@ -230,7 +230,7 @@ block. Two authoring rules follow from that:
 
 `test-pro` ships stages, contributions, sensors, a support agent, a scope, and
 methodology knowledge. A richer plugin may also add method/rules later; memory
-projection remains deferred (doc 18 §8 Status).
+projection remains deferred (doc 18 §9 Status).
 
 - **Agents.** Drop `agents/<plugin>-<role>-agent.md` with `plugin:` set. The
   plugin prefix replaces core's `aidlc-` filename prefix, and the filename stem
@@ -277,10 +277,14 @@ projection remains deferred (doc 18 §8 Status).
 
 ## 5. Distribution + install
 
-The packager emits your plugin as **a real host plugin** (one projection target
-per harness: `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, plus a
-Kiro folder projection). You publish the output to a git repo with semver tags
-and a `marketplace.json`, and teams install through the host's native commands.
+The packager emits your plugin as **a real host plugin** for every discovered
+harness (`.claude-plugin`, `.codex-plugin`, `.opencode-plugin`, and Kiro
+folder-drop projections for CLI/IDE). These live under
+`dist/plugins/<name>/<harness>/`; there is no separate `dist-release/plugins`
+tree because composition happens in the target project and the emitted hook
+chooses `aidlc` first with a Bun compatibility fallback. You publish the output
+to a git repo with semver tags and a `marketplace.json`, and teams install
+through the host's native mechanism.
 
 ### Claude / Codex (host store)
 
@@ -300,6 +304,35 @@ result, compiles the stage graph + scope grid, and writes a version/source-hash
 composition stamp. The orchestrator routes entirely off that compiled graph, so
 a plugin stage runs the moment it is composed in - no prose or skill file to
 edit.
+
+Sync never edits the live project while composing. It copies the relevant
+harness, `.agents`, and `aidlc` surfaces to staging, composes and regenerates
+there, writes `plugin-compose-<key>.json` and hash-proven
+`plugin-owned-<key>.json`, then commits the staged diff through the shared
+transaction engine. A fault restores all files, modes, stamps, and ownership
+records. `--prune-missing` is intentionally stricter: it requires a proved full
+host inventory, explicit confirmation (`--yes` in automation), and unchanged
+owned hashes; local or unowned bytes are refused.
+
+### Project selection
+
+Composition installs a plugin's bytes; selection controls which installed
+stages, scopes, runners, and contributions are active:
+
+```bash
+aidlc plugin select aidlc,test-pro
+aidlc plugin list
+aidlc plugin sync
+```
+
+`plugin select` stages disabled-contribution removal, graph/grid compilation,
+runners, and generated tables before committing one project transaction;
+re-enabled contributions return on the next SessionStart sync. It refuses to
+disable a plugin needed by an active workflow. The
+`PLUGIN_SELECTION_CHANGED` audit append is part of committed validation, so an
+audit failure rolls the whole selection back. `plugin list` is different: it
+compares host inventory with composition/ownership stamps and does not change
+selection.
 
 ### Kiro (no store — folder-drop, then run the composer explicitly)
 
@@ -330,7 +363,7 @@ Trust is **host-native** — you don't build anything:
 > **Concrete examples** — `plugin.json`, `marketplace.json`,
 > `managed-settings.json` (the org trust config), `aidlc.lock.json` — are in
 > [`examples/test-pro/`](../reference/examples/test-pro/). See also
-> [Plugin Mechanism §8](../reference/18-plugin-mechanism.md) for the full
+> [Plugin Mechanism §9](../reference/18-plugin-mechanism.md) for the full
 > platform-team worked example.
 
 ## Rules of the road
@@ -345,7 +378,7 @@ Trust is **host-native** — you don't build anything:
 - **Dependencies** *(⏳ deferred).* `dependencies` is designed to resolve a
   `name@^x.y.z` constraint against the dependency's `version` with cycle
   rejection, but **nothing reads the field yet** — declaring it has no effect
-  today (doc 18 §8 Status).
+  today (doc 18 §9 Status).
 - **Additive only.** Contributions add — they cannot override or remove a core
   stage's fields, agent, or prose. (A genuine need to _change_ upstream behavior
   is a framework design decision, not a plugin concern.)

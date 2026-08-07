@@ -253,10 +253,9 @@ sequenceDiagram
 
 The framework is **authored once and generated per harness** — today Claude
 Code, Kiro CLI, Kiro IDE, Codex CLI, and opencode, and any capable CLI you port
-it to. The
-hand-authored source is a harness-neutral `core/` plus a thin `harness/<name>/`
-surface per CLI; `bun scripts/package.ts` regenerates the committed,
-drift-guarded `dist/<harness>/` trees:
+it to. The hand-authored source is a harness-neutral `core/` plus a thin
+`harness/<name>/` surface per CLI; `bun scripts/package.ts` regenerates two
+committed, drift-guarded projections for every harness:
 
 ```
 core/                  # hand-authored, harness-neutral (tools, aidlc-common,
@@ -266,32 +265,118 @@ harness/<name>/        # per-CLI surface: manifest.ts + orchestrator skill +
                        #   harness files (+ emit.ts for codex)
 scripts/package.ts     # the build: copy core (token→.claude/.kiro/.codex) +
                        #   harness, compile the graph, generate runners, emit;
-                       #   `--check` is the byte-parity drift guard
+                       #   writes both channels; `--check` guards both
 scripts/build-binaries.ts # release-only binary compiler + smoke gate, writing
                        #   per-target executable + runtime/<harness>/ bundles
                        #   under ignored build/binaries/
-scripts/package-release.ts # flat release data archives, checksums, version.json
+scripts/package-release.ts # flat release assets: binaries, native data archives,
+                       #   installers, version.json, and checksums.txt
 dist/<harness>/        # GENERATED + committed Bun copy projection:
                        #   claude/.claude, kiro/.kiro,
                        #   kiro-ide/.kiro, codex/{.codex,.agents} — never hand-edited
 dist-release/<harness>/ # GENERATED + committed binary-invocation projection
 ```
 
-`core/` `.ts` is byte-copied untransformed; the runtime `harnessDir()` seam
-(`core/tools/aidlc-lib.ts`) derives the harness dir from the shipped layout at
-execution time — open-set, from the tool's own path rather than a hardcoded
-list, so a new harness needs no edit here — and its rules-dir rename ships
-per-tree in a generated `tools/data/harness.json` the `rulesSubdir()` seam
-reads. One set of tool sources runs in every harness. See
+The projection transform is explicit rather than a general text rewrite.
+`{{HARNESS_DIR}}` selects the runtime directory; `{{INVOKE}}` selects the
+dispatcher (`bun <harness-dir>/tools/aidlc.ts` in `dist/`, `aidlc` in
+`dist-release/`); and `{{TOOL_PREFIX}}` selects the equivalent direct-tool
+prefix. Markdown, JSON, TOML, hook descriptors, and the invocation-bearing
+TypeScript lines receive only the applicable token substitutions and rules-dir
+rename. The runtime `harnessDir()` seam (`core/tools/aidlc-lib.ts`) still derives
+the harness dir from the shipped layout rather than a closed harness list, and
+the rules-dir rename ships in generated `tools/data/harness.json`. One authored
+tool set therefore serves every harness and both channels. See
 [Porting to a New Harness](../harness-engineering/09-porting-to-a-new-harness.md).
 
 `dist/` and `dist-release/` are separate projections of the same authored
 tree. The copy channel under `dist/` invokes the generated TypeScript
 dispatcher through Bun. The release channel under `dist-release/` routes
 hooks, generated commands, adapters, and host trust entries through the
-statically embedded `aidlc` dispatcher. Both roots remain committed and
-independently checked by `package.ts --check`; `dist-release/` is the stable
-staging input for release archive assembly.
+self-contained `aidlc` dispatcher. Native-only root integrations, such as host
+trust seeds, are added only to the release projection. Both roots remain
+committed and are independently rebuilt and byte-compared by
+`package.ts --check`; `dist-release/` is the stable input for release data
+archives and for the binary's native dispatcher source.
+
+### Projection identity and ownership
+
+Every generated harness directory carries three distinct metadata contracts
+under `tools/data/`:
+
+- `harness.json` is runtime configuration: distribution identity, product
+  name, next-step text, harness/rules directories, and mutable project choices
+  such as plugin selection.
+- `aidlc-stamp.json` is immutable projection identity: schema, framework
+  version, distribution, and harness directory.
+- `aidlc-projection.json` is the exhaustive install descriptor. It classifies
+  every top-level output as a framework-managed directory or a root integration
+  with one typed merge policy (`managed-block`, `json-map`, `json-array`, or
+  `whole-file`). Optional integrations and exact legacy hashes are declared
+  here; an unclassified top-level entry makes packaging or loading fail.
+
+`aidlc init` validates the stamp and descriptor before planning. It writes a
+fourth file, `aidlc-manifest.json`, into the installed harness as the
+project-specific ownership baseline: upstream version, per-file hashes, root
+contributions, and the selected optional-integration mode. Refresh uses that
+baseline to update unchanged framework bytes, preserve local modifications,
+merge root integrations, and remove retired owned content. Copy-channel hashes
+recorded in the native descriptor allow an exact, unmodified legacy copy install
+to be adopted; unknown bytes are never inferred as framework-owned.
+
+### Dispatcher route policy
+
+`core/tools/aidlc.ts` is both channels' route registry and the compiled binary's
+entry point. Each route declares project requirements, output modes, network
+policy, mutation scope, visibility, and one of three pin policies:
+
+- `active` runs the currently active binary for machine lifecycle and
+  management commands.
+- `inspect` also stays on the active binary so `doctor`, `init`, and `use` can
+  diagnose or repair a broken project pin.
+- `pinned` is the project engine path. A valid `.aidlc-version` causes one
+  re-exec into that retained version before project data is loaded; an absent or
+  incomplete retained version fails closed with the install command.
+
+The dispatcher passes the resolved route policy to delegates in `AIDLC_ROUTE_*`
+variables. Release acquisition and the transaction engine enforce the network
+and mutation boundaries, while a per-session fingerprint cache avoids repeating
+a full retained-version inspection without weakening pin validation.
+
+### Shared transaction engine
+
+Install-mechanism mutations use `core/tools/aidlc-transaction.ts`. A plan is a
+set of non-overlapping, root-relative `write`, `copy`, `tree`, `remove`, or
+`symlink` operations with expected destination state; copied sources also carry
+a content hash. The engine rejects path escapes, symlink traversal, special
+files, filesystem-boundary crossings, source drift, and overlapping targets
+before mutation, then repeats validation while holding its root lock.
+
+Candidates are staged and fsynced before live writes, current targets are
+snapshotted, and commits use rename boundaries. Candidate and committed
+validators let callers prove domain invariants; any staging, commit, validation,
+or audit failure restores committed paths in reverse order. A failed rollback
+preserves recovery evidence, and the next transaction quarantines abandoned
+staging rather than deleting it. Project init/refresh, machine lifecycle,
+project pins, plugin selection, and plugin sync all build plans for this engine.
+
+### Release assembly and provenance
+
+`scripts/build-binaries.ts` compiles the dispatcher from
+`dist-release/claude/.claude/tools/aidlc.ts`, stages every native runtime beside
+each target artifact for smoke gates, and writes one
+`build-results-<target>.json`. A host-runnable artifact is `VERIFIED` only after
+the complete native/final-layout gate set; a cross artifact is explicitly
+`UNVERIFIED` with `inspection-only` evidence.
+
+`scripts/package-release.ts` first requires projection parity, validates those
+records (and the complete seven-target matrix in release mode), archives each
+`dist-release/<harness>/`, and emits the flat `version.json` plus
+`checksums.txt`, both installers, and binaries. The tag workflow tests the
+staged candidate on Unix and Windows, re-verifies its checksums immediately
+before publishing that same artifact, then attaches GitHub build-provenance
+attestations to every released file. This pipeline does not implement the
+deferred npm channel.
 
 ## Directory Structure
 

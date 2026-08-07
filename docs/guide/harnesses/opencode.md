@@ -29,14 +29,46 @@ script (top-level dispatch, `process.exit`) crashes the session
   (`tool.execute.before`, `tool.execute.after`, `chat.message`, `session.idle`,
   `experimental.session.compacting`) and project-local skill/agent discovery.
   Check with `opencode --version`.
-- **bun** — same requirement as every harness; every tool and hook runs via
-  bun. The adapter plugin resolves bun from `PATH`, then `~/.bun/bin/bun`.
+- **bun** for the source/development copy channel. Native installs dispatch
+  tools and hooks through the self-contained `aidlc` executable.
 - **A model provider** — the shipped project `opencode.json` pins no session
   model; your global opencode config supplies it. Tiered personas pin
   `amazon-bedrock/global.anthropic.claude-sonnet-4-6` — override per agent in
   the project `opencode.json` if your provider differs.
 
 ## Install
+
+### Native channel (recommended)
+
+```bash
+curl -fsSL https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh \
+  | bash -s -- --harness opencode
+cd your-project
+aidlc init
+aidlc doctor
+opencode
+```
+
+The installer verifies the release metadata, executable, and opencode data
+against the published SHA-256 checksums. The installed runtime does not require
+Bun, Node.js, or Git. This scripted example uses the literal `--harness` flag
+because automation requires it. An interactive run without the flag opens a
+controlling-terminal picker, including when the Unix script is piped.
+
+On Windows, download `install.ps1` and run
+`& $installer --harness opencode`. An interactive run may omit the flag;
+redirected input, `pwsh -NonInteractive`, `--yes`, `--json`, and `--quiet`
+require it. For an air-gapped package, use
+`install.sh --from <release-directory> --offline --harness opencode` on Unix or
+`& $installer -From <release-directory> -Offline --harness opencode` on Windows.
+
+`aidlc init` projects `.aidlc/`, `.opencode/`, the workspace shell,
+`AGENTS.md`, the managed `.gitignore` block, and `opencode.json`. The generated
+config discovers the skill and method files and allows direct `aidlc *`
+commands; other shell commands still prompt. Start opencode in the project and
+run `/aidlc --doctor`, then `/aidlc` followed by what you want to build.
+
+### Source/development copy alternative
 
 The copies below come from a clone of the
 [aidlc-workflows](https://github.com/awslabs/aidlc-workflows) repository on the
@@ -75,6 +107,27 @@ git checkout v2
 3. Start opencode in the project and run `/aidlc --doctor`, then `/aidlc`
    followed by what you want to build.
 
+This source/development channel requires Git and Bun. It does not use
+`aidlc init`; the copied tree already contains the workspace shell.
+
+## Refresh and version skew
+
+`aidlc upgrade` updates the machine runtime without rewriting projects.
+`aidlc doctor` reports a project stamp that differs from the selected engine.
+Between workflows, preview and apply a refresh:
+
+```bash
+aidlc init --dry-run
+aidlc init
+```
+
+Init preserves managed root blocks and user-owned files, and reports local
+framework edits as conflicts. Because `opencode.json` is a whole-file
+integration, a local edit is preserved as a conflict rather than overwritten.
+Init refuses refresh while any workflow is active; complete the workflow first.
+Upgrade and rollback remain safe during a workflow because they do not touch
+the project.
+
 ## What's different on this harness
 
 - **Questions render as numbered prose options** (no structured-question
@@ -82,11 +135,13 @@ git checkout v2
   truth.
 - **Hooks ride the adapter plugin.** opencode has no hooks.json/settings hook
   registry; `.opencode/plugin/aidlc-opencode-adapter.ts` maps opencode's
-  plugin hook moments onto the core hook bodies in `.aidlc/hooks/` (run as bun
-  subprocesses): reviewer read-scope and the AIDLC bash boundary before tool
-  execution; audit + sensors on write/edit/apply_patch; runtime-compile on
-  bash; statusline sync on todowrite; subagent logging on task; presence
-  minting on each human turn; state validation before compaction.
+  plugin hook moments onto the core hook bodies. Native projections dispatch
+  them through `aidlc`; source/development copies use Bun subprocesses.
+  The mapped moments include reviewer read-scope and the AIDLC bash boundary
+  before tool execution; audit + sensors on write/edit/apply_patch;
+  runtime-compile on bash; statusline sync on todowrite; subagent logging on
+  task; presence minting on each human turn; and state validation before
+  compaction.
 - **Forwarding-loop enforcement is advisory.** The Stop seam is the
   `session.idle` event — reactive, not blocking. When the core stop hook
   answers `block`, the plugin re-engages the loop by injecting a nudge prompt
@@ -112,7 +167,8 @@ git checkout v2
 ## Verifying an install
 
 ```bash
-bun .aidlc/tools/aidlc-utility.ts doctor    # all checks pass on a fresh copy
+aidlc doctor                               # native install
+bun .aidlc/tools/aidlc-utility.ts doctor   # source/development copy
 opencode run --command aidlc -- "--status"  # /aidlc --status through the harness
 ```
 

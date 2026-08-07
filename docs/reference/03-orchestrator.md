@@ -117,13 +117,22 @@ Overrides the test volume strategy (minimal, standard, comprehensive) independen
 
 ### Intent birth -- the Initialization phase
 
-There is no separate scaffold command (the earlier `init` flag was retired; the workspace shell ships pre-built in `dist/<harness>/`). The three Initialization stages (workspace-scaffold, workspace-detection, state-init) run deterministically inside `aidlc-utility intent-birth` — auto-invoked on the first `/aidlc` (or `/aidlc <description>`), or explicitly via the `/aidlc-init` packaging. Birth mints the intent's record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` with state initialised, scope routing applied, and the workflow positioned at the first post-Initialization stage:
+Machine/project installation is separate: `aidlc init` installs or refreshes the
+generated harness projection and ownership baseline, but it does not birth a
+workflow intent. Inside the workflow there is no separate scaffold chat command.
+The three Initialization stages (workspace-scaffold, workspace-detection,
+state-init) run deterministically inside `aidlc-utility intent-birth` —
+auto-invoked on the first `/aidlc` (or `/aidlc <description>`), or explicitly
+via the `/aidlc-init` packaging. Birth mints the intent's record dir at
+`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` with state initialised, scope
+routing applied, and the workflow positioned at the first post-Initialization
+stage:
 
 1. Creates the record dir tree (idempotent -- skips existing directories/files): the `audit/` shard dir, stage artifact directories (empty), and the verification directory.
 2. Creates the empty space-level `aidlc/knowledge/` directory (a sibling of the space's `intents/`). It is free-form with no fixed file set — birth seeds no per-agent subdirectories and no READMEs; the team adds files itself.
 3. Scans the workspace and writes the intent's `aidlc-state.md` with the actual phase (e.g., `IDEATION` for `--scope feature`), the resolved scope, and the stage plan derived from the compiled scope grid (`scope-grid.json`, the transpose of each stage's `scopes:` frontmatter).
 4. Emits the full event sequence: `WORKFLOW_STARTED`, `WORKSPACE_SCAFFOLDED`, `WORKSPACE_SCANNED`, `WORKSPACE_INITIALISED`, `PHASE_STARTED` for the first executing phase, `STAGE_STARTED` + `STAGE_COMPLETED` for each Initialization stage, plus `PHASE_SKIPPED` events for any phases the scope skips.
-5. Auto-births only on a workspace with zero intents; with intents already present and no active cursor, the engine prompts the user to pick one (`/aidlc intent <slug>`) rather than birthing a duplicate. There is no re-init flag.
+5. Auto-births only on a workspace with zero intents; with intents already present and no active cursor, the engine prompts the user to pick one (`/aidlc intent <slug>`) rather than birthing a duplicate. There is no workflow re-birth flag; this is unrelated to project-level `aidlc init`.
 6. When birth was reached via the auto-birth print, the conductor re-runs `next` and continues into the first post-Initialization stage; the explicit `/aidlc-init` packaging stops after Initialization so the user invokes `/aidlc` again to begin interactively.
 
 ### Resume (State File Exists)
