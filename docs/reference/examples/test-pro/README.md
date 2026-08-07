@@ -24,7 +24,7 @@ They show the intended lifecycle, not current behavior.
 - `marketplace.json`, `managed-settings.json`, and `aidlc.lock.json` are
   **illustrative examples** for design review only. The installer, marketplace
   resolution, and lockfile writer that would *produce* and *consume* them are
-  **future work** (doc 18 §8 "Status"). All `sha256:…` and `commit` values in
+  **future work** (doc 18 §9 "Status"). All `sha256:…` and `commit` values in
   the lockfile are **placeholders**, not computed hashes.
 
 ## The lifecycle these files trace

@@ -1,9 +1,9 @@
 # Stage Protocol Reference
 
-Human-readable restructuring of the machine-oriented protocol family under
-`dist/claude/.claude/aidlc-common/protocols/`. Preserves all rules, conditions,
-and behaviors while reorganizing for developer consumption. Section references
-map to the static protocol or the named conditional module.
+Human-readable restructuring of the machine-oriented
+`dist/claude/.claude/aidlc-common/protocols/stage-protocol.md`. Preserves all
+rules, conditions, and behaviors while reorganizing for developer consumption.
+Section references (e.g., "Protocol Section 1") map to the source file.
 
 > For stage file *format* (YAML frontmatter, body conventions), see
 > [Stage Definition](15-stage-definition.md). This chapter covers runtime
@@ -21,18 +21,14 @@ map to the static protocol or the named conditional module.
 
 ## Protocol File Structure
 
-The stage protocol is split across seven files, loaded conditionally by the
+The stage protocol is split across three files, loaded conditionally by the
 conductor based on workflow context:
 
 | File | Contents | When Loaded |
 |------|----------|-------------|
-| `stage-protocol.md` | Core protocol: approval gates, completion messages, question flow, state tracking, agent persona loading, depth guidance, terminology, content validation, and the §13 Learnings Ritual | Every stage (mandatory) |
+| `stage-protocol.md` | Core protocol: approval gates, completion messages, question flow, state tracking, agent persona loading, depth guidance, terminology, content validation, subagent return formats, and the §13 Learnings Ritual | Every stage (mandatory) |
 | `stage-protocol-recovery.md` | Error Recovery + Change Handling | On session resume, or when a change event is detected mid-stage |
-| `stage-protocol-governance.md` | Phase Boundary Verification (§13) | At phase boundaries (1.7->2.1, 2.9->3.1, 3.7->4.1) |
-| `stage-protocol-reviewer.md` | Reviewer dispatch, receipts, read scope, terminal ordering, and NOT-READY loop | When the directive names an effective reviewer |
-| `stage-protocol-ensemble.md` | Ensemble topology, subagent returns, contribution files, and objection triage | For subagent, pipeline, mob, or support-agent stages |
-| `stage-protocol-construction.md` | Bolt gates, Construction questions, per-unit iteration, receipts, and waves | On the first Construction directive of the session and every invoke-swarm |
-| `stage-protocol-swarm.md` | Harness-specific autonomous fan-out, convergence, finalize, and reviewer boundary | Every invoke-swarm |
+| `stage-protocol-governance.md` | Phase Boundary Verification (§13) | At phase boundaries (1.7->2.1, 2.8->3.1, 3.7->4.1) |
 
 ### Conditional Loading Logic (from SKILL.md Routing)
 
@@ -44,41 +40,30 @@ The conductor's Routing section defines the loading rules:
   event is detected mid-stage. This keeps error recovery and change handling
   out of context for normal forward-progress stages.
 - **`stage-protocol-governance.md`**: load at phase boundaries
-  (1.7->2.1, 2.9->3.1, 3.7->4.1) to run the Phase Boundary Verification
+  (1.7->2.1, 2.8->3.1, 3.7->4.1) to run the Phase Boundary Verification
   traceability check. This limits governance overhead to the points where it
   is needed.
-- **`stage-protocol-reviewer.md`**: load when `protocol_modules` includes
-  `reviewer`, or when the directive carries a reviewer.
-- **`stage-protocol-ensemble.md`**: load when `protocol_modules` includes
-  `ensemble`; the fallback trigger is a dispatched topology or support agents.
-- **`stage-protocol-construction.md`**: load on the first Construction
-  directive of the session and every invoke-swarm.
-- **`stage-protocol-swarm.md`**: load for invoke-swarm.
 
-Before running the stage body, the conductor reads every module named by
-`directive.protocol_modules` and skips modules already loaded in the session.
-
-The split reduces fixed context during normal stage execution while ensuring
-rare-path reviewer, ensemble, Construction, swarm, recovery, and governance
-rules are loaded when relevant. Capturing in-stage corrections as durable Rules
-is handled by the §13 Learnings Ritual in `stage-protocol.md` (loaded every
-stage), not by a separate governance flow.
+The split reduces context size during normal stage execution while ensuring
+recovery and governance rules are available when relevant. Capturing in-stage
+corrections as durable Rules is handled by the §13 Learnings Ritual in
+`stage-protocol.md` (loaded every stage), not by a separate governance flow.
 
 ---
 
 ## Overview
 
 The stage protocol is the mandatory behavioral contract governing how every
-stage in the AI-DLC workflow executes. All 33 stages across five phases
+stage in the AI-DLC workflow executes. All 32 stages across five phases
 (Initialization, Ideation, Inception, Construction, Operation) follow this protocol without
 exception. The conductor (`SKILL.md`) hands stage execution to agent
 personas; the protocol stays independent of phase and agent, defining
 the structural rules that wrap around any stage's domain-specific work.
 
 The protocol covers: approval gates, completion messages, question flow, state
-tracking, agent persona loading, conditional reviewer/ensemble/Construction/
-swarm behavior, error recovery, change handling, depth guidance, content
-validation, the §13 Learnings Ritual, and phase boundary verification.
+tracking, agent persona loading, error recovery, change handling, depth
+guidance, content validation, subagent return formats, the §13 Learnings
+Ritual, and phase boundary verification.
 
 ### Critical Compliance Checklist
 
@@ -86,19 +71,20 @@ Before and during every stage, verify these commonly missed steps:
 
 State transitions and audit emissions are tool-owned rather than
 hand-written audit blocks. The conductor reports forward progress through
-`aidlc-orchestrate.ts report --stage <slug>`; the engine delegates to the
+`aidlc report --stage <slug>`; the dispatcher delegates to the orchestration
+engine, which delegates to the
 state tool, which atomically updates state and emits the paired audit event
 with a fresh timestamp.
 
 | # | Check |
 |---|-------|
-| 1 | At the approval gate, call `bun .claude/tools/aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval`. The engine flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. (`STAGE_STARTED` / the `[-]` transition was emitted when the stage became active.) |
-| 2 | For non-gate questions, log options BEFORE calling `AskUserQuestion` via `bun .claude/tools/aidlc-log.ts decision` (not by hand-writing to the `audit/` shards), then log the exact response via `aidlc-log.ts answer`. |
-| 3 | After an approval-gate response, call `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` for approval or `aidlc-orchestrate.ts report --stage <slug> --result rejected --user-input "<feedback>"` for request-changes. Never call `aidlc-log.ts decision` or `aidlc-log.ts answer` for the gate. After revision work, report `--result revised` before re-presenting it. |
+| 1 | At the approval gate, call `aidlc report --stage <slug> --result awaiting-approval`. The engine flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. (`STAGE_STARTED` / the `[-]` transition was emitted when the stage became active.) |
+| 2 | For non-gate questions, log options BEFORE calling `AskUserQuestion` via `aidlc __delegate log decision` (not by hand-writing to the `audit/` shards), then log the exact response via `aidlc __delegate log answer`. |
+| 3 | After an approval-gate response, call `aidlc report --stage <slug> --result approved --user-input "<exact choice>"` for approval or `aidlc report --stage <slug> --result rejected --user-input "<feedback>"` for request-changes. Never call the log tool's `decision` or `answer` verb for the gate. After revision work, report `--result revised` before re-presenting it. |
 | 4 | Never summarize user input -- pass exact option labels to the owning log or report tool; for automated stages use `N/A -- [reason]` |
 | 5 | One audit entry per interaction -- the log/state tools enforce single-event emission; never merge multiple events into one call |
-| 6 | At stage end, call `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` (gated stages) or `report --stage <slug> --result completed` (Initialization). The engine flips `[?]`/`[-]` to `[x]`, emits `GATE_APPROVED` when gated, and emits `STAGE_COMPLETED` atomically through the state tool |
-| 7 | Mark previous stage task `completed` and current stage task `in_progress` with `activeForm` BEFORE work begins (the `sync-workflow-state` hook handles state syncing) |
+| 6 | At stage end, call `aidlc report --stage <slug> --result approved --user-input "<exact choice>"` (gated stages) or `aidlc report --stage <slug> --result completed` (Initialization). The engine flips `[?]`/`[-]` to `[x]`, emits `GATE_APPROVED` when gated, and emits `STAGE_COMPLETED` atomically through the state tool |
+| 7 | Mark previous stage task `completed` and current stage task `in_progress` with `activeForm` BEFORE work begins (the `sync-statusline` hook handles state syncing) |
 | 8 | Use ONLY event types from `knowledge/aidlc-shared/audit-format.md` -- the state and log tools enforce this; never write directly to the `audit/` shards |
 | 9 | Do NOT hand-write lifecycle events or invoke lifecycle verbs on `aidlc-state.ts`. Report outcomes through `aidlc-orchestrate.ts`; the engine's internal state call emits the atomic audit rows |
 
@@ -281,7 +267,7 @@ Progress: [N]/[total] overall | [phase-N]/[phase-total] [Phase] stages complete.
 ```
 
 Count only current-phase stages. Include completed and skipped in numerator.
-Example: `Progress: 13/33 overall | 3/7 IDEATION stages complete. Next: Approval & Handoff`
+Example: `Progress: 13/32 overall | 3/7 IDEATION stages complete. Next: Approval & Handoff`
 
 ---
 
@@ -456,7 +442,7 @@ Before beginning any stage, transition sidebar tasks:
 2. Current stage task -> mark `in_progress` with `activeForm: "Running [Stage Name]"`
 
 Rules: task must be `in_progress` for spinner to display. Update BEFORE
-reading stage file. Applies to all 33 stages. If task IDs lost (compaction),
+reading stage file. Applies to all 32 stages. If task IDs lost (compaction),
 use `TaskList` to find by subject. For skipped stages:
 `TaskUpdate({ taskId: [ID], status: "completed", description: "[original] -- Skipped: [reason]" })`
 
@@ -565,7 +551,7 @@ Each stage specifies lead and optional support agents. Personas load through
 a 6-step knowledge order building from broad context to stage-specific
 artifacts.
 
-*(Static protocol: `stage-protocol.md`, Section 5)*
+*(Protocol Section 5)*
 
 ### 6-Step Knowledge Loading Order
 
@@ -597,8 +583,6 @@ dynamic per workflow position.
 
 ### Multi-Agent Stages (Ensemble Topologies)
 
-*(Conditional module: `stage-protocol-ensemble.md`, Section 5)*
-
 *How* the conductor brings support agents in follows `directive.mode` — the stage's
 communication topology: on an `inline` stage the support agents are personas the
 conductor loads into its own context (voices, not dispatches); on `subagent`
@@ -612,7 +596,7 @@ them complete. Who sees what differs per topology — spokes are mutually blind,
 links see all upstream work, mob objectors get one confirm-or-maintain round while
 judgment-call objections surface to the human mid-stage — but on every topology the
 conductor performs every delegation; agents never spawn subagents. See
-`stage-protocol-ensemble.md` for the full contract.
+stage-protocol.md §5 "Multi-agent stages" for the full contract.
 
 Example: Feasibility uses `aidlc-architect-agent` (lead) + `aidlc-aws-platform-agent` +
 `aidlc-compliance-agent`, all inline. The mob showcase is `user-stories`: the
@@ -662,7 +646,7 @@ existence, then offers to resume from the last incomplete stage.
 | **Inception -- RE** | Per-repo RE artifacts at `aidlc/spaces/<active-space>/codekb/<repo>/`; ideation scope/feasibility |
 | **Inception -- Practices Discovery** | Preserve the lead draft and existing contribution files; dispatch only missing quality/developer/devsecops spokes, then continue with the human interview and lead integration |
 | **Inception -- Requirements** | Per-repo `codekb/` artifacts (if performed); requirements-analysis docs |
-| **Inception -- Design** | Requirements; user stories; domain-design docs |
+| **Inception -- Design** | Requirements; user stories; application-design docs |
 | **Inception -- Delivery Planning** | All inception artifacts; delivery-planning if partial |
 | **Construction -- Code Gen** | Current unit's design artifacts, story design, acceptance criteria, prior code |
 | **Construction -- Build/Test** | Current unit's code, test plans, acceptance criteria, build config |
@@ -749,7 +733,7 @@ Affect prior stages:
 
 New requirements or scope-level modifications:
 1. Document in the `audit/` shards
-2. Return to Requirements Analysis (2.3) or Delivery Planning (2.9)
+2. Return to Requirements Analysis (2.3) or Delivery Planning (2.8)
 3. Re-plan from that point
 4. If change affects stage selection (e.g., `poc` -> `feature`), use the
    scope/recompose command so the engine updates the plan atomically
@@ -792,30 +776,28 @@ and problem complexity.
 
 | Scope | Default Depth | Test Strategy | Typical Stages | Notes |
 |-------|--------------|---------------|---------------:|-------|
-| enterprise | Comprehensive | Comprehensive | 33 | All stages |
-| feature | Standard | Standard | 33 | All stages |
-| mvp | Standard | Standard | 23 | Skip all Operation |
+| enterprise | Comprehensive | Comprehensive | 32 | All stages |
+| feature | Standard | Standard | 32 | All stages |
+| mvp | Standard | Standard | 22 | Skip all Operation |
 | poc | Minimal | Minimal | ~8 | Initialization + Ideation + core Inception |
 | bugfix | Minimal | Minimal | ~8 | Targeted |
 | refactor | Minimal | Minimal | 8 | Targeted |
 | infra | Standard | Standard | ~13 | Infra-focused |
 | security-patch | Minimal | Minimal | ~10 | Security-focused |
-| classic | Standard | Standard | 26 | Default v1-style lifecycle without Ideation |
-| workshop | Standard | Minimal | 26 | Facilitated lifecycle with teaching test floor |
-| express | Minimal | Minimal | 10 | Requirements to conditional deploy, reviewers disabled |
+| workshop | Standard | **Minimal** | 25 | Standard depth for learning; Nyquist testing for pace |
 
 User can override depth or test strategy at any approval gate.
 
 ### Three Depth Levels
 
-**Minimal** (poc, bugfix, refactor, security-patch, express) -- minimal artifacts,
+**Minimal** (poc, bugfix, refactor, security-patch) -- minimal artifacts,
 brief analysis, skip optional stages:
 - Requirements: 5-10 items, brief descriptions, minimal NFRs
 - App Design: single component diagram, basic data model, no ADRs
 - Functional Design: brief business rules, simple entities, skip
   `frontend-components.md`
 
-**Standard** (feature, mvp, infra, classic, workshop) -- full artifacts at moderate detail:
+**Standard** (feature, mvp, infra) -- full artifacts at moderate detail:
 - Requirements: 15-30 with acceptance criteria, moderate NFRs
 - App Design: component diagrams with interactions, relationships, 2-3 ADRs
 - Functional Design: detailed business logic, comprehensive rules, entity
@@ -840,7 +822,7 @@ brief analysis, skip optional stages:
 | **AI-DLC** | AI-Driven Development Life Cycle -- the methodology this system implements |
 | **Phase** | Top-level grouping: Initialization, Ideation, Inception, Construction, Operation |
 | **Stage** | A discrete step within a phase (e.g., Intent Capture, Code Generation) |
-| **Scope** | Controls which stages execute and at what depth (enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, classic, workshop, express) |
+| **Scope** | Controls which stages execute and at what depth (enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, workshop) |
 | **Depth** | Artifact detail scale: Minimal, Standard, or Comprehensive |
 | **Unit of Work** | An independently implementable package of features; the Construction iteration unit. One pass through stages 3.1-3.7. |
 | **Service** | A deployable process or container (API server, worker, frontend app) |
@@ -907,7 +889,7 @@ Reference patterns:
 When a subagent completes, it must return a structured summary to the
 conductor to ensure no context is lost.
 
-*(Conditional module: `stage-protocol-ensemble.md`, Section 11)*
+*(Protocol Section 11)*
 
 ### Required Format
 
@@ -953,95 +935,30 @@ artifacts and before the §13 Learnings Ritual and the approval gate. The stage
 ritual sequence in full: questions → artifact → reviewer (if declared) →
 learnings → gate.
 
-*(Conditional module: `stage-protocol-reviewer.md`, Section 12a)*
+*(Protocol Section 12a)*
 
-The directive's `review_class` field selects the contract, resolved by the
-engine from three inputs (low-wins): the stage's declared class, the active
-scope's `review_cap`, and any per-run `--review` override. A `none` resolution
-omits the reviewer block entirely and the stage runs reviewless.
-
-1. **Invoke.** Before every dispatch - the first, a NOT-READY re-invoke, or a
-   re-review after a Part 0 gate-rejection revision - the conductor first
-   deletes any existing `## Review` section on the primary artifact: review
-   history lives in the audit ledger, and a leftover section (in the worst
-   case a pre-revision `READY`) is exactly what a re-review that is itself
-   cut off before writing would be misread against. With the delete rule,
-   "no current `## Review` section" means "incomplete review" uniformly on
-   every path. The conductor then delegates to the agent named in
-   `directive.reviewer`, passing the stage definition path, the Q&A file, the
-   produced artifact paths, and any validation tools from frontmatter - never
-   the builder's `memory.md` or plan, so the reviewer forms independent
-   judgment.
-2. **Review.** An `adversarial` review runs under the adversarial review contract:
-   the reviewer tries to refute the artifact rather than confirm it, grounding
+1. **Invoke.** Delegate to the agent named in `directive.reviewer`, passing the
+   stage definition path, the Q&A file, the produced artifact paths, and any
+   validation tools from frontmatter — never the builder's `memory.md` or plan, so
+   the reviewer forms independent judgment.
+2. **Review.** The review runs under the adversarial review contract: the
+   reviewer tries to refute the artifact rather than confirm it, grounding
    findings in machine-checkable evidence where it exists (READY is the verdict
-   it fails to reach, not the default). An `advisory` review keeps the
-   evidence-grounding rule but is a single normal-flow decision-support pass: findings are
-   ranked by severity for the human at the gate, with no repair loop behind
-   them. Either way the reviewer reads the definition, Q&A, and artifacts, runs
-   any listed validation tools, and appends exactly ONE `## Review` section to
-   the primary artifact with exactly one verdict line: **READY** or
-   **NOT-READY**. The reviewers run under a hard turn budget (`maxTurns: 60`),
-   authored once in the persona frontmatter and enforced natively where the
-   harness has a lever: Claude Code reads the key verbatim (the sub-agent is
-   stopped mid-task, no final-message turn) and the opencode packager projects
-   it to the native per-agent `steps: 60` (the runner grants one final
-   text-only turn - a summary can return, but no tool call can write the
-   review). Codex TOML personas, Cursor, Copilot, and Kiro CLI/IDE expose no
-   per-agent cap key, so there the budget is persona prose only (the personas'
-   `## Turn Budget` section plans for the worst-case cutoff on every harness).
-3. **Verdict.** On `advisory`, both verdicts are terminal in normal flow: the workflow proceeds
-   to the learnings ritual and the gate, where the findings are quoted verbatim
-   for the human to triage (`reviewer_max_iterations` is 1, engine-enforced).
-   On `adversarial`: READY → proceed to the learnings ritual then the gate.
-   NOT-READY with iterations remaining below `reviewer_max_iterations` (default
-   2) → the lead agent re-runs to address the findings and the reviewer
-   re-checks. NOT-READY with iterations exhausted → proceed to the gate with the
-   unresolved findings noted.
-   A verdict only counts when it parses: exactly ONE current `## Review`
-   section with exactly one canonical verdict token. A missing section (a
-   capped or crashed reviewer is stopped without writing one - step 1 deletes
-   any prior section before every dispatch, so a leftover can never stand in
-   for it), a section without a canonical verdict line, or duplicated
-   sections/verdicts is an INCOMPLETE attempt: the conductor retries the same
-   unmatched request once with `--retry-pending` (no iteration consumed - an
-   advisory normal-flow budget is exactly one pass, so a counted cut-off would exhaust it
-   without any review happening), and a second incomplete attempt records the
-   terminal receipt `--verdict NOT-READY` with the finding "review did not
-   complete within its turn budget" - the gate is reached with a concrete
-   finding, never presented on (or deadlocked by) a silently missing verdict.
-   On `adversarial` with iterations remaining the re-invoke skips the lead
-   (the artifact was never reviewed; there is nothing for the builder to act
-   on).
-   The recorded receipt is terminal whenever no further review pass follows it:
-   any later write to a `produces[]` artifact invalidates it and the engine
-   refuses the gate, so fixes happen inside the iteration loop, never after the
-   terminal receipt. Suggestions riding on a verdict are quoted at the gate for
-   the human, not applied.
+   it fails to reach, not the default). The reviewer reads the definition, Q&A,
+   and artifacts, runs any listed validation tools, and appends a `## Review`
+   section to the primary artifact with a **READY** or **NOT-READY** verdict.
+3. **Verdict.** READY → proceed to the learnings ritual then the gate. NOT-READY
+   with iterations remaining below `reviewer_max_iterations` (default 2) → the lead
+   agent re-runs to address the findings and the reviewer re-checks. NOT-READY with
+   iterations exhausted → proceed to the gate with the unresolved findings noted.
+   The recorded receipt is terminal: any later write to a `produces[]` artifact
+   invalidates it and the engine refuses the gate, so fixes happen inside the
+   iteration loop, never after the terminal receipt. Suggestions riding on a READY
+   verdict are quoted at the gate for the human, not applied.
 
-The iteration budget is engine-enforced: `aidlc-log.ts review` refuses a
-`REVIEW_REQUESTED` whose `--iteration` exceeds the stage's effective budget, so
-a conductor that loses count cannot run unbounded review passes. The only
-exception is a terminal receipt invalidated by a later `produces[]` write: the
-first request after stale evidence is exactly one marked recovery request at
-the next ordinal, even when normal adversarial budget remained. Either
-recovery verdict is terminal; a second invalidation requires human reset
-instead of another request. Autonomous Units halt before `finalize` and
-restart their Bolt attempt only after a human decision. The reviewer
-never blocks — the human always has final say at the gate — and does not fire
-for stages without a `reviewer` field. See the `reviewer` /
-`reviewer_max_iterations` / `review_class` frontmatter fields in
-[Stage Definition](15-stage-definition.md).
-
-If reviewer dispatch fails, times out, ends the session after
-`REVIEW_REQUESTED` but before a verdict, or returns an incomplete attempt (no
-current `## Review` section, or no single canonical verdict), rerun the same
-request command with `--retry-pending` before dispatching again - at most once
-per request; a second incomplete attempt records the terminal `NOT-READY`
-receipt instead. The logger accepts this recovery only for the same unmatched
-request, records `Retry: pending-request`, and does not consume another
-iteration. A completed request cannot be retried; stale-receipt recovery is a
-distinct request at the next ordinal.
+The reviewer never blocks — the human always has final say at the gate — and does
+not fire for stages without a `reviewer` field. See the `reviewer` /
+`reviewer_max_iterations` frontmatter fields in [Stage Definition](15-stage-definition.md).
 
 ---
 

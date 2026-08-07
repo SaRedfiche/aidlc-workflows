@@ -27,11 +27,11 @@ bun install --frozen-lockfile
 
 ```
 core/                # Hand-authored, harness-neutral source (tools, stages, agents, rules, knowledge, hooks)
-harness/<name>/      # Per-harness authored surfaces; claude/, kiro/, kiro-ide/, codex/, opencode/, copilot/
-scripts/package.ts   # The build: regenerates dist/<harness>/ from core/ + harness/ (`--check` drift-guards it)
+harness/<name>/      # Per-harness authored surfaces; claude/, kiro/, kiro-ide/, codex/, opencode/
+scripts/package.ts   # The build: regenerates dist/ + dist-release/ from core/ + harness/ (`--check` guards both)
 scripts/build-binaries.ts # Release-only compiled CLI artifacts in ignored build/binaries/ after package --check
 scripts/package-release.ts # Release data archives, manifest, checksums, and installer
-dist/<harness>/      # GENERATED: dist/claude/, dist/kiro/, dist/kiro-ide/, dist/codex/, dist/opencode/, dist/copilot/ — never hand-edit
+dist/<harness>/      # GENERATED: dist/claude/, dist/kiro/, dist/kiro-ide/, dist/codex/, dist/opencode/ — never hand-edit
 dist-release/<harness>/ # GENERATED binary-invocation projections — never hand-edit
 tests/               # All-TypeScript test suite (t*.test.ts, run via bun)
 docs/                # Documentation
@@ -44,12 +44,12 @@ For the full architecture, see [reference/01-architecture.md](01-architecture.md
 
 ## Development Workflow
 
-1. **Fork and branch** from `main`, then run `bun install --frozen-lockfile`
+1. **Fork and branch** from `v2` (the integration branch and PR target), then run `bun install --frozen-lockfile`
 2. **Read the architecture** -- [reference/01-architecture.md](01-architecture.md) explains the execution model, agent delegation, and hook system
 3. **Understand the entry points** -- the deterministic engine `core/tools/aidlc-orchestrate.ts` (with exactly four subcommands: `next`, `continue`, `report`, and `park`; `continue` is internal steering transport) owns routing; the conductor `harness/claude/skills/aidlc/SKILL.md` is a thin forwarding loop that acts on its directives. For the normative engine / directive / conductor / swarm contract see [The Skill System](17-skill-system.md)
-4. **Make changes** -- Edit the harness-neutral source in `core/` (tools, stages, agents, hooks, rules, knowledge) or a harness surface in `harness/<name>/` (the orchestrator skill, settings). Then run `bun scripts/package.ts` to regenerate `dist/` — never hand-edit `dist/`, the drift guard (`package.ts --check`) will fail CI
+4. **Make changes** -- Edit the harness-neutral source in `core/` (tools, stages, agents, hooks, rules, knowledge) or a harness surface in `harness/<name>/` (the orchestrator skill, settings). Then run `bun scripts/package.ts` to regenerate both `dist/` and `dist-release/` — never hand-edit either generated root, because `package.ts --check` independently rebuilds and compares both
 5. **Test** -- Run `bun tests/run-tests.ts` before submitting
-6. **Submit** -- Open a PR against `main`
+6. **Submit** -- Open a PR against `v2`
 
 Release binary artifacts are not part of `dist/` and are not produced by the
 packager. After `bun scripts/package.ts --check` is clean, run
@@ -70,8 +70,21 @@ must target an installed project harness. Any failed gate fails the build.
 
 After the target binaries are present, `bun scripts/package-release.ts`
 packages the committed `dist-release/` projections into per-harness archives
-and emits `version.json`, `checksums.txt`, `install.sh`, and `install.ps1`. The generated flat
-directory is the contract consumed by the installer and `aidlc package`.
+and emits `version.json`, `checksums.txt`, `install.sh`, and `install.ps1`. The
+per-target `runtime/` directories are smoke-gate staging; release data archives
+are rebuilt from the committed native projections, not copied from those
+sidecars. `--require-release-matrix` requires all seven targets and a matching
+verification record for each binary. The generated flat directory is the
+contract consumed by the installer and `aidlc package`.
+
+The tag-triggered release workflow is deliberately candidate-preserving:
+verification and installer lint run first; target-native jobs produce binaries
+and evidence; `package-release.ts` runs once to create `release-candidate`;
+Unix/Windows lifecycle jobs consume that artifact; and the publish job downloads
+the same candidate, checks tag/version parity, runs `sha256sum -c`, publishes,
+and creates GitHub build-provenance attestations. Never rebuild or repackage in
+the publish job, because that would attest bytes the lifecycle jobs did not
+exercise.
 
 ## Testing
 
@@ -101,6 +114,44 @@ bash tests/run-tests.sh --e2e          # Workflow, worktree, and terminal journe
 
 For the full test strategy, stubs, and how to add new tests, see [reference/09-testing.md](09-testing.md).
 
+## Changing Dispatcher Routes
+
+`core/tools/aidlc.ts` is the registry for public, hidden, and host-only command
+routes. A new route must declare all policy dimensions rather than inheriting
+behavior accidentally:
+
+1. Set `projectRequirement`, `outputModes`, `visibility`, `networkPolicy`, and
+   `mutationScope`.
+2. Choose `pinPolicy` deliberately: `active` for machine lifecycle/management,
+   `inspect` for active-binary diagnosis and repair, or `pinned` for project
+   engine behavior.
+3. Map the route to an existing tool or add the tool to `TOOLS`; hooks,
+   statusline, adapters, and low-level delegates use route-only entries rather
+   than public aliases.
+4. Add route and policy assertions to
+   `tests/unit/t230-dispatcher-routes.test.ts`, including global-flag ordering
+   and compiled/dev parity when applicable.
+5. If authored prose invokes the command, use `{{INVOKE}}` or
+   `{{TOOL_PREFIX}}` so copy and native projections stay distinct. Regenerate
+   both channels and run the package drift guard.
+
+## Adding an Install-Mechanism Mutation
+
+Project and machine mutations in init, lifecycle, pinning, and plugin management
+must use `core/tools/aidlc-transaction.ts`. Build a `TransactionPlan` from
+root-relative, non-overlapping operations; include `expected` destination state
+and source hashes for copy/tree operations. Put semantic checks in
+`validateCandidates` or `validateCommitted`, not after a successful transaction
+returns. A committed validator failure is part of the transaction and therefore
+rolls back.
+
+Add fault-injection coverage before shipping: fail before/after staging,
+snapshot, commit, and committed validation as appropriate; assert every prior
+byte and mode is restored, the lock is released, and incomplete rollback leaves
+named recovery evidence. `t243-install-mechanism.test.ts` is the engine pattern;
+`t224-plugin-selection.test.ts` and `t242-plugin-state.test.ts` are project
+mutation examples.
+
 ## Adding a Utility Handler
 
 > **Before adding an audit event**, read [State Machine](12-state-machine.md). The chapter lists every event in the taxonomy, its emitter, and the "same-commit rule" — update the code AND the chapter's tables in the same PR, or the drift test will fail.
@@ -129,7 +180,7 @@ For handlers that benefit from agent reasoning (filesystem scanning, decision-ma
 2. **Statusline update** -- If the active intent's `aidlc-state.md` exists, temporarily set `Current Stage` to describe the running utility (e.g., `running health check`), then restore the original value when done. The `aidlc-statusline.ts` hook reads this field for the terminal status bar.
 3. **Audit logging** -- Invoke the appropriate native dispatcher route (for example, `aidlc __delegate utility <handler>` calling `appendAuditEntry` internally). Never hand-write `**Event**:` markdown blocks from LLM prose — see [State Machine: Forbidden patterns](12-state-machine.md).
 
-The `intent-create` handler is fully deterministic: all three init stages (workspace-scaffold, workspace-detection, state-init) run inside a single `aidlc-utility intent-create` call. The welcome message is rendered at session start via `companyAnnouncements` in `settings.json` and is not a stage.
+The `intent-birth` handler is fully deterministic: all three init stages (workspace-scaffold, workspace-detection, state-init) run inside a single `aidlc-utility intent-birth` call. The welcome message is rendered at session start via `companyAnnouncements` in `settings.json` and is not a stage.
 
 ## Adding a Scope
 
@@ -142,10 +193,9 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
    - `depth` (required): `Minimal` | `Standard` | `Comprehensive`.
    - `keywords` (optional): NL triggers for `/aidlc <freeform text>` auto-detection. Word-boundary matched, alphabetical-scope tie-break. Empty list opts out of inference.
    - `description` (optional): one-line summary rendered in `/aidlc --help` and in SKILL.md's compiled scope-table.
-   - `testStrategy` (optional): override test strategy independent of depth. Defaults to matching depth.
-   - `review_cap` (optional): `adversarial` | `advisory` | `none`. Caps stage review classes for this scope; absence means no scope-level lowering. The cap can lower but never raise a stage declaration. Autonomous swarm reviews are exempt.
+   - `testStrategy` (optional): override test strategy independent of depth (e.g. `Minimal` for workshop). Defaults to matching depth.
    - `runner` (optional): set `true` to include the scope in the default generated runner set.
-   - `freeform_default` (optional): set `true` to nominate this scope when the preferred core default (`classic`) is not enabled. At most one enabled scope may claim it; graph compilation rejects ambiguous selected plugin sets. Unknown explicit `AWS_AIDLC_DEFAULT_SCOPE` values still fail validation.
+   - `freeform_default` (optional): set `true` to nominate this scope when the preferred core default (`feature`/`poc`) is not enabled. At most one enabled scope may claim it; graph compilation rejects ambiguous selected plugin sets. Unknown explicit `AWS_AIDLC_DEFAULT_SCOPE` values still fail validation.
 
    The body is prose intent — "why these stages, why skip those". `validScopes()` derives from `.claude/scopes/*.md` presence, so the scope is valid the moment the file lands. Run `/aidlc --doctor` after editing to catch structural issues.
 
@@ -169,7 +219,7 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
 
 3. **Recompile + regenerate the scope-table** — `aidlc __delegate graph compile` transposes the `scopes:` tags into `tools/data/scope-grid.json`. Then `aidlc __delegate utility scope-table` prints the canonical Markdown region for SKILL.md's compiled scope table. Keep the region between the `<!-- BEGIN: compiled ... -->` / `<!-- END: compiled ... -->` markers generated, then run `aidlc __delegate graph compile --check` and `aidlc __delegate utility scope-table --check` to confirm exit 0 (no drift).
 
-4. **Verify the scope resolves** - `aidlc __delegate utility intent-create --scope hotfix --project-dir /tmp/scope-smoke` should succeed and produce a state file with `Scope: hotfix`.
+4. **Verify the scope resolves** - `aidlc __delegate utility intent-birth --scope hotfix --project-dir /tmp/scope-smoke` should succeed and produce a state file with `Scope: hotfix`.
 
 5. **Verify `doctor` accepts it as an env default** — `AWS_AIDLC_DEFAULT_SCOPE=hotfix aidlc doctor` should report the env var as valid.
 
@@ -251,7 +301,7 @@ Agent metadata (display name, example knowledge files) is read from each agent's
 
 2. **Verify the agent is discovered** — `bun -e "import { loadAgents } from 'core/tools/aidlc-lib.ts'; console.log(loadAgents().find(a => a.slug === '<slug>-agent'));"` should print the new agent's metadata.
 
-3. **Verify intent birth creates the space knowledge dir** — `aidlc __delegate utility intent-create --scope poc --project-dir /tmp/agent-smoke` should create the empty space-level `aidlc/knowledge/` directory (a sibling of the space's `intents/`). Birth does not seed per-agent subdirectories or READMEs — the team creates `aidlc/knowledge/<slug>-agent/` itself when it has content.
+3. **Verify intent birth creates the space knowledge dir** — `aidlc __delegate utility intent-birth --scope poc --project-dir /tmp/agent-smoke` should create the empty space-level `aidlc/knowledge/` directory (a sibling of the space's `intents/`). Birth does not seed per-agent subdirectories or READMEs — the team creates `aidlc/knowledge/<slug>-agent/` itself when it has content.
 
 4. **Verify the statusline renders** — seed a state file with `Active Agent: <slug>-agent` and invoke the statusline hook; the output should include the display name after the `--` separator.
 
@@ -282,7 +332,7 @@ When adding, removing, or renaming files, directories, commands, or flags:
 
 ## Submitting Changes
 
-1. Open a PR against `main` with a clear description of what changed and why
+1. Open a PR against `v2` with a clear description of what changed and why
 2. Ensure L1 tests pass: `bash tests/run-tests.sh`
 3. For hook changes: run `bash tests/run-tests.sh --unit`
 4. For integration tests: run `bash tests/run-tests.sh --integration` (requires `claude` CLI tool)

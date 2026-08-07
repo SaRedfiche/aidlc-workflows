@@ -30,12 +30,28 @@ integration** (so the integration level rides along on every local
 shows where each level sits conceptually — the profile flags below are how you
 actually select them.
 
-Native distribution coverage spans `t238-build-binaries.test.ts` and
-`t243-install-mechanism.test.ts`. t238 compiles and probes the standalone
-binary closure; t243 exercises archive rejection, transaction rollback and
-contention, project init/refresh, checksums, side-by-side lifecycle, pins,
-offline packages, and release projections. Release CI runs the target-matrix
-build lane in addition to the normal unit suite.
+Distribution coverage is split by contract:
+
+- `t145-packaging-parity.test.ts` proves that both committed projection
+  channels and the plugin projections match a clean packager run.
+- `t238-build-binaries.test.ts` compiles and probes the standalone binary
+  closure, including native routes, hooks/adapters, project mutation, and the
+  final installed layout with no `bun` on `PATH`.
+- `t242-plugin-state.test.ts` proves host inventory normalization, composition
+  hashes, transactional sync rollback, and ownership-safe prune.
+- `t243-install-mechanism.test.ts` covers archive rejection, the shared
+  transaction engine and recovery paths, project init/refresh ownership,
+  checksums, lifecycle, pins, offline packages, and copy/native projection
+  separation.
+- `t244-install-management.test.ts` covers machine configuration, update
+  discovery, installer harness selection, Windows lifecycle surfaces,
+  completions, and release-workflow candidate continuity.
+
+Release CI adds native smoke on Linux, macOS, and Windows, builds the seven
+target artifacts on their native runner architectures, executes musl probes,
+then consumes the same staged release candidate through Unix and Windows
+lifecycle journeys. Publishing re-verifies its checksums and attests the files;
+it does not rebuild the candidate.
 
 `tests/harness/release-fixture.ts` builds deterministic release directories
 from the generated projection manifests and can serve them locally with
@@ -64,7 +80,7 @@ Verifies the orchestrator's structural correctness without invoking the LLM. If 
 
 **What it tests:**
 - File existence, permissions, naming conventions (smoke)
-- Hook scripts (11 TypeScript via bun), stage frontmatter, knowledge inventory (unit)
+- All 17 hook sources through copy/native dispatch, stage frontmatter, knowledge inventory (unit)
 - Scope-stage mapping, graph consistency, stage I/O contract chains, protocol compliance (integration)
 - Stage output-to-step validation: all declared outputs referenced in instruction steps (integration, deterministic via the `aidlc-validate.ts` CLI tool)
 
@@ -105,7 +121,7 @@ The test suite runs on macOS, Linux, and Windows through the native Bun runner:
 bun tests/run-tests.ts [--ci | --all --debug -P 8]
 ```
 
-`bash tests/run-tests.sh ...` remains as a POSIX compatibility wrapper and delegates to the same TypeScript runner. At runtime this implementation's hooks, CLI tools, and test runner require `bun`; Bash is no longer the primary runner substrate.
+`bash tests/run-tests.sh ...` remains as a POSIX compatibility wrapper and delegates to the same TypeScript runner. Repository tests and copy-channel hooks/tools require `bun`; native release projections invoke hooks/tools through the self-contained `aidlc` binary. Bash is not the primary runner substrate.
 
 **Portability constraints baked into the suite:**
 
@@ -224,7 +240,7 @@ from disk reds the gate.
 |---------|-------|---------|-------|
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
 | CI pipeline | L2 | `bun tests/run-tests.ts --ci` | CI/CD pipeline |
-| Release / merge to main | L3 | `bun tests/run-tests.ts --release` | CI/CD pipeline |
+| Release / merge to `v2` | L3 | `bun tests/run-tests.ts --release` | CI/CD pipeline |
 
 L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`.
 

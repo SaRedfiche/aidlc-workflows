@@ -16,14 +16,14 @@ This chapter covers common issues and their solutions, organized by symptom.
 
 | Symptom | Quick Fix |
 |---------|-----------|
-| No audit entries appearing | Verify `bun` is installed and on PATH |
+| No audit entries appearing | Run `aidlc doctor`; for a copy install, also verify `bun` is on the hook PATH |
 | State file corrupted | Run `/aidlc --doctor`, compare against state template |
 | Stuck at approval gate | Type your response; use `/aidlc --stage <target>` to jump past it |
 | Context compacted mid-session | Run `/aidlc` to resume from checkpoint |
 | Audit log too large | Rename to `audit-YYYY-MM.md`; a fresh one is created automatically |
 | Hooks appear to hang | Remove stale lock dirs from system temp directory (see below) |
 | Statusline shows "ready" | Check `aidlc-state.md` has a `**Lifecycle Phase**` field |
-| Statusline not appearing | Verify `bun` is on PATH and `settings.json` `statusLine.command` references `aidlc-statusline.ts` |
+| Statusline not appearing | Run `aidlc doctor`; for a copy install, verify `bun` is on PATH |
 | Subagent timed out | Run `/aidlc` to retry or run the stage inline |
 | Workflow stuck or misbehaving, need help | Run `/aidlc --doctor --export` and share the produced `.tar.gz` (redacted; no work product) |
 
@@ -35,17 +35,29 @@ This chapter covers common issues and their solutions, organized by symptom.
 |------------------|------------|
 | `Checksum mismatch for <asset>.` or `<asset>: checksum mismatch` | Stop. Do not reuse the downloaded directory. Download the release assets and `checksums.txt` again from the same version, or have the owner of an offline package recreate it with `aidlc package create`. |
 | `command not found: aidlc` after `install.sh` | Add the installer-reported bin directory to `PATH` (normally `export PATH="$HOME/.local/bin:$PATH"`), open a new shell, and run `aidlc doctor`. |
+| Installer says `a harness is required in non-interactive installs` | Rerun with literal `--harness <name>`. It is required without a controlling terminal and whenever `--yes`, `--quiet`, or `--json` is used. |
+| `--offline requires --from <release-directory>` | Offline mode never falls back to a network release. Transfer a package created by `aidlc package create`, verify it, then pass its directory with `--from` / `-From`. |
 | `aidlc.cmd` exits 4 or the Windows active pointer is invalid | Do not edit `%LOCALAPPDATA%\aidlc\active-executable`. Rerun the same verified `install.ps1 --harness <name>` or use `aidlc rollback --version <retained-version>` from a retained executable. |
 | `pending Windows uninstall` or a Windows uninstall recovery failure | Close active AI-DLC commands and run `aidlc doctor`. A valid continuation resumes on the next command; do not delete its temp journal, cleanup script, or machine fence independently. |
-| `locally modified or unowned` or `managed block was locally modified` from `aidlc init` | Run `aidlc init --dry-run --verbose` and review every conflict. Use `--force` only to replace framework-owned bytes; it never authorizes deletion of unrelated project content. |
+| `refusing to refresh while ... workflow(s) are active` | Complete every named workflow, including parked workflows, then rerun init. `--force`, `--yes`, and a plan token cannot bypass this guard. Upgrade or rollback may proceed because they do not modify projects. |
+| `init plan changed after approval` | Rerun `aidlc init --dry-run --json`, review `data.actions`, and apply the new `data.planToken` with exactly the same source and behavior options. |
+| `locally modified` or `managed block was locally modified` from `aidlc init` | Run `aidlc init --dry-run --json` and review `data.actions`. Use `--force` only to replace baseline-owned framework bytes or managed blocks; it never authorizes unrelated root content. |
+| `unowned whole file` from `aidlc init` | Move or merge the existing file manually before init. Whole-file integrations such as OpenCode's `opencode.json` cannot be claimed with `--force`. |
 | `legacy root integration ambiguous; move or delete the unmarked AI-DLC content` | Move or delete the old unmarked AI-DLC block in the named root file, preserve any project-owned text elsewhere, then rerun `aidlc init`. This release intentionally refuses to guess ownership. |
 | `managed markers are missing, duplicated, or malformed` | Repair the named root file so it has exactly one matching `BEGIN AI-DLC` / `END AI-DLC` pair, or remove the broken AI-DLC block and rerun `aidlc init`. |
 | `project runtime <version> is incompatible with selected engine <version>` | Install and select a compatible retained version with `aidlc versions install <version>` and `aidlc use <version>`, or refresh the project intentionally with `aidlc init`. |
+| `this project requires <version>, which is not installed completely` | Install the exact strict-semver pin with `aidlc versions install <version> --harness <project-harness>`. Do not edit the pin to make the error disappear unless the team intends to change toolchains. |
 | An upgrade was interrupted and `aidlc version` still shows the prior release | This is the safe pre-pointer state: the old command remains active. Run `aidlc doctor`, then rerun the same `aidlc upgrade --version <version>` command. A complete unused retained version may remain and is reported by `aidlc versions list`. |
+| `rollback target lacks harnesses` | Choose a retained version containing every harness in the active release. Inspect candidates with `aidlc rollback --list` and their harness sets with `aidlc versions list`. |
 | `another AI-DLC mutation holds .../.aidlc-transaction.lock` | Let the active init/lifecycle command finish. If its process no longer exists, rerun the command; stale owner-private staging is swept only after the lock is safely reclaimed. |
-| `existing aidlc is managed by Homebrew` / `Nix`, or the destination command is `not owned by the AI-DLC installer` | Upgrade through the reported package manager. To keep a separate native install, set `AIDLC_BIN_DIR` explicitly to an empty user-owned directory. Never replace a mixed-ownership command in place. |
-| `update cache is invalid` or machine config is rejected | Run `aidlc config global list`. Repair or remove only the named `%LOCALAPPDATA%\aidlc\config.json` (Windows) or `~/.local/share/aidlc/config.json` (macOS/Linux); unknown keys and stored credentials are rejected. |
-| `versions prune`, `harness remove`, or `uninstall` requires `--yes` | The command is running without an interactive stdin. Review the listed removals, then rerun with `--yes`; integrity refusals cannot be bypassed. |
+| `existing aidlc is managed by Homebrew` / `Nix`, or the destination command is `not owned by the AI-DLC installer` | Upgrade through the reported owner. To keep a separate native install, set `AIDLC_BIN_DIR` explicitly to an empty user-owned directory. This release does not itself ship Homebrew or Nix packaging and never replaces a mixed-ownership command. |
+| `update cache is invalid` or machine config is rejected | Run `aidlc config global list`. Repair or remove only the named `%LOCALAPPDATA%\aidlc\config.json` (Windows) or `${XDG_DATA_HOME:-$HOME/.local/share}/aidlc/config.json` (macOS/Linux); unknown keys and stored credentials are rejected. |
+| `HTTPS_PROXY must use HTTP or HTTPS` or a release URL is rejected | Use an HTTP(S) proxy URL and an HTTPS release mirror without credentials, query, or fragment. The native client reads `HTTPS_PROXY` and `NO_PROXY`, not `HTTP_PROXY`, and redacts secret-like URL parts in errors. |
+| Download fails behind a corporate CA | Pass `--ca-bundle <absolute-path>` or set `AIDLC_CA_BUNDLE`. The Windows bootstrap requires `curl.exe` when a custom CA is supplied. |
+| `host inventory unavailable` from a plugin command | Run sync from a host session that injects the current plugin root, or restore the Claude/Codex host registry. Missing or malformed inventory is never treated as proof that content is safe to prune. |
+| `cannot prune <plugin>: owned path changed since composition` | Preserve and review the local edit. Reconcile it with the plugin source before retrying; `--yes` does not override ownership hashes. |
+| `versions prune`, `harness remove`, `uninstall`, or plugin prune requires `--yes` | The command is running without an interactive stdin. Review the listed removals, then rerun with `--yes`; integrity refusals cannot be bypassed. |
+| `aidlc setup` is unknown, or an npm install is unavailable | Those channels are planned but not shipped. Use the release installer plus `aidlc init`; do not treat proposal transcripts as available commands. |
 
 Native `aidlc doctor` also checks the active command pointer, rollback
 eligibility, retained pin completeness, stale pin registrations, abandoned
@@ -58,9 +70,18 @@ hooks and permission/trust entries consistently select the native command.
 
 **Symptom**: No entries appearing in the intent's `audit/` shards after file writes, or no subagent completion logs.
 
-### `bun` not installed or not on PATH
+### Native channel versus copy-channel Bun
 
-All 17 TypeScript hooks (`aidlc-record-human-turn.ts`, `aidlc-deliver-stage-rules.ts`, `aidlc-plan-approval-guard.ts`, `aidlc-state-transition-guard.ts`, `aidlc-reviewer-scope.ts`, `aidlc-review-freeze.ts`, `aidlc-write-audit-log.ts`, `aidlc-run-sensors.ts`, `aidlc-rebuild-stage-graph.ts`, `aidlc-fold-usage.ts`, `aidlc-log-subagent.ts`, `aidlc-continue-workflow.ts`, `aidlc-validate-state.ts`, `aidlc-sync-workflow-state.ts`, `aidlc-session-start.ts`, `aidlc-session-end.ts`, `aidlc-statusline.ts`) require `bun`. If `bun` is missing or not on PATH for non-interactive shells, these hooks will not fire.
+Native projects route all 17 hook sources through the self-contained `aidlc`
+binary and do not require Bun. Run `aidlc doctor` to verify the active command
+pointer and native host wiring.
+
+Copied `dist/<harness>/` projects still execute the TypeScript hook files with
+Bun. If Bun is missing from the PATH seen by non-interactive host processes,
+those hooks do not fire. The roster includes mint-presence, dispatch-rules,
+state-transition, reviewer-scope, review-freeze, plan-approval, audit, sensor,
+runtime compile, token-usage fold, subagent, stop, state validation, statusline
+sync, session start/end, and the statusline command.
 
 ```bash
 # macOS / Linux
@@ -74,19 +95,23 @@ npm install -g bun
 bun --version
 ```
 
-Ensure `bun` is on your PATH in `~/.zshenv` (zsh), `~/.bashrc` (bash / Git Bash on Windows) -- not just `~/.zshrc`. On native Windows PowerShell, the system PATH entry set by `npm install -g bun` is sufficient.
+For a copy install, ensure `bun` is on the PATH inherited by the host, such as
+`~/.zshenv` for zsh or `~/.bashrc` for bash and Git Bash, not only an
+interactive-shell file. On native Windows PowerShell, the system PATH entry
+set by `npm install -g bun` is sufficient.
 
 ### Reviewer tool calls refused ("reviewer read-scope: ...")
 
-During a per-unit Construction review, the reviewer-scope hook refuses the dispatched reviewer's tool calls that reach into sibling units' `construction/` paths (the stage-protocol-reviewer.md §12a read-scope bound); the refusal message names the scoped unit and the passed contract paths, and each refusal records a `REVIEWER_SCOPE_BLOCKED` audit row. If your own source tree contains a `construction/` directory unrelated to AI-DLC units (so legitimate reviewer reads are being refused), set `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` to disable enforcement; the prose bound still governs. A reviewer being refused with NO review in flight means a stale dispatch record - check `/aidlc --doctor`'s hook-drop counters (`reviewer-scope.drops`) and delete `<record>/.aidlc-reviewer-dispatch.json` if present (records older than 6 hours are ignored and cleaned automatically).
-
-### Statusline shows a cost segment you don't want (or usage tracking concerns)
-
-On Claude Code, per-stage token usage and cost tracking is on by default: the fold-usage hook records transcript usage into a gitignored local ledger (`aidlc/.aidlc-sessions/usage-ledger.json`), the statusline appends `↑<in> ↓<out> $<usd>`, and completion audit events carry cost rollups. Nothing is transmitted anywhere (metrics emission is separately opt-in via `AIDLC_METRICS_ENDPOINT`). To turn all local tracking off, set `AIDLC_DISABLE_USAGE_TRACKING=1`: the ledger stops updating, the statusline segment disappears, and completion events add no rollup fields. An existing ledger is left on disk; delete it manually if you also want the history gone. Unsetting the flag resumes tracking.
+During a per-unit Construction review, the reviewer-scope hook refuses the dispatched reviewer's tool calls that reach into sibling units' `construction/` paths (the stage-protocol §12a read-scope bound); the refusal message names the scoped unit and the passed contract paths, and each refusal records a `REVIEWER_SCOPE_BLOCKED` audit row. If your own source tree contains a `construction/` directory unrelated to AI-DLC units (so legitimate reviewer reads are being refused), set `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` to disable enforcement; the prose bound still governs. A reviewer being refused with NO review in flight means a stale dispatch record - check `/aidlc --doctor`'s hook-drop counters (`reviewer-scope.drops`) and delete `<record>/.aidlc-reviewer-dispatch.json` if present (records older than 6 hours are ignored and cleaned automatically).
 
 ### Hook not configured
 
-Hooks are registered project-wide in `.claude/settings.json` (as of v0.6.0; earlier versions declared the workflow-spine hooks in the SKILL.md frontmatter). Verify that `settings.json` contains a `hooks` block with `PreToolUse`, `PostToolUse`, `PreCompact`, `SubagentStop`, and `Stop` entries (plus `SessionStart`/`SessionEnd`). If you took an upgrade that moved these and your on-disk `settings.json` predates it, re-copy the shipped `settings.json` hooks block.
+Hooks are registered project-wide in the harness's native configuration. On
+Claude, verify that `.claude/settings.json` contains the expected `hooks`
+events and `statusLine`. For a native project, complete active workflows and
+run `aidlc init` to reconcile framework-owned wiring. For a copy install,
+re-copy the complete current `dist/<harness>/` projection while preserving
+project root integrations; do not patch one hook command in isolation.
 
 ---
 
@@ -236,9 +261,10 @@ Expected behavior — the statusline updates when the state file is next written
 
 ### Not appearing at all
 
-1. `bun` not on PATH -- the statusline is invoked as `bun .claude/hooks/aidlc-statusline.ts`
-2. Missing `settings.json` block -- verify the `statusLine` configuration exists
-3. No state file -- the statusline correctly shows `[AIDLC] ready` when no workflow is active
+1. Run `aidlc doctor` and repair the reported native command or host wiring.
+2. On a copy install, verify Bun is on the host process PATH.
+3. On Claude, verify the `.claude/settings.json` `statusLine` entry exists.
+4. With no state file, `[AIDLC] ready` is the expected output.
 
 ---
 
@@ -250,7 +276,18 @@ The `--doctor` utility command validates your setup. Run it whenever something s
 /aidlc --doctor
 ```
 
-It checks: prerequisite (`bun`), hook availability (every hook `settings.json` wires — all 17 framework hooks — must exist in `.claude/hooks/`, and a wired-but-missing hook fails loudly), project structure (`settings.json`), workspace shell readiness (`.claude/` + `aidlc/spaces/default/memory/`), state/audit consistency, hook heartbeats, graph integrity (no cycles, every graph entry has a file), scope validation across all 11 scopes, stage schema + graph references, and keyword overlap across scopes. Passing advisory rows include **Rule drift**, **Paired sensor coverage**, uncommitted workspace records, and, when `repos.json` exists, declared-repo and managed-`.gitignore` drift. **Hook drops** is conditional: a hook that silently degraded (e.g. a plugin compose that could not apply a contribution, or a failed recompile) records a severity-tagged line to `<hooks-health>/<hook>.drops`; a `[degraded]` drop **fails** doctor (so a CI gate catches a half-applied plugin), while an `[advisory]` drop (an expected/benign condition) is a passing row. The plugin compose hook rewrites its drops file each run, so fixing the cause and re-composing self-clears it. Exits 0 on full pass, 1 on any failure; the report writes to stdout either way. `--doctor` is **read-only**: on a fresh shell with no intent yet it creates nothing — safe to run before the first intent is born, as the first thing you try when something seems off. Once an intent exists it records a `HEALTH_CHECKED` (and `GUARDRAIL_LOADED`) audit row.
+It checks the self-contained runtime (or Bun for a copy install), all 17
+framework hooks wired by the host, project structure, workspace shell,
+state/audit consistency, hook heartbeats, active command and rollback pointers,
+project pins and version skew, transaction recovery, update cache, plugin
+composition, graph integrity, scope and stage schemas, graph references, and
+keyword overlap. Passing advisory rows include **Rule drift**, **Paired sensor
+coverage**, uncommitted workspace records, and, when `repos.json` exists,
+declared-repo and managed-`.gitignore` drift. A `[degraded]` hook-drop row fails
+doctor; an `[advisory]` row remains passing. Exit is 0 on full pass, 1 on failed
+checks, or 2 for invalid machine configuration. The report writes to stdout.
+Doctor is read-only except for an explicitly allowed update-cache refresh and,
+once an intent exists, its normal health-check audit rows.
 
 When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** section listing structured findings (unresolved gates, a stale or missing runtime graph, cold hooks, and similar "it will not advance" causes) — the same analysis `--doctor --export` writes to its report.
 

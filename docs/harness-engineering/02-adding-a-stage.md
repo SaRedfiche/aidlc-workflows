@@ -122,12 +122,13 @@ covered in
 ### 4. Regenerate the harnesses, so `stage-graph.json` recompiles
 
 The YAML you just authored under `core/` is the authoritative source. Run the
-packager to regenerate every `dist/<harness>/` tree from `core/` — this copies
-your new stage file in and recompiles the graph:
+packager to regenerate both `dist/<harness>/` (Bun copy) and
+`dist-release/<harness>/` (native) from `core/` — this copies your new stage
+file into both channels and recompiles each graph:
 
 ```bash
-bun scripts/package.ts            # regenerate every harness from core/ + harness/
-bun scripts/package.ts --check    # the CI drift guard — run before committing
+bun scripts/package.ts            # regenerate both channels for every harness
+bun scripts/package.ts --check    # byte-check both channels before committing
 ```
 
 The runtime reads a compiled artifact, `<harness-dir>/tools/data/stage-graph.json`

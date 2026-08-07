@@ -8,8 +8,24 @@ from one harness-neutral `core/`, so it runs natively in the CLI harness you use
 The methodology is the *what*; each harness distribution is the *how* for one
 runtime, and every distribution is generated from the same source.
 
-New here? The [README](../README.md) has the install Quick Start and the
-"pick your harness" table. This page is the map of the documentation itself.
+New here? Start with the native installer and project initializer:
+
+```bash
+curl -fsSL https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh \
+  | bash -s -- --harness claude
+cd your-project
+aidlc init
+```
+
+Replace `claude` with `kiro`, `kiro-ide`, `codex`, or `opencode` as needed.
+The installer verifies published SHA-256 checksums; the resulting runtime needs
+no Bun, Node.js, or Git. Interactive runs may omit `--harness` and use the
+controlling-terminal picker, while automation must pass the literal flag. This
+runtime statement does not remove host prerequisites: Codex project hook
+discovery requires the target project to be a Git repository.
+[Getting Started](guide/01-getting-started.md) covers init, harness handoff,
+trust, refresh/version skew, Windows, and the source/development copy
+alternative. This page is the map of the documentation itself.
 
 ## Three guides, one per reader
 
@@ -27,13 +43,17 @@ versus **shaping**.
 
 ## Running on a specific harness
 
-The guides are harness-neutral; each harness's install steps and the handful of
-behaviours that differ live in [Running on other harnesses](guide/harnesses/README.md)
-(Claude Code is covered throughout the User Guide, whose examples run on it).
+The guides are harness-neutral; each harness's post-init step, trust behavior,
+and the handful of runtime differences live in
+[Running on other harnesses](guide/harnesses/README.md) (Claude Code is covered
+throughout the User Guide, whose examples run on it). After an upgrade,
+`aidlc doctor` reports project/runtime skew and `aidlc init` refreshes a project
+between workflows; refresh is refused while a workflow is active.
 
 ## Building and contributing
 
-Maintainers author in `core/` and regenerate the `dist/<harness>/` trees with
-`bun scripts/package.ts` — see the [Contributing Guide](reference/11-contributing.md)
-for the full build-and-test loop, and [Porting to a New Harness](harness-engineering/09-porting-to-a-new-harness.md)
+Maintainers author in `core/` and regenerate both `dist/<harness>/` and
+`dist-release/<harness>/` with `bun scripts/package.ts` — see the
+[Contributing Guide](reference/11-contributing.md) for the full build-and-test
+loop, and [Porting to a New Harness](harness-engineering/09-porting-to-a-new-harness.md)
 to add one.
