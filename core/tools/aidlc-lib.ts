@@ -2280,20 +2280,25 @@ function cloneId(projectDir: string): string {
 // the gate1 GATE_APPROVED -> refused. Stale (human turn long ago, then a fabricated
 // approve) likewise has the last resolution after the human turn -> refused.
 //
-// Ordering is CHRONOLOGICAL (Timestamp, then buffer position as the tiebreak),
-// matching findAllEvents: readAllAuditShards concatenates per-clone shards in
-// FILENAME order, so the raw buffer is NOT time-ordered across shards (a second
-// shard appears after a re-clone or on another machine) and a raw-position scan
-// could rank an OLD resolution from a lexically-later shard above a fresh
-// HUMAN_TURN. Within one shard the timestamps are non-decreasing and the position
-// tiebreak preserves append order, which is what makes same-second events (the
-// common case: one human turn drives mint + gate + resolution inside one second)
-// resolve by execution order. Fail-open when no ledger exists (no presence
-// tracking yet on this harness).
+// Ordering is CHRONOLOGICAL (Timestamp, then per-shard position as the SAME-SHARD
+// tiebreak): shards are per-clone files enumerated in FILENAME order (a second
+// shard appears after a re-clone or on another machine), so cross-shard position
+// carries no execution-order information. Within one shard the timestamps are
+// non-decreasing and the position tiebreak preserves append order, which is what
+// makes same-second events (the common case: one human turn drives mint + gate +
+// resolution inside one second) resolve by execution order. When a candidate
+// latest human turn shares one second-precision timestamp with ANY latest
+// resolution in a DIFFERENT shard, execution order is unknowable and the check
+// fails CLOSED (require a fresh turn) rather than let shard-filename order pick
+// a winner. Fail-open when no ledger exists (no presence tracking yet on this
+// harness).
 //
-// The resolution boundary is workflow-global (the most recent commit of ANY
-// gate), which is what makes a same-turn cascade across DIFFERENT stages refuse
-// correctly; there is no per-stage scoping.
+// The resolution boundary is workflow-global (the most recent gate approval,
+// rejection, answered question, summary confirmation, or autonomous grant).
+// This makes a same-turn cascade across DIFFERENT stages refuse correctly;
+// there is no per-stage scoping. AUTONOMY_MODE_SET only counts when its Mode is
+// autonomous because that grant consumes the human turn that unlocks downstream
+// presence carve-outs.
 const GATE_RESOLUTION_EVENTS = new Set([
   "GATE_APPROVED",
   "GATE_REJECTED",
@@ -2301,33 +2306,89 @@ const GATE_RESOLUTION_EVENTS = new Set([
   "SUMMARY_CONFIRMATION_RECORDED",
 ]);
 export function humanActedSinceGate(projectDir: string): boolean {
-  const audit = readAllAuditShards(projectDir);
-  if (audit.length === 0) return true; // no ledger → no presence tracking → fail open
-  const blocks = audit.replace(/\r\n/g, "\n").split(/\n---\n/);
-  const events: { ts: string; pos: number; human: boolean }[] = [];
-  for (let i = 0; i < blocks.length; i++) {
-    const ev = auditBlockField(blocks[i], "Event");
-    if (!ev) continue;
-    if (!GATE_RESOLUTION_EVENTS.has(ev) && ev !== "HUMAN_TURN") continue;
-    events.push({
-      ts: auditBlockField(blocks[i], "Timestamp") ?? "",
-      pos: i,
-      human: ev === "HUMAN_TURN",
-    });
+  // Per-shard reads (not the concatenated buffer): buffer position across
+  // shards is FILENAME order, not execution order, so it can only serve as an
+  // ordering tiebreak WITHIN one shard. Cross-shard same-second ties are
+  // genuinely unordered (isoTimestamp is second-precision) and fail closed
+  // below.
+  const shards = auditShards(projectDir);
+  const events: { ts: string; shard: number; pos: number; human: boolean }[] = [];
+  let ledgerBytes = 0;
+  for (let s = 0; s < shards.length; s++) {
+    let content: string;
+    try {
+      content = readFileSync(shards[s], "utf-8");
+    } catch {
+      continue; // a shard vanished between enumerate and read — skip it
+    }
+    ledgerBytes += content.length;
+    const blocks = content.replace(/\r\n/g, "\n").split(/\n---\n/);
+    for (let i = 0; i < blocks.length; i++) {
+      const ev = auditBlockField(blocks[i], "Event");
+      if (!ev) continue;
+      const isResolution =
+        GATE_RESOLUTION_EVENTS.has(ev) ||
+        (ev === "AUTONOMY_MODE_SET" &&
+          auditBlockField(blocks[i], "Mode") === "autonomous");
+      if (!isResolution && ev !== "HUMAN_TURN") continue;
+      events.push({
+        ts: auditBlockField(blocks[i], "Timestamp") ?? "",
+        shard: s,
+        pos: i,
+        human: ev === "HUMAN_TURN",
+      });
+    }
   }
-  events.sort((a, b) => {
-    if (a.ts !== b.ts) return a.ts < b.ts ? -1 : 1;
-    return a.pos - b.pos;
-  });
-  let lastResolution = -1;
-  let lastHuman = -1;
-  for (let i = 0; i < events.length; i++) {
-    if (events[i].human) lastHuman = i;
-    else lastResolution = i;
-  }
-  // A human turn appears after the last gate resolution (or there is a human turn
-  // and no resolution yet) => a fresh human acted this turn => allow.
-  return lastHuman > lastResolution && lastHuman !== -1;
+  if (ledgerBytes === 0) return true; // no ledger → no presence tracking → fail open
+  const humans = events.filter((event) => event.human);
+  if (humans.length === 0) return false; // no human turn on record
+  const resolutions = events.filter((event) => !event.human);
+  if (resolutions.length === 0) return true;
+
+  const latestHumanTimestamp = humans.reduce(
+    (latest, event) => (event.ts > latest ? event.ts : latest),
+    "",
+  );
+  const latestResolutionTimestamp = resolutions.reduce(
+    (latest, event) => (event.ts > latest ? event.ts : latest),
+    "",
+  );
+  if (latestHumanTimestamp > latestResolutionTimestamp) return true;
+  if (latestHumanTimestamp < latestResolutionTimestamp) return false;
+
+  // At equal second-precision timestamps, one turn must be provably after EVERY
+  // latest resolution. A same-shard append position proves that order; a
+  // resolution in any other shard remains unordered and therefore consumes the
+  // candidate turn fail-closed.
+  const latestHumans = humans.filter(
+    (event) => event.ts === latestHumanTimestamp,
+  );
+  const latestResolutions = resolutions.filter(
+    (event) => event.ts === latestResolutionTimestamp,
+  );
+  return latestHumans.some((human) =>
+    latestResolutions.every(
+      (resolution) =>
+        resolution.shard === human.shard && resolution.pos < human.pos,
+    )
+  );
+}
+
+// A cancelled / auto-resolved structured-question widget is NOT a human
+// answer. Harnesses that auto-complete a dismissed question hand the conductor
+// a completed-looking object whose answer text is cancellation boilerplate
+// ("Cancelled", "user dismissed", a timeout marker) — logging that as
+// QUESTION_ANSWERED or passing it as an approval choice would launder a
+// non-decision into human authority AND consume the turn's HUMAN_TURN. The
+// vocabulary is deliberately tight (cancellation/dismissal/timeout semantics
+// only): a substantive answer that merely CONTAINS these words ("cancel the
+// standing order") does not match, because the whole trimmed string must be
+// the cancellation phrase.
+const NON_ANSWER_RE =
+  /^(?:cancel(?:led|ed)?|cancellation|dismiss(?:ed)?|abort(?:ed)?|timed?[ -]?out|timeout|no (?:answer|response)|(?:user|question) (?:cancel(?:led|ed)|dismissed))[.!]?$/i;
+export function isNonAnswer(text: string | undefined | null): boolean {
+  const t = (text ?? "").trim();
+  return t.length === 0 || NON_ANSWER_RE.test(t);
 }
 
 // True when any stage sits at [?] (awaiting-approval) in the state file: the
@@ -2830,6 +2891,51 @@ export function readAllAuditShards(projectDir: string, intent?: string, space?: 
     }
   }
   return parts.join("\n");
+}
+
+export interface AuditShardEvent {
+  block: string;
+  event: string;
+  pos: number;
+  shard: string;
+  shardIndex: number;
+  timestamp: string;
+}
+
+// Preserve shard identity while parsing audit rows. A concatenated audit buffer
+// can preserve append order only within one shard; equal second-precision
+// timestamps across shards are causally unordered and must not be resolved by
+// filename position when authority or attempt freshness depends on the result.
+export function readAuditShardEvents(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): AuditShardEvent[] {
+  const rows: AuditShardEvent[] = [];
+  const shards = auditShards(projectDir, intent, space);
+  for (let shardIndex = 0; shardIndex < shards.length; shardIndex++) {
+    let content: string;
+    try {
+      content = readFileSync(shards[shardIndex], "utf-8");
+    } catch {
+      continue;
+    }
+    const blocks = content.replace(/\r\n/g, "\n").split(/\n---\n/);
+    for (let pos = 0; pos < blocks.length; pos++) {
+      const event = auditBlockField(blocks[pos], "Event");
+      const timestamp = auditBlockField(blocks[pos], "Timestamp");
+      if (!event || !timestamp) continue;
+      rows.push({
+        block: blocks[pos],
+        event,
+        pos,
+        shard: shards[shardIndex],
+        shardIndex,
+        timestamp,
+      });
+    }
+  }
+  return rows;
 }
 
 export function worktreePath(projectDir: string, boltSlug: string): string {
@@ -3608,6 +3714,12 @@ export function worktreeRuntimeGraphPath(wtPath: string, recordPrefix?: string |
 // regex.
 export const BOLT_SLUG_REGEX = /^[a-z][a-z0-9-]*$/;
 export const BOLT_SLUG_MAX_LENGTH = 64;
+// New workflows author lowercase kebab-case names, but pre-lifecycle DAGs
+// accepted other filesystem-safe names. Keep those existing identifiers
+// routable while still excluding separators, traversal, whitespace, and
+// control characters.
+export const UNIT_NAME_REGEX = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+export const UNIT_NAME_MAX_LENGTH = 64;
 
 // --- Error helpers (catch-block discipline) ---
 //
@@ -3767,6 +3879,69 @@ export function validateBoltSlug(slug: string): string | null {
     return `Invalid Bolt slug "${slug}" — must match ${BOLT_SLUG_REGEX} (lowercase letter, then lowercase letters/digits/hyphens)`;
   }
   return null;
+}
+
+// Unit names become path components under construction/<unit>/ and are also
+// mirrored into single-line state fields. Keep one canonical validator for the
+// authored DAG, cached runtime graph, and lifecycle CLI. Lowercase kebab-case is
+// the authoring convention; leading digits, uppercase letters, underscores,
+// and dots remain accepted for safe legacy DAG names.
+export function validateUnitName(name: string): string | null {
+  if (!name) return "Unit name is empty";
+  if (name.length > UNIT_NAME_MAX_LENGTH) {
+    return `Unit name "${name.slice(0, 32)}..." is ${name.length} chars; max is ${UNIT_NAME_MAX_LENGTH}`;
+  }
+  if (!UNIT_NAME_REGEX.test(name)) {
+    return (
+      `Invalid Unit name "${name}" - must match ${UNIT_NAME_REGEX} ` +
+      "(ASCII letter/digit, then ASCII letters/digits/dot/underscore/hyphen)"
+    );
+  }
+  return null;
+}
+
+// The autonomous swarm composes Bolt/worktree primitives whose slug contract is
+// deliberately narrower than the legacy Unit-name contract. Preserve modern
+// lowercase kebab names byte-for-byte; map any other safe legacy Unit name to a
+// deterministic, readable, collision-resistant internal slug. The original
+// Unit name remains the user/audit identity.
+export function boltSlugForUnit(name: string): string {
+  const unitNameError = validateUnitName(name);
+  if (unitNameError) throw new Error(unitNameError);
+  if (validateBoltSlug(name) === null) return name;
+
+  const digest = createHash("sha256").update(name).digest("hex").slice(0, 16);
+  let stem = name
+    .toLowerCase()
+    .replace(/[._]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (!/^[a-z]/.test(stem)) stem = `unit-${stem}`;
+  stem = stem.slice(0, BOLT_SLUG_MAX_LENGTH - digest.length - 1).replace(/-+$/g, "");
+  return `${stem}-${digest}`;
+}
+
+export function isRegularFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+export function hasUnsafeSingleLineCharacter(value: string): boolean {
+  for (const char of value) {
+    const codePoint = char.codePointAt(0) ?? 0;
+    if (
+      codePoint <= 0x1f ||
+      codePoint === 0x7f ||
+      codePoint === 0x2028 ||
+      codePoint === 0x2029
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // --- State file I/O ---
@@ -4717,10 +4892,9 @@ export function findAllEvents(
 // stage's latest MAIN-WORKFLOW STAGE_STARTED row ("" when none). Rows from a
 // `--single` stage-runner carry `Workflow: single-stage:<slug>` and never move
 // the floor. Every (re-)entry into a stage lands a fresh STAGE_STARTED naming
-// the slug (advance and jump both emit it), so the floor identifies the
-// current attempt. Shared by the emitter (aidlc-swarm.ts stamps it into each
-// SWARM_UNIT_CONVERGED row) and every consumer, so both sides compute the
-// attempt identity with one function.
+// the slug (advance and jump both emit it). Retained as the secondary
+// timestamp-order guard for attempt-scoped readers; exact identity comes from
+// latestMainWorkflowStageRunFloor below.
 export function latestMainWorkflowStageStarted(
   audit: string,
   slug: string,
@@ -4737,6 +4911,141 @@ export function latestMainWorkflowStageStarted(
   return since;
 }
 
+// Exact identity for the current main-workflow attempt of one stage. The token
+// names the latest relevant boundary plus its matching-event ordinal, so two
+// boundaries emitted in the same second still receive different floors.
+//
+// Unit-major Construction can run a later stage before that stage's own
+// STAGE_STARTED row exists. For that walk, a stage attempt begins at the latest
+// workflow birth, jump, or stage rejection and deliberately ignores
+// STAGE_STARTED. This matches the reviewer-receipt floor: the later stage start
+// must not invalidate work legitimately completed earlier in the same
+// unit-major block.
+//
+// The no-boundary sentinel keeps fixture/recovery flows deterministic while
+// unstamped legacy rows still fail closed.
+export function latestMainWorkflowStageRunFloor(
+  audit: string,
+  slug: string,
+  unitMajor = false,
+): string {
+  let floor = "unstarted#0";
+  const ordinals = new Map<string, number>();
+  const relevant = new Set([
+    "WORKFLOW_STARTED",
+    "STAGE_STARTED",
+    "STAGE_JUMPED",
+    "GATE_REJECTED",
+  ]);
+  const events = audit
+    .replace(/\r\n/g, "\n")
+    .split(/\n---\n/)
+    .map((block, pos) => ({
+      block,
+      event: auditBlockField(block, "Event"),
+      pos,
+      timestamp: auditBlockField(block, "Timestamp") ?? "",
+    }))
+    .filter(
+      (row): row is { block: string; event: string; pos: number; timestamp: string } =>
+        row.event !== null && relevant.has(row.event) && row.timestamp !== "",
+    )
+    .sort((a, b) =>
+      a.timestamp !== b.timestamp
+        ? a.timestamp < b.timestamp
+          ? -1
+          : 1
+        : a.pos - b.pos,
+    );
+
+  for (const row of events) {
+    const stage = auditBlockField(row.block, "Stage");
+    let matches = false;
+    if (row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED") {
+      matches = true;
+    } else if (row.event === "GATE_REJECTED") {
+      matches = stage === slug;
+    } else if (row.event === "STAGE_STARTED" && !unitMajor) {
+      matches =
+        stage === slug &&
+        !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:");
+    }
+    if (!matches) continue;
+    const ordinal = (ordinals.get(row.event) ?? 0) + 1;
+    ordinals.set(row.event, ordinal);
+    floor = `${row.event}:${row.timestamp}#${ordinal}`;
+  }
+  return floor;
+}
+
+// Shard-aware attempt identity for live project readers. Same-shard timestamp
+// ties retain append order. If the latest relevant boundary is tied across
+// different shards, execution order is unknowable: mint a deterministic
+// ambiguity floor from the complete tied set. Existing receipts cannot match
+// it, so the boundary fails closed; receipts emitted after the ambiguity use
+// the same stable token until another boundary arrives.
+export function latestMainWorkflowStageRunFloorForProject(
+  projectDir: string,
+  slug: string,
+  unitMajor = false,
+): string {
+  const relevant = new Set([
+    "WORKFLOW_STARTED",
+    "STAGE_STARTED",
+    "STAGE_JUMPED",
+    "GATE_REJECTED",
+  ]);
+  const rows = readAuditShardEvents(projectDir)
+    .filter((row) => {
+      if (!relevant.has(row.event)) return false;
+      const stage = auditBlockField(row.block, "Stage");
+      if (row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED") {
+        return true;
+      }
+      if (row.event === "GATE_REJECTED") return stage === slug;
+      return (
+        !unitMajor &&
+        stage === slug &&
+        !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:")
+      );
+    })
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) {
+        return a.timestamp < b.timestamp ? -1 : 1;
+      }
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
+    });
+  if (rows.length === 0) return "unstarted#0";
+
+  const latestTimestamp = rows[rows.length - 1].timestamp;
+  const tied = rows.filter((row) => row.timestamp === latestTimestamp);
+  if (new Set(tied.map((row) => row.shard)).size > 1) {
+    const identity = tied
+      .map((row) =>
+        [
+          basename(row.shard),
+          row.pos,
+          row.event,
+          auditBlockField(row.block, "Stage") ?? "",
+        ].join(":"),
+      )
+      .sort()
+      .join("|");
+    const digest = createHash("sha256").update(identity).digest("hex").slice(0, 12);
+    return `AMBIGUOUS:${latestTimestamp}#${digest}`;
+  }
+
+  const ordinals = new Map<string, number>();
+  let floor = "unstarted#0";
+  for (const row of rows) {
+    const ordinal = (ordinals.get(row.event) ?? 0) + 1;
+    ordinals.set(row.event, ordinal);
+    floor = `${row.event}:${row.timestamp}#${ordinal}`;
+  }
+  return floor;
+}
+
 // The set of units the CURRENT attempt of `slug` has genuinely converged and
 // merged, from the `SWARM_UNIT_CONVERGED` rows `aidlc-swarm.ts finalize`
 // writes. A row counts only when its `Stage` names this slug AND its
@@ -4744,7 +5053,7 @@ export function latestMainWorkflowStageStarted(
 // a row minted by a late finalize retry against a PRIOR attempt's preserved
 // worktree carries the prior floor and is rejected regardless of its emission
 // timestamp, and another swarm stage's rows fail the Stage match even when
-// the floor degrades to "" (no STAGE_STARTED yet). Rows without the two
+// the floor is the no-boundary sentinel. Rows without the two
 // fields (pre-2.5.0 audit logs) fail closed: the affected units re-fan on the
 // next swarm pass, which finalize's re-verify makes safe. The timestamp check
 // stays as belt-and-braces.
@@ -4754,16 +5063,223 @@ export function swarmConvergedUnits(
 ): Set<string> {
   const audit = readAllAuditShards(projectDir);
   if (!audit) return new Set();
-  const floor = latestMainWorkflowStageStarted(audit, slug);
+  const startedAt = latestMainWorkflowStageStarted(audit, slug);
+  const floor = latestMainWorkflowStageRunFloorForProject(projectDir, slug);
   const converged = new Set<string>();
   for (const { timestamp, block } of findAllEvents(audit, "SWARM_UNIT_CONVERGED")) {
     if (auditBlockField(block, "Stage") !== slug) continue;
     if ((auditBlockField(block, "Run floor") ?? "") !== floor) continue;
-    if (floor && timestamp < floor) continue;
+    if (startedAt && timestamp < startedAt) continue;
     const unit = auditBlockField(block, "Unit name");
     if (unit) converged.add(unit);
   }
   return converged;
+}
+
+// The set of units the CURRENT attempt of an INLINE per-unit stage has
+// completion receipts for, from the UNIT_COMPLETED rows `aidlc-state.ts unit
+// complete` writes — the interactive-path twin of swarmConvergedUnits, with
+// the same attempt-floor discipline: a row counts only when its Stage names
+// this slug AND its exact Run floor equals the current main-workflow attempt.
+// The floor includes a boundary-event ordinal, so same-second re-entry still
+// invalidates every receipt from the prior attempt. Unit-major uses its
+// workflow/jump/rejection boundary so a later STAGE_STARTED does not erase
+// receipts legitimately emitted earlier in that block.
+// Artifact existence is deliberately NOT consulted here: the receipt is the
+// transition, artifacts are the evidence the receipt-writer checked at emit
+// time. A paused or partially-written unit has artifacts but no receipt, so it
+// stays uncovered.
+type UnitLifecycleRow = {
+  ts: string;
+  pos: number;
+  shard: string;
+  shardIndex: number;
+  event: string;
+  block: string;
+  unit: string;
+};
+
+function currentUnitLifecycleRows(
+  projectDir: string,
+  audit: string,
+  slug: string,
+  unitMajor: boolean,
+): UnitLifecycleRow[] {
+  const startedAt = latestMainWorkflowStageStarted(audit, slug);
+  const floor = latestMainWorkflowStageRunFloorForProject(
+    projectDir,
+    slug,
+    unitMajor,
+  );
+  const unitEvents = new Set([
+    "UNIT_STARTED",
+    "UNIT_PAUSED",
+    "UNIT_RESUMED",
+    "UNIT_COMPLETED",
+  ]);
+  const rows: UnitLifecycleRow[] = [];
+  for (const row of readAuditShardEvents(projectDir)) {
+    if (!unitEvents.has(row.event)) continue;
+    if (auditBlockField(row.block, "Stage") !== slug) continue;
+    if (auditBlockField(row.block, "Run floor") !== floor) continue;
+    if (!unitMajor && startedAt && row.timestamp < startedAt) continue;
+    const unit = auditBlockField(row.block, "Unit");
+    if (!unit) continue;
+    rows.push({
+      ts: row.timestamp,
+      pos: row.pos,
+      shard: row.shard,
+      shardIndex: row.shardIndex,
+      event: row.event,
+      block: row.block,
+      unit,
+    });
+  }
+  rows.sort((a, b) => {
+    if (a.ts !== b.ts) return a.ts < b.ts ? -1 : 1;
+    if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+    return a.pos - b.pos;
+  });
+
+  const reduced: UnitLifecycleRow[] = [];
+  for (let start = 0; start < rows.length;) {
+    let end = start + 1;
+    while (end < rows.length && rows[end].ts === rows[start].ts) end++;
+    const byUnit = new Map<string, UnitLifecycleRow[]>();
+    for (const row of rows.slice(start, end)) {
+      const unitRows = byUnit.get(row.unit) ?? [];
+      unitRows.push(row);
+      byUnit.set(row.unit, unitRows);
+    }
+    for (const unitRows of byUnit.values()) {
+      const latestByShard = new Map<string, UnitLifecycleRow>();
+      for (const row of unitRows) latestByShard.set(row.shard, row);
+      const candidates = [...latestByShard.values()];
+      if (candidates.length === 1) {
+        reduced.push(candidates[0]);
+        continue;
+      }
+      // Cross-shard rows in one second are causally unordered. Preserve the
+      // safest possible checkpoint: a possible pause blocks all progress; a
+      // possible start/resume keeps the unit unsettled; only unanimous terminal
+      // candidates settle it.
+      const rank = (event: string): number =>
+        event === "UNIT_PAUSED"
+          ? 2
+          : event === "UNIT_COMPLETED"
+            ? 0
+            : 1;
+      candidates.sort((a, b) => {
+        const rankDiff = rank(a.event) - rank(b.event);
+        if (rankDiff !== 0) return rankDiff;
+        if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+        return a.pos - b.pos;
+      });
+      reduced.push(candidates[candidates.length - 1]);
+    }
+    start = end;
+  }
+  reduced.sort((a, b) => {
+    if (a.ts !== b.ts) return a.ts < b.ts ? -1 : 1;
+    if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+    return a.pos - b.pos;
+  });
+  return reduced;
+}
+
+function unitMajorLifecycleMode(projectDir: string): boolean {
+  try {
+    return (
+      getField(readStateFile(projectDir), "Construction Iteration")?.trim() ===
+      "unit-major"
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function unitCompletedReceipts(
+  projectDir: string,
+  slug: string,
+): Set<string> {
+  const audit = readAllAuditShards(projectDir);
+  if (!audit) return new Set();
+  const unitMajor = unitMajorLifecycleMode(projectDir);
+  const done = new Set<string>();
+  for (const row of currentUnitLifecycleRows(projectDir, audit, slug, unitMajor)) {
+    if (row.event === "UNIT_COMPLETED") done.add(row.unit);
+    else done.delete(row.unit);
+  }
+  return done;
+}
+
+// Receipt mode is sticky across attempts. Once a stage has emitted any
+// lifecycle row, a later attempt with no current receipts must remain
+// unsettled rather than silently falling back to artifact-only coverage.
+export function unitLifecycleReceiptsInUse(
+  projectDir: string,
+  slug: string,
+): boolean {
+  const audit = readAllAuditShards(projectDir);
+  if (!audit) return false;
+  const unitEvents = new Set([
+    "UNIT_STARTED",
+    "UNIT_PAUSED",
+    "UNIT_RESUMED",
+    "UNIT_COMPLETED",
+  ]);
+  for (const block of audit.replace(/\r\n/g, "\n").split(/\n---\n/)) {
+    const event = auditBlockField(block, "Event");
+    if (
+      event &&
+      unitEvents.has(event) &&
+      auditBlockField(block, "Stage") === slug
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// The active unit-lifecycle checkpoint for a stage: the LATEST UNIT_STARTED /
+// UNIT_PAUSED / UNIT_RESUMED / UNIT_COMPLETED checkpoint per unit (current
+// attempt only, same floor as unitCompletedReceipts), reduced to the unit whose
+// latest checkpoint is a non-terminal state. Same-shard ties retain append
+// order; unordered same-second cross-shard ties conservatively preserve pause,
+// then any other non-terminal state, before completion. Returns the paused unit
+// with its recorded
+// Reason / Next Action (for the resume path and the paused-first routing), or
+// the in-flight unit (started/resumed, not yet completed), or null when no
+// unit is mid-lifecycle. At most one unit can be non-terminal on the inline
+// path (the engine emits one unit at a time); if a corrupted ledger carries
+// several, the LATEST row wins — deterministic, and `unit start` refuses to
+// open a second active unit anyway.
+export function activeUnitCheckpoint(
+  projectDir: string,
+  slug: string,
+): { unit: string; state: "in-progress" | "paused"; reason: string | null; nextAction: string | null } | null {
+  const audit = readAllAuditShards(projectDir);
+  if (!audit) return null;
+  const unitMajor = unitMajorLifecycleMode(projectDir);
+  const rows = currentUnitLifecycleRows(projectDir, audit, slug, unitMajor);
+  const latest = new Map<string, { event: string; block: string }>();
+  for (const row of rows) {
+    latest.set(row.unit, { event: row.event, block: row.block });
+  }
+  // Most recently touched unit whose FINAL row is non-terminal wins (walk the
+  // chronological rows backwards; a unit completed by a later row is skipped).
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const { unit } = rows[i];
+    const final = latest.get(unit);
+    if (!final || final.event === "UNIT_COMPLETED") continue;
+    return {
+      unit,
+      state: final.event === "UNIT_PAUSED" ? "paused" : "in-progress",
+      reason: auditBlockField(final.block, "Reason"),
+      nextAction: auditBlockField(final.block, "Next Action"),
+    };
+  }
+  return null;
 }
 
 // Latest STAGE_STARTED slug in an audit buffer, or null if none. findAllEvents
@@ -6620,10 +7136,8 @@ function parseUnitsBlock(block: string): UnitDependencyEdge[] {
   if (current) edges.push(current);
 
   for (const e of edges) {
-    // Reject empty AND whitespace-only names — a quoted `"   "` survives
-    // unquoteScalar with literal spaces and would otherwise become a
-    // meaningless valid unit (and dependency target).
-    if (!e.name.trim()) throw new Error("unit with empty name");
+    const nameError = validateUnitName(e.name);
+    if (nameError) throw new Error(nameError);
   }
   return edges;
 }
@@ -6768,12 +7282,16 @@ export function resolveBoltDag(projectDir: string): BoltDagResolution {
         batches.every(
           (batch) =>
             Array.isArray(batch) &&
-            batch.every((unit) => typeof unit === "string" && unit.length > 0),
+            batch.every(
+              (unit) =>
+                typeof unit === "string" &&
+                validateUnitName(unit) === null,
+            ),
         )
       ) {
         const typedBatches = batches as string[][];
         const units = typedBatches.flat();
-        if (units.length > 0) {
+        if (units.length > 0 && new Set(units).size === units.length) {
           const unitKinds = new Map<string, string>();
           if (Array.isArray(boltDag?.units)) {
             for (const unit of boltDag.units) {

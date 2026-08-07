@@ -2,9 +2,11 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   activeIntent,
+  activeUnitCheckpoint,
   appendSlug,
   appendUnderHeading,
   type CheckboxState,
@@ -20,14 +22,18 @@ import {
   firstInScopeStageOfPhase,
   freshReviewReceipts,
   getField,
+  hasUnsafeSingleLineCharacter,
   holdsAuditLock,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   intentRepos,
   isAutonomousMode,
   isAutonomousSwarmStage,
+  isNonAnswer,
+  isRegularFile,
   isoTimestamp,
   KNOWN_CODEKB_STAGES,
+  latestMainWorkflowStageRunFloorForProject,
   loadScopeMapping,
   nextInScopeStage,
   PHASE_NUMBERS,
@@ -56,6 +62,7 @@ import {
   stagesInScope,
   swarmConvergedUnits,
   updateIntentStatus,
+  validateUnitName,
   validScopes,
   withAuditLock,
   worktreeDocsDir,
@@ -64,6 +71,7 @@ import {
   writeStateFile,
 } from "./aidlc-lib.js";
 import { memoryDirFor } from "./aidlc-graph.ts";
+import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 import {
   stageUsageAuditFields,
   workflowUsageAuditFields,
@@ -599,6 +607,9 @@ export function main(argv: string[]): void {
       case "merge":
         handleMerge(args.slice(1));
         break;
+      case "unit":
+        handleUnit(args.slice(1));
+        break;
       case "park":
         handlePark(args.slice(1));
         break;
@@ -820,6 +831,302 @@ function handleUnpark(_args: string[]): void {
   });
 }
 
+// unit <start|pause|resume|complete> --stage <slug> --unit <name>
+//        [--reason <text>] [--next-action <text>]
+//
+// Unit-of-work lifecycle receipts for INLINE per-unit Construction stages
+// (for_each: unit-of-work, mode: inline). The engine's coverage walk
+// (aidlc-orchestrate.ts unitCovered) treats UNIT_COMPLETED as the completion
+// signal and artifact existence as the evidence checked HERE, at emit time —
+// so a paused or partially-written unit can never be mistaken for a finished
+// one just because its files exist. UNIT_PAUSED requires --reason and
+// --next-action so a resumed session (or another machine) lands on the exact
+// checkpoint; the runtime `Active Unit` / `Unit State` fields mirror the
+// latest receipt for cheap status reads. The autonomous swarm keeps its own
+// SWARM_UNIT_* ledger (aidlc-swarm.ts) — this verb is the interactive twin.
+//
+// Single-active-unit invariant: `start` refuses while another unit of the
+// same stage is non-terminal (started/resumed/paused without a later
+// UNIT_COMPLETED), so resume/restart races cannot create two active units.
+// `resume` refuses unless the named unit is the currently-paused one.
+function handleUnit(args: string[]): void {
+  const action = args[0];
+  const VALID_UNIT_ACTIONS = new Set(["start", "pause", "resume", "complete"]);
+  if (!action || !VALID_UNIT_ACTIONS.has(action)) {
+    error(
+      `Usage: aidlc-state.ts unit <start|pause|resume|complete> --stage <slug> --unit <name> [--reason <text>] [--next-action <text>]`,
+    );
+  }
+  const rest = args.slice(1);
+  const slug = getFlagValue(rest, "--stage");
+  const unit = getFlagValue(rest, "--unit");
+  const rawReason = getFlagValue(rest, "--reason");
+  const rawNextAction = getFlagValue(rest, "--next-action");
+  const reason = rawReason?.trim();
+  const nextAction = rawNextAction?.trim();
+  if (!slug) error("Missing --stage <slug>");
+  if (!unit) error("Missing --unit <name>");
+  const unitNameError = validateUnitName(unit);
+  if (unitNameError) error(unitNameError);
+  validateStateLineValue("--reason", rawReason);
+  validateStateLineValue("--next-action", rawNextAction);
+  const stage = findStageBySlug(slug);
+  if (!stage) error(`Unknown stage: ${slug}`);
+  if (stage.for_each !== "unit-of-work") {
+    error(`Stage "${slug}" is not per-unit (for_each: unit-of-work); unit receipts do not apply.`);
+  }
+  if (action === "pause") {
+    if (!reason) error("unit pause requires --reason <text> (why the unit stopped).");
+    if (!nextAction) error("unit pause requires --next-action <text> (the exact next step on resume).");
+  }
+
+  const pd = resolveProjectDir(projectDir);
+  // One lock across read→validate→emit→write (the C2b idiom): the checkpoint
+  // read and the receipt append must see one ledger snapshot, or two racing
+  // `unit start` calls could both pass the single-active-unit check.
+  withAuditLock(pd, () => {
+    let content = readStateFile(pd);
+
+    // Only an engine-eligible autonomous swarm owns SWARM_UNIT_* bookkeeping.
+    // The autonomy grant persists across backward jumps, where inline per-unit
+    // stages still need this interactive lifecycle ledger.
+    if (autonomousSwarmOwnsStage(stage, content)) {
+      error(
+        `Refusing unit ${action}: Construction Autonomy Mode is autonomous. The swarm referee ` +
+          "owns per-unit bookkeeping (SWARM_UNIT_* receipts); interactive unit receipts apply " +
+          "only when the engine routes the stage inline.",
+      );
+    }
+
+    const resolution = resolveBoltDag(pd);
+    if (resolution.state === "malformed") {
+      error(
+        `Refusing unit ${action}: the authoritative unit DAG is ${resolution.reason} ` +
+          `(${resolution.detail}). Fix unit-of-work-dependency.md first.`,
+      );
+    }
+    if (resolution.state !== "ok" || !resolution.units.includes(unit)) {
+      error(
+        `Refusing unit ${action} for "${unit}": it is not in the authoritative unit DAG.`,
+      );
+    }
+
+    const checkpoint = activeUnitCheckpoint(pd, slug);
+
+    if (action === "start") {
+      if (checkpoint && checkpoint.unit !== unit) {
+        error(
+          `Refusing to start unit "${unit}" for "${slug}": unit "${checkpoint.unit}" is ${checkpoint.state}` +
+            `${checkpoint.reason ? ` (reason: ${checkpoint.reason})` : ""}. ` +
+            `${checkpoint.state === "paused" ? `Resume it (aidlc-state.ts unit resume --stage ${slug} --unit ${checkpoint.unit}) or complete it first.` : "Complete it first."} ` +
+            "One active unit at a time.",
+        );
+      }
+      if (checkpoint && checkpoint.unit === unit) {
+        // Idempotent re-entry on the same unit: a crashed conductor may re-run
+        // start after resume; acknowledge without a duplicate receipt.
+        console.log(JSON.stringify({ unit, stage: slug, state: checkpoint.state, already_active: true }));
+        return;
+      }
+      requireEngineRoutedUnit(pd, slug, unit);
+    } else if (action === "pause" || action === "complete") {
+      if (!checkpoint || checkpoint.unit !== unit) {
+        error(
+          `Refusing to ${action} unit "${unit}" for "${slug}": it is not the active unit` +
+            `${checkpoint ? ` (active: "${checkpoint.unit}", ${checkpoint.state})` : " (no unit is active — start it first)"}.`,
+        );
+      }
+      if (action === "complete" && checkpoint.state === "paused") {
+        error(
+          `Refusing to complete unit "${unit}" for "${slug}": it is paused` +
+            `${checkpoint.reason ? ` (reason: ${checkpoint.reason})` : ""}. Resume it first ` +
+            `(aidlc-state.ts unit resume --stage ${slug} --unit ${unit}); a paused unit's work is not done.`,
+        );
+      }
+    } else if (action === "resume") {
+      if (!checkpoint || checkpoint.unit !== unit || checkpoint.state !== "paused") {
+        error(
+          `Refusing to resume unit "${unit}" for "${slug}": it is not the paused unit` +
+            `${checkpoint ? ` (active: "${checkpoint.unit}", ${checkpoint.state})` : " (no unit is active)"}.`,
+        );
+      }
+    }
+
+    // UNIT_COMPLETED is receipt-plus-evidence: the receipt commits only when
+    // every applicable required artifact for THIS unit exists on disk. This is
+    // the claim-1 inversion — the artifact walk moved from "is the transition"
+    // to "is checked by the transition".
+    if (action === "complete" && !artifactGuardDisabled()) {
+      const missing = missingUnitArtifacts(pd, stage, unit);
+      if (missing.length > 0) {
+        error(
+          `Refusing to complete unit "${unit}" for "${slug}": required artifacts are missing on disk ` +
+            `(${missing.join(", ")}). Write the unit's artifacts before completing it.`,
+        );
+      }
+    }
+
+    let eventType: string;
+    if (action === "start") eventType = "UNIT_STARTED";
+    else if (action === "pause") eventType = "UNIT_PAUSED";
+    else if (action === "resume") eventType = "UNIT_RESUMED";
+    else eventType = "UNIT_COMPLETED";
+    const fields: Record<string, string> = {
+      Stage: slug,
+      Unit: unit,
+      "Run floor": latestMainWorkflowStageRunFloorForProject(
+        pd,
+        slug,
+        getField(content, "Construction Iteration")?.trim() === "unit-major",
+      ),
+    };
+    if (reason) fields.Reason = reason;
+    if (nextAction) fields["Next Action"] = nextAction;
+
+    try {
+      emitAudit(pd, eventType, fields);
+    } catch (e) {
+      error(`Audit emission failed: ${errorMessage(e)}`);
+    }
+
+    // Mirror the latest checkpoint into runtime state for cheap status reads
+    // (audit stays the source of truth — these fields are a cache, exactly like
+    // Parked / Parked At Stage).
+    const timestamp = isoTimestamp();
+    if (action === "complete") {
+      content = removeField(content, "Active Unit");
+      content = removeField(content, "Unit State");
+      content = removeField(content, "Unit Pause Reason");
+      content = removeField(content, "Unit Next Action");
+    } else {
+      content = setOrInsertField(content, "## Runtime State", "Active Unit", unit);
+      content = setOrInsertField(
+        content,
+        "## Runtime State",
+        "Unit State",
+        action === "pause" ? "paused" : "in-progress",
+      );
+      if (action === "pause") {
+        content = setOrInsertField(content, "## Runtime State", "Unit Pause Reason", reason ?? "");
+        content = setOrInsertField(content, "## Runtime State", "Unit Next Action", nextAction ?? "");
+      } else {
+        content = removeField(content, "Unit Pause Reason");
+        content = removeField(content, "Unit Next Action");
+      }
+    }
+    content = setField(content, "Last Updated", timestamp);
+    writeStateFile(pd, content);
+    console.log(JSON.stringify({ emitted: eventType, stage: slug, unit, timestamp }));
+  });
+}
+
+function validateStateLineValue(label: string, value: string | undefined): void {
+  if (value !== undefined && hasUnsafeSingleLineCharacter(value)) {
+    error(`${label} must be printable text on one physical line.`);
+  }
+}
+
+function requireEngineRoutedUnit(pd: string, stage: string, unit: string): void {
+  const executable = compiledExecutable();
+  let subargs = ["next", "--project-dir", pd];
+  let directive: unknown = null;
+  for (let attempts = 0; attempts < 1_000; attempts++) {
+    const command = executable
+      ? [executable, ...subargs]
+      : [
+          process.execPath,
+          fileURLToPath(new URL("./aidlc-orchestrate.ts", import.meta.url)),
+          ...subargs,
+        ];
+    const result = spawnSync(command[0], command.slice(1), {
+      cwd: pd,
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_PROJECT_DIR: pd },
+      timeout: 30_000,
+    });
+    if (result.status !== 0) {
+      error(
+        `Refusing to start unit "${unit}" for "${stage}": the orchestration engine could not resolve ` +
+          `the current routed unit (${(result.stderr ?? "").trim() || "no diagnostic"}).`,
+      );
+    }
+    try {
+      directive = JSON.parse((result.stdout ?? "").trim());
+    } catch {
+      error(
+        `Refusing to start unit "${unit}" for "${stage}": the orchestration engine returned an ` +
+          "unparseable directive.",
+      );
+    }
+    const transport =
+      directive !== null && typeof directive === "object"
+        ? directive as { kind?: unknown; continue_token?: unknown }
+        : {};
+    if (transport.kind !== "load-steering") break;
+    if (
+      typeof transport.continue_token !== "string" ||
+      transport.continue_token.length === 0
+    ) {
+      error(
+        `Refusing to start unit "${unit}" for "${stage}": the engine's steering directive ` +
+          "did not include a continuation token.",
+      );
+    }
+    subargs = ["continue", transport.continue_token, "--project-dir", pd];
+  }
+  const routed =
+    directive !== null && typeof directive === "object"
+      ? directive as { kind?: unknown; stage?: unknown; unit?: unknown }
+      : {};
+  if (
+    routed.kind !== "run-stage" ||
+    routed.stage !== stage ||
+    routed.unit !== unit
+  ) {
+    const expected =
+      routed.kind === "run-stage" &&
+      typeof routed.stage === "string" &&
+      typeof routed.unit === "string"
+        ? `"${routed.stage}"/"${routed.unit}"`
+        : `a ${String(routed.kind ?? "non-run-stage")} directive`;
+    error(
+      `Refusing to start unit "${unit}" for "${stage}": the engine currently routes ${expected}. ` +
+        "Run the exact directive.stage/directive.unit pair returned by aidlc-orchestrate.ts next.",
+    );
+  }
+}
+
+// The unit's missing REQUIRED artifacts (kind-filtered like the engine's
+// unitCovered): resolved under <record>/construction/<unit>/<slug>/<name>.md.
+// Returns [] when everything applicable exists. Kind filtering reads the
+// bolt_dag the same way the engine does; with no readable dag the FULL
+// required list applies (fail strict, like unitCovered's kinds=null path).
+function missingUnitArtifacts(
+  pd: string,
+  stage: { slug: string; produces?: string[]; produces_kinds?: Record<string, string[]> },
+  unit: string,
+): string[] {
+  const rec = recordDir(pd);
+  if (rec === null) return stage.produces ?? ["<no record dir>"];
+  let required = stage.produces ?? [];
+  if (stage.produces_kinds !== undefined) {
+    const resolution = resolveBoltDag(pd);
+    if (resolution.state === "ok" && resolution.unitKinds !== null) {
+      required = filterProducesByKind(
+        stage.produces_kinds,
+        required,
+        resolution.unitKinds.get(unit) ?? null,
+      );
+    }
+  }
+  const missing: string[] = [];
+  for (const name of required) {
+    const p = join(rec, "construction", unit, stage.slug, `${name}.md`);
+    if (!isRegularFile(p)) missing.push(name);
+  }
+  return missing;
+}
+
 function handleCheckbox(args: string[]): void {
   if (args.length < 1) error("Usage: aidlc-state.ts checkbox <slug=state> ...");
   const pd = resolveProjectDir(projectDir);
@@ -906,6 +1213,22 @@ function handleCount(args: string[]): void {
 
 function artifactGuardDisabled(): boolean {
   return process.env.AIDLC_SKIP_ARTIFACT_GUARD === "1";
+}
+
+// Mirrors aidlc-orchestrate.ts isAutonomousSwarmCandidate for the lifecycle
+// writer. A missing scope fails closed for a subagent stage: without it, this
+// tool cannot prove that the stage is the non-swarm skeleton gate.
+function autonomousSwarmOwnsStage(
+  stage: { slug: string; phase: string; for_each?: string; mode?: string },
+  stateContent: string,
+): boolean {
+  if (stage.phase !== "construction") return false;
+  if (stage.for_each !== "unit-of-work" || stage.mode !== "subagent") return false;
+  if (!isAutonomousMode(stateContent)) return false;
+  const scope = getField(stateContent, "Scope");
+  if (!scope) return true;
+  const first = firstInScopeStageOfPhase("construction", scope);
+  return first === null || first.slug !== stage.slug;
 }
 
 // Settled-autonomous-swarm exemption, mirroring isSettledAutonomousSwarm in
@@ -1025,7 +1348,7 @@ function producesArtifactsExist(
   }
   for (const dir of producesDirsForStage(pd, stage)) {
     for (const name of produces) {
-      if (existsSync(join(dir, `${name}.md`))) return true;
+      if (isRegularFile(join(dir, `${name}.md`))) return true;
     }
   }
   return false;
@@ -1932,6 +2255,21 @@ function handleApprove(args: string[]): void {
       `Refusing to approve "${slug}": --user-input must contain the human's exact approval choice.`,
     );
   }
+  // Cancellation boilerplate is not an approval choice: a dismissed/timed-out
+  // question widget can surface as a completed-looking answer ("Cancelled"),
+  // and passing that through --user-input would commit a gate no human
+  // approved. Same vocabulary as the interview path (aidlc-log answer).
+  if (
+    !isAutonomousMode(content) &&
+    !humanPresenceGuardDisabled() &&
+    isNonAnswer(approvalInput)
+  ) {
+    error(
+      `Refusing to approve "${slug}": --user-input "${approvalInput}" is cancellation boilerplate, ` +
+        "not an approval. If the human dismissed the gate question, re-present it and wait for a " +
+        "real choice; a dismissal is not consent.",
+    );
+  }
 
   // Artifact guard (issue #366): a stage cannot be approved without evidence of
   // work on disk. Runs BEFORE any mutation so a refusal (error() -> exit) leaves
@@ -2125,6 +2463,16 @@ function handleReject(args: string[]): void {
       `Refusing to reject "${slug}": --feedback must contain the human's requested changes.`,
     );
   }
+  // Same non-answer floor as approve: a dismissed gate question is neither an
+  // approval nor a change request — it must not commit GATE_REJECTED and spin
+  // the revision loop on cancellation boilerplate.
+  if (isNonAnswer(feedback)) {
+    error(
+      `Refusing to reject "${slug}": --feedback "${feedback}" is cancellation boilerplate, not a ` +
+        "change request. If the human dismissed the gate question, re-present it and wait for a " +
+        "real choice.",
+    );
+  }
 
   const pd = resolveProjectDir(projectDir);
   // C2b lost-update safety: validate→increment Revision Count→emit-audit→write
@@ -2140,6 +2488,17 @@ function handleReject(args: string[]): void {
   if (!stage) error(`Unknown stage: ${slug}`);
   validateSlugInState(content, slug, ["awaiting-approval", "in-progress"]);
   const gateWasMissing = getSlugState(content, slug) === "in-progress";
+
+  if (
+    !isAutonomousMode(content) &&
+    !humanPresenceGuardDisabled() &&
+    !humanActedSinceGate(pd)
+  ) {
+    error(
+      `Refusing to reject "${slug}": a real human has not acted at this gate since it opened. ` +
+        "Requesting changes requires a typed human turn before it can commit.",
+    );
+  }
 
   // Increment Revision Count. Guard against non-numeric values (missing field,
   // manual edits, legacy state files) by coercing non-integers to 0.
@@ -2490,6 +2849,12 @@ function handleResume(_args: string[]): void {
     // will use the standard resume flow.
   }
 
+  // Unit-level checkpoint (issue 681 claim 2): a resumed session must land on
+  // the exact unit stopping point, not just the stage. Read from the runtime
+  // mirror fields the `unit` verb maintains; absent on stage-level workflows.
+  const activeUnit = getField(content, "Active Unit");
+  const unitState = getField(content, "Unit State");
+
   console.log(
     JSON.stringify({
       resumed: true,
@@ -2501,6 +2866,14 @@ function handleResume(_args: string[]): void {
       next_stage: nextStage,
       gate_state: gateState,
       compaction_pending: compactionPending,
+      ...(activeUnit
+        ? {
+            active_unit: activeUnit,
+            unit_state: unitState ?? "in-progress",
+            unit_pause_reason: getField(content, "Unit Pause Reason") ?? undefined,
+            unit_next_action: getField(content, "Unit Next Action") ?? undefined,
+          }
+        : {}),
     })
   );
 }
