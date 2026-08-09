@@ -790,6 +790,8 @@ function buildForward(): Forward {
           hook_event_name: "PostToolUse",
           tool_name: "Bash",
           tool_input: { command: (ti.command as string) ?? "" },
+          ...(kiro.session_id ? { session_id: kiro.session_id } : {}),
+          tool_response: kiro.tool_response,
         },
       };
     }
@@ -852,7 +854,11 @@ function buildForward(): Forward {
       // maintains the `.aidlc-stop-hook/` counter on this legacy/V2 path.
       return {
         hook: "aidlc-continue-workflow.ts",
-        input: { hook_event_name: "Stop", stop_hook_active: false },
+        input: {
+          hook_event_name: "Stop",
+          stop_hook_active: false,
+          ...(kiro.session_id ? { session_id: kiro.session_id } : {}),
+        },
       };
 
     default:

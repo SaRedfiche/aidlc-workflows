@@ -202,6 +202,37 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
     expect(debug).toContain("rebuild-stage-graph\texit: audit empty");
     expect(debug).not.toContain("exit: command not a transition tool");
   });
+
+  test("post-shell creation forwards the invoking session and result", async () => {
+    const root = freshProject();
+    const trace = join(root, "runtime-input.json");
+    writeHook(
+      root,
+      "aidlc-rebuild-stage-graph.ts",
+      `import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(trace)}, await Bun.stdin.text(), "utf-8");
+`,
+    );
+    const { client } = fakeClient();
+    const adapter = await createAdapter({ client, directory: root });
+    await adapter["tool.execute.after"](
+      postTool("bash", {
+        command: "bun .aidlc/tools/aidlc-utility.ts intent-create --scope poc",
+      }),
+      {
+        output: "Intent created: fixture-record (space: default)\n",
+      },
+    );
+
+    const payload = JSON.parse(readFileSync(trace, "utf-8")) as {
+      session_id?: string;
+      tool_input?: { command?: string };
+      tool_response?: string;
+    };
+    expect(payload.session_id).toBe("main");
+    expect(payload.tool_input?.command).toContain("intent-create");
+    expect(payload.tool_response).toContain("Intent created: fixture-record");
+  });
 });
 
 describe("t241 OpenCode adapter reviewer scope", () => {
@@ -520,6 +551,44 @@ process.stdout.write(JSON.stringify({ decision: "block", reason: "continue" }) +
     expect(readFileSync(stopCount, "utf-8")).toBe("1");
     expect(prompts).toHaveLength(1);
     expect(prompts[0].text).toContain("continue");
+  });
+
+  test("session idle forwards the session id to the Stop hook", async () => {
+    const root = freshProject();
+    const stopInput = join(root, "stop-input.json");
+    writeHook(
+      root,
+      "aidlc-session-start.ts",
+      `await Bun.stdin.text();
+process.stdout.write(JSON.stringify({ additionalContext: "active" }) + "\\n");
+`,
+    );
+    writeHook(root, "aidlc-record-human-turn.ts", "await Bun.stdin.text();\n");
+    writeHook(
+      root,
+      "aidlc-continue-workflow.ts",
+      `import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
+`,
+    );
+
+    const { client } = fakeClient();
+    const adapter = await createAdapter({ client, directory: root });
+    await adapter["chat.message"](
+      { sessionID: "main" },
+      { parts: [{ type: "text", text: "start" }] },
+    );
+    await adapter.event({
+      event: {
+        type: "session.idle",
+        properties: { sessionID: "main" },
+      },
+    });
+
+    const payload = JSON.parse(readFileSync(stopInput, "utf-8")) as {
+      session_id?: string;
+    };
+    expect(payload.session_id).toBe("main");
   });
 
   test("turn-one idle reaches the real Stop hook when workflow state is born during the turn", async () => {

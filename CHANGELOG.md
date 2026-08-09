@@ -1,6 +1,18 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.62] - 2026-08-08
+
+`intent-create` now fails closed when invoked without meaningful work details, and starting a second unrelated intent hands the conductor to a fresh session so the new work does not inherit the prior intent's transcript. Scope runners (`/aidlc-<scope>`) now offer the same explicit second-intent path instead of dead-ending at a completed workflow. **Upgrade:** re-copy your `dist/<harness>/` shell into the project so the updated tools, hooks, orchestrator skill, and scope runners are installed.
+
+* `bun .claude/tools/aidlc-utility.ts intent-create` with no `--scope`, `--arguments`, or `--label` now errors and mutates nothing; every value-bearing create option (`--scope`, `--arguments`, `--label`, `--depth`, `--test-strategy`, `--review`, `--repos`, and `--project-dir`) also rejects a valueless or blank occurrence before path resolution or mutation.
+* Completed workflows advertise the human-confirmed `next --new-intent --scope <scope> "<description>"` route for unrelated work.
+* `next --new-intent` requires a nonblank new-work description. Its directive tells every harness conductor to create the intent, STOP, and use the harness-native fresh-session entry (`/aidlc`, or `$aidlc` on Codex); fresh-workspace creation still continues in-session.
+* The PostToolUse hook pairs a successful `intent-create` result with that exact tool event's host session ID and never overwrites existing ownership. A second creation writes a short-lived one-shot handoff receipt, so Stop allows the requested clean-session boundary instead of forcing the old conversation into the new intent. An unstamped UUID-backed SessionEnd fails closed instead of using another conversation's shared cursor, so `SESSION_ENDED` and its heartbeat land only with the session that actually ended.
+* Kiro IDE now binds legacy `intent-create` calls through the synthetic session identity retained at SessionStart, and modern Stop events prefer their own `session_id` over the workspace-global marker so concurrent chats cannot consume one another's fresh-session handoff receipts. Both the direct hook entry point and the public `aidlc adapter kiro-ide <target>` dispatcher preserve this input contract.
+* GitHub Copilot follows the same second-intent fresh-session boundary in both its conductor and generated scope runners: start a new Copilot CLI session or VS Code agent chat, then invoke `/aidlc`.
+* Every generated scope runner carries the same recognize, confirm, create, and harness-native fresh-session handoff contract.
+
 ## [2.5.60] - 2026-08-09
 
 Adds GitHub Copilot as a first-class harness for both Copilot CLI and VS Code agent mode, with native skills, custom agents, normalized hooks, plugin composition, and deterministic workflow safeguards. **Upgrade:** copy `dist/copilot/.aidlc/`, `dist/copilot/aidlc/`, and merge `dist/copilot/.github/` plus `AGENTS.md` into the project; trust the folder in `~/.copilot/config.json`, and set `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1` for headless `copilot -p` runs.
