@@ -147,6 +147,202 @@ function shellCommandSegments(command: string): string[] {
   return segments;
 }
 
+export interface ShellInvocation {
+  name: string;
+  args: string[];
+}
+
+function consumeWrapperOptions(
+  words: string[],
+  index: number,
+  shortValueOptions = new Set<string>(),
+  longValueOptions = new Set<string>(),
+): number {
+  while (index < words.length) {
+    const option = words[index];
+    if (option === "--") return index + 1;
+    if (option === "-" || !option.startsWith("-")) return index;
+    if (option.startsWith("--")) {
+      const equals = option.indexOf("=");
+      const name = equals === -1 ? option : option.slice(0, equals);
+      index++;
+      if (equals === -1 && longValueOptions.has(name)) index++;
+      continue;
+    }
+    const name = option.slice(0, 2);
+    index++;
+    if (shortValueOptions.has(name) && option.length === 2) index++;
+  }
+  return index;
+}
+
+function shellInvocation(words: string[], depth = 0): ShellInvocation | null {
+  if (depth > 8) return null;
+  let index = 0;
+  const skipAssignments = () => {
+    while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index] ?? "")) index++;
+  };
+  skipAssignments();
+
+  while (index < words.length) {
+    const wrapper = basename(words[index]);
+    if (["}", "fi", "done", "esac"].includes(wrapper)) return null;
+    if (["{", "then", "else", "do", "!"].includes(wrapper)) {
+      index++;
+      skipAssignments();
+      continue;
+    }
+    if (["for", "select", "case"].includes(wrapper)) return null;
+    if (["if", "elif", "while", "until"].includes(wrapper)) {
+      index++;
+      skipAssignments();
+      continue;
+    }
+    if (wrapper === "command") {
+      index++;
+      while (index < words.length && words[index].startsWith("-")) {
+        const option = words[index++];
+        if (option === "--") break;
+        // `command -v/-V` queries a name; it does not execute the following word.
+        if (option.includes("v") || option.includes("V")) return null;
+      }
+      skipAssignments();
+      continue;
+    }
+    if (wrapper === "env") {
+      index++;
+      let splitCommand: string[] = [];
+      while (index < words.length) {
+        const option = words[index];
+        if (option === "--") {
+          index++;
+          break;
+        }
+        if (option === "-S" || option === "--split-string") {
+          const value = words[index + 1];
+          if (!value) return null;
+          splitCommand = shellWords(value);
+          index += 2;
+          continue;
+        }
+        if (option.startsWith("--split-string=")) {
+          splitCommand = shellWords(option.slice("--split-string=".length));
+          index++;
+          continue;
+        }
+        if (/^(?:-u|--unset|-C|--chdir)$/.test(option)) {
+          index += 2;
+          continue;
+        }
+        if (/^(?:--unset|--chdir)=/.test(option) || option === "-i") {
+          index++;
+          continue;
+        }
+        if (option.startsWith("-")) {
+          index++;
+          continue;
+        }
+        break;
+      }
+      skipAssignments();
+      if (splitCommand.length > 0) {
+        return shellInvocation([...splitCommand, ...words.slice(index)], depth + 1);
+      }
+      continue;
+    }
+
+    const simpleWrappers: Record<
+      string,
+      { shortValues?: string[]; longValues?: string[] }
+    > = {
+      exec: {},
+      nohup: {},
+      nice: { shortValues: ["-n"], longValues: ["--adjustment"] },
+      ionice: {
+        shortValues: ["-c", "-n", "-p", "-P", "-u"],
+        longValues: ["--class", "--classdata", "--pid", "--pgid", "--uid"],
+      },
+      stdbuf: {
+        shortValues: ["-i", "-o", "-e"],
+        longValues: ["--input", "--output", "--error"],
+      },
+      setsid: {},
+      sudo: {
+        shortValues: ["-C", "-D", "-g", "-h", "-p", "-r", "-t", "-T", "-u"],
+        longValues: [
+          "--chdir",
+          "--close-from",
+          "--group",
+          "--host",
+          "--prompt",
+          "--role",
+          "--type",
+          "--user",
+        ],
+      },
+      doas: { shortValues: ["-C", "-u"] },
+      xargs: {
+        shortValues: ["-a", "-E", "-I", "-L", "-n", "-P", "-s"],
+        longValues: [
+          "--arg-file",
+          "--eof",
+          "--replace",
+          "--max-lines",
+          "--max-args",
+          "--max-procs",
+          "--max-chars",
+        ],
+      },
+      time: {
+        shortValues: ["-f", "-o"],
+        longValues: ["--format", "--output"],
+      },
+      unbuffer: {},
+    };
+    const spec = simpleWrappers[wrapper];
+    if (spec) {
+      index = consumeWrapperOptions(
+        words,
+        index + 1,
+        new Set(spec.shortValues ?? []),
+        new Set(spec.longValues ?? []),
+      );
+      skipAssignments();
+      continue;
+    }
+
+    if (wrapper === "timeout") {
+      index = consumeWrapperOptions(
+        words,
+        index + 1,
+        new Set(["-k", "-s"]),
+        new Set(["--kill-after", "--signal"]),
+      );
+      if (index < words.length) index++; // duration
+      skipAssignments();
+      continue;
+    }
+
+    break;
+  }
+
+  const executable = words[index];
+  if (!executable) return null;
+  return {
+    name: basename(executable),
+    args: words.slice(index + 1),
+  };
+}
+
+export function shellCommandInvocations(command: string): ShellInvocation[] {
+  const invocations: ShellInvocation[] = [];
+  for (const segment of shellCommandSegments(command)) {
+    const invocation = shellInvocation(shellWords(segment));
+    if (invocation) invocations.push(invocation);
+  }
+  return invocations;
+}
+
 function shellWordAt(command: string, start: number): { word: string; end: number } | null {
   let word = "";
   let quote: "'" | '"' | null = null;
@@ -331,15 +527,7 @@ export function shellWriteTargets(command: string, cwd = process.cwd()): string[
   // Parse each command segment independently so a mutator never claims a
   // later read-only command's operands. Only destination/in-place operands are
   // candidates for commands that also have read-only source operands.
-  for (const segment of shellCommandSegments(command)) {
-    const words = shellWords(segment);
-    if (words.length === 0) continue;
-    let commandIndex = 0;
-    while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[commandIndex] ?? "")) {
-      commandIndex++;
-    }
-    const commandName = (words[commandIndex] ?? "").split("/").pop() ?? "";
-    const args = words.slice(commandIndex + 1);
+  for (const { name: commandName, args } of shellCommandInvocations(command)) {
     if (commandName === "dd") {
       for (const arg of args) if (arg.startsWith("of=")) add(arg);
       continue;
