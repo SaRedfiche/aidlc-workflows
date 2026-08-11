@@ -1,6 +1,21 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.64] - 2026-08-11
+
+Composed-workflow routing is now deterministic from proposal through execution, and the affected test-runner and live-journey paths fail closed. Stock matches present exactly the grid that will run, incomplete model-produced grids cannot match a stock scope, in-flight recomposition preserves the running plan, isolated stages no longer wait on nonexistent questions, and mid-flow new work carries one typed continuation contract with a named scope. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* `aidlc-graph.ts validate-grid` returns `nearest_stock`, ranking graph/plugin-authored stock scopes by proposal distance, and requires one explicit EXECUTE/SKIP entry for every compiled stage. Missing and extra keys count as differences; composer-authored registry entries remain runnable but cannot become stock-match candidates for unrelated work.
+* Front/report composition routes solely on `validate-grid.nearest_stock` for the final proposal. The earlier mechanical ARS distance is advisory and cannot erase evidence-driven folds, while a matched proposal adopts and revalidates the stock grid before rebuilding its summary and stage-decision table.
+* Editing a matched stock plan converts it to a custom plan so the approved edits persist. In-flight proposals instead use `mode: in-flight`, preserve the current scope, depth, full grid, and frozen actions, and pass exact `changes.skip` / `changes.add` arrays to `recompose`.
+* Isolated single-stage runs (`--stage <slug> --single`) present the pre-generation summary confirmation only after file-backed Q&A. Stages that ask no questions proceed directly to artifact work instead of waiting for an answer that cannot exist.
+* Mid-flow new-work offers emit `ask_type: "new-work-routing"` with `response_route: "next"`, `new_work_description`, and `proposed_scope`; every harness uses that typed route instead of `report`, including rich prose that falls back to the selected default scope.
+* Scan reports are scored as fixes rather than new projects: captured findings screen out ideation framing stages, and pre-existing test or CI gaps do not inflate the plan unless the fix cannot ship without them.
+* Persona files named by `inline_context_paths` are a blocking first-read precondition across every harness, including the mob lead before drafting or support dispatch.
+* Concurrency and live-journey regressions fail on contender crashes or malformed evidence, require actual persona reads and coherent completed-stage advancement, and verify that the new-work offer was rendered before confirmation.
+* Test-runner verbose log directories are per-process (`tests/logs/<stamp>-p<pid>`), preventing concurrent runners started in the same second from deleting or corrupting each other's results. Consumers must read the emitted `Verbose mode: logging to <dir>` line rather than reconstructing the path.
+* No command or flag changes; no breaking change for CI or scripts beyond the log-directory naming note above.
+
 ## [2.5.63] - 2026-08-11
 
 AI-DLC now ships a Cursor harness (`dist/cursor/`) for Cursor IDE and Cursor CLI from one tree. Install it with `bun dist/cursor/install.ts <project>` and run `/aidlc` in chat or `agent -p "/aidlc ..."` headlessly. **Upgrade:** rerun the installer after refreshing `dist/cursor/`; it preserves project-owned configuration and selected-plugin state, refreshes framework routing data, removes unchanged framework files retired by the new release, and refuses symlinked targets or unresolved file collisions. Rebuild and reinstall any AIDLC Cursor plugins.
