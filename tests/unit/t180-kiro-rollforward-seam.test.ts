@@ -11,7 +11,7 @@
 //     argv and their directive is injected; ambiguous freeform invocations
 //     stamp the exact argv in aidlc/.aidlc-forwarding-latch.
 //   pretool-block (preToolUse) — the hard floor: a TRULY BARE advancing
-//     `aidlc __delegate orchestrate next` while the latch is fresh-for-this-turn
+//     `aidlc engine orchestrate next` while the latch is fresh-for-this-turn
 //     (latch.turn === counter) → exit 2 (Kiro BLOCK). Any deliberate move
 //     (advancing flag), a stale latch, or no latch at all → exit 0 (inert). A
 //     fresh forwarding latch rejects changed/dropped first-next arguments and
@@ -23,12 +23,12 @@
 // <cwd>/aidlc/ and signals Kiro purely via stdout + exit code. In-process
 // testing would bypass the exact surface being contracted. No live LLM: the
 // verb-intercept args are recovered deterministically from the expanded prompt
-// body (the `aidlc __delegate orchestrate next <ARGS>` forwarding anchor), and
+// body (the `aidlc engine orchestrate next <ARGS>` forwarding anchor), and
 // pretool-block reads only the counter/latch files we seed.
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -52,34 +52,22 @@ function runAdapter(
   projectDir: string,
   target: string,
   payload: unknown,
-  env: NodeJS.ProcessEnv = {},
 ): { stdout: string; code: number } {
   const r = spawnSync("bun", [join(projectDir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), target], {
     cwd: projectDir,
     input: typeof payload === "string" ? payload : JSON.stringify(payload),
     encoding: "utf-8",
-    env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir, ...env },
+    env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
     timeout: 30_000,
   });
   return { stdout: r.stdout ?? "", code: r.status ?? -1 };
 }
 
-function fakeCompiledExecutable(projectDir: string): string {
-  const path = join(projectDir, process.platform === "win32" ? "fake-aidlc.cmd" : "fake-aidlc");
-  if (process.platform === "win32") {
-    writeFileSync(path, "@echo off\r\necho %*\r\n", "utf-8");
-  } else {
-    writeFileSync(path, "#!/bin/sh\nprintf '%s\\n' \"$*\"\n", "utf-8");
-    chmodSync(path, 0o755);
-  }
-  return path;
-}
-
 // Build an expanded-prompt body carrying the forwarding-loop anchor the seam
-// recovers args from: `… aidlc __delegate orchestrate next <ARGS>` inside a backtick
+// recovers args from: `… aidlc engine orchestrate next <ARGS>` inside a backtick
 // code span (exactly what Kiro substitutes $ARGUMENTS into).
 function promptWithNext(args: string): string {
-  return `Step 1: run \`aidlc __delegate orchestrate next ${args}\` and relay the output.`;
+  return `Step 1: run \`aidlc engine orchestrate next ${args}\` and relay the output.`;
 }
 
 const counterPath = (dir: string) => join(dir, "aidlc", ".aidlc-turn-counter");
@@ -98,7 +86,7 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
       source.indexOf("// --- plan-approval-guard"),
     );
     expect(branch).toContain("AIDLC_COMPILED_EXECUTABLE");
-    expect(branch).toContain('[executable, "hook", "state-transition-guard"]');
+    expect(branch).toContain('[executable, "engine", "hook", "state-transition-guard"]');
   });
 
   test("1: read-only flag (--status) bumps counter to 1 and stamps the read-only-flag latch", () => {
@@ -147,127 +135,6 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
     }
   });
 
-  test("2b: plugin list dispatches off-band and stamps the plugin-verb latch", () => {
-    const dir = scratchProject();
-    try {
-      const r = runAdapter(dir, "verb-intercept", {
-        prompt: promptWithNext("plugin list --json"),
-        cwd: dir,
-      });
-      expect(r.code).toBe(0);
-      expect(r.stdout).toContain("SYSTEM (deterministic harness dispatch)");
-      expect(r.stdout).toContain("/aidlc plugin list --json");
-      const latch = JSON.parse(readFileSync(latchPath(dir), "utf-8")) as {
-        turn?: number;
-        flag?: string;
-        source?: string;
-      };
-      expect(latch.turn).toBe(1);
-      expect(latch.source).toBe("plugin-verb");
-      expect(latch.flag).toBe("plugin list --json");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("2c: compiled plugin dispatch translates internal utility names back to public argv", () => {
-    const dir = scratchProject();
-    try {
-      const executable = fakeCompiledExecutable(dir);
-      for (const command of [
-        "plugin list --json",
-        "plugin sync",
-        "plugin select test-pro another-plugin",
-      ]) {
-        const r = runAdapter(
-          dir,
-          "verb-intercept",
-          { prompt: promptWithNext(command), cwd: dir },
-          { AIDLC_COMPILED_EXECUTABLE: executable },
-        );
-        expect(r.code, command).toBe(0);
-        const relayed = r.stdout.match(/--- OUTPUT ---\n([\s\S]*?)\n--- END OUTPUT ---/)?.[1].trim();
-        expect(relayed, command).toBe(command);
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  // 2d/2e are the KIRO-ONLY half of the knowledge noun. The failure mode is
-  // asymmetric: `/aidlc knowledge …` can work in Claude, Codex, kiro-ide and
-  // opencode and still be swallowed here, because only Kiro runs this pre-LLM
-  // interceptor. Nothing outside this file catches that.
-  test("2d: knowledge onboard dispatches off-band and stamps the knowledge-verb latch", () => {
-    const dir = scratchProject();
-    try {
-      const r = runAdapter(dir, "verb-intercept", {
-        prompt: promptWithNext("knowledge onboard --json"),
-        cwd: dir,
-      });
-      expect(r.code).toBe(0);
-      expect(r.stdout).toContain("SYSTEM (deterministic harness dispatch)");
-      expect(r.stdout).toContain("/aidlc knowledge onboard --json");
-      const latch = JSON.parse(readFileSync(latchPath(dir), "utf-8")) as {
-        turn?: number;
-        flag?: string;
-        source?: string;
-      };
-      expect(latch.turn).toBe(1);
-      expect(latch.source).toBe("knowledge-verb");
-      expect(latch.flag).toBe("knowledge onboard --json");
-      // The NON-COMPILED path must spawn aidlc-knowledge.ts, not
-      // aidlc-utility.ts. Every terminal family before DocumentKB lived in the
-      // utility tool, so the adapter hardcoded it; a knowledge verb sent there
-      // gets "unknown subcommand". Assert on the relayed output because that is
-      // the only observable -- and without this the tool-selection line is
-      // unpinned (verified: reverting it left the whole file green).
-      //
-      // The verb is `onboard` because that is what the tool implements today.
-      // Using a not-yet-built verb made this assert against the tool's OWN
-      // "unknown subcommand" error rather than against the wrong-tool error it
-      // exists to catch -- a test that passed for the wrong reason until the
-      // tool arrived, then failed for the wrong reason too.
-      const relayed = r.stdout.match(/--- OUTPUT ---\n([\s\S]*?)\n--- END OUTPUT ---/)?.[1] ?? "";
-      expect(relayed).not.toMatch(/unknown subcommand/i);
-      expect(relayed).not.toMatch(/Usage: aidlc-utility/i);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("2e: compiled knowledge dispatch restores the public noun + verb argv", () => {
-    const dir = scratchProject();
-    try {
-      const executable = fakeCompiledExecutable(dir);
-      // Every verb, because the adapter's compiledArgs branch is a hand-written
-      // translation: the noun must be re-prepended or the compiled CLI receives
-      // a bare verb it does not route.
-      for (const command of [
-        "knowledge onboard docs/policy.pdf",
-        "knowledge sync",
-        "knowledge list --json",
-        "knowledge show abc-123",
-        "knowledge associate abc-123 --intent auth",
-        "knowledge dissociate abc-123 --intent auth",
-        "knowledge rebind abc-123 --to docs/moved.pdf",
-        "knowledge help",
-      ]) {
-        const r = runAdapter(
-          dir,
-          "verb-intercept",
-          { prompt: promptWithNext(command), cwd: dir },
-          { AIDLC_COMPILED_EXECUTABLE: executable },
-        );
-        expect(r.code, command).toBe(0);
-        const relayed = r.stdout.match(/--- OUTPUT ---\n([\s\S]*?)\n--- END OUTPUT ---/)?.[1].trim();
-        expect(relayed, command).toBe(command);
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
   test("3: non-terminal freeform input stamps a turn-bound forwarding latch", () => {
     const dir = scratchProject();
     try {
@@ -279,7 +146,7 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
       expect(r.code).toBe(0);
       expect(r.stdout).toContain("SYSTEM (deterministic argument forwarding)");
       expect(r.stdout).toContain(
-        `bun .kiro/tools/aidlc.ts __delegate orchestrate next ${raw}`,
+        `bun .kiro/tools/aidlc.ts engine orchestrate next ${raw}`,
       );
       expect(existsSync(counterPath(dir))).toBe(true);
       expect(readFileSync(counterPath(dir), "utf-8").trim()).toBe("1");
@@ -290,27 +157,6 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
       expect(forwarding.turn).toBe(1);
       expect(forwarding.raw).toBe(raw);
       expect(forwarding.args).toEqual(["build", "an", "auth", "service"]);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("3a: intent creation is not executed off-band without a session id", () => {
-    const dir = scratchProject();
-    try {
-      const raw = 'intent create --scope poc --arguments "build auth"';
-      const r = runAdapter(dir, "verb-intercept", {
-        prompt: promptWithNext(raw),
-        cwd: dir,
-      });
-      expect(r.code).toBe(0);
-      expect(r.stdout).toContain("SYSTEM (deterministic engine pre-dispatch)");
-      expect(r.stdout).toContain(
-        "aidlc-utility.ts intent-create --scope poc --arguments 'build auth'",
-      );
-      expect(r.stdout).not.toContain("Intent created:");
-      expect(existsSync(latchPath(dir))).toBe(false);
-      expect(existsSync(forwardingPath(dir))).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -349,7 +195,7 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
       expect(r.stdout).toContain("SYSTEM (deterministic engine pre-dispatch)");
       expect(r.stdout).toContain('"kind":"print"');
       expect(r.stdout).toContain(
-        "aidlc-utility.ts intent-create --scope feature",
+        "aidlc.ts engine intent birth --scope feature",
       );
       expect(existsSync(counterPath(dir))).toBe(true);
       expect(readFileSync(counterPath(dir), "utf-8").trim()).toBe("1");
@@ -411,7 +257,7 @@ describe("t180 pretool-block roll-forward backstop (exit-code contract)", () => 
       );
     }
   }
-  const BARE_NEXT = "aidlc __delegate orchestrate next";
+  const BARE_NEXT = "aidlc engine orchestrate next";
 
   function seedForwarding(
     dir: string,
@@ -431,7 +277,7 @@ describe("t180 pretool-block roll-forward backstop (exit-code contract)", () => 
     const dir = scratchProject();
     try {
       seedClock(dir, 3, 3);
-      const r = runAdapter(dir, "guard-tool-call", { tool_input: { command: BARE_NEXT }, cwd: dir });
+      const r = runAdapter(dir, "pretool-block", { tool_input: { command: BARE_NEXT }, cwd: dir });
       expect(r.code).toBe(2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -442,7 +288,7 @@ describe("t180 pretool-block roll-forward backstop (exit-code contract)", () => 
     const dir = scratchProject();
     try {
       seedClock(dir, 3, 3);
-      const r = runAdapter(dir, "guard-tool-call", {
+      const r = runAdapter(dir, "pretool-block", {
         tool_input: { command: `${BARE_NEXT} --stage foo` },
         cwd: dir,
       });
@@ -456,7 +302,7 @@ describe("t180 pretool-block roll-forward backstop (exit-code contract)", () => 
     const dir = scratchProject();
     try {
       seedClock(dir, 3, 2);
-      const r = runAdapter(dir, "guard-tool-call", { tool_input: { command: BARE_NEXT }, cwd: dir });
+      const r = runAdapter(dir, "pretool-block", { tool_input: { command: BARE_NEXT }, cwd: dir });
       expect(r.code).toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -467,7 +313,7 @@ describe("t180 pretool-block roll-forward backstop (exit-code contract)", () => 
     const dir = scratchProject();
     try {
       // aidlc/ exists but no counter and no latch were ever written.
-      const r = runAdapter(dir, "guard-tool-call", { tool_input: { command: BARE_NEXT }, cwd: dir });
+      const r = runAdapter(dir, "pretool-block", { tool_input: { command: BARE_NEXT }, cwd: dir });
       expect(r.code).toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -483,7 +329,7 @@ describe("t180 pretool-block roll-forward backstop (exit-code contract)", () => 
         '--scope feature "build auth across both repos"',
         ["--scope", "feature", "build auth across both repos"],
       );
-      const r = runAdapter(dir, "guard-tool-call", {
+      const r = runAdapter(dir, "pretool-block", {
         tool_input: { command: BARE_NEXT },
         cwd: dir,
       });
@@ -504,7 +350,7 @@ describe("t180 pretool-block roll-forward backstop (exit-code contract)", () => 
         raw,
         ["--scope", "feature", "build auth across both repos"],
       );
-      const r = runAdapter(dir, "guard-tool-call", {
+      const r = runAdapter(dir, "pretool-block", {
         tool_input: { command: `${BARE_NEXT} ${raw}` },
         cwd: dir,
       });
@@ -526,7 +372,7 @@ describe("t180 pretool-block roll-forward backstop (exit-code contract)", () => 
         raw,
         ["--scope", "poc", "answer the question; continue without waiting"],
       );
-      const r = runAdapter(dir, "guard-tool-call", {
+      const r = runAdapter(dir, "pretool-block", {
         tool_input: {
           command:
             `${BARE_NEXT} --scope poc answer\\ the\\ question\\;\\ continue\\ without\\ waiting`,

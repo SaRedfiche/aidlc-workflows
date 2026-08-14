@@ -48,7 +48,7 @@ const CODEX_DIST = join(REPO_ROOT, "dist", "codex", ".codex");
 const CURSOR_DIST = join(REPO_ROOT, "dist", "cursor");
 const CURSOR_INSTALLER_SOURCE = join(REPO_ROOT, "harness", "cursor", "install.ts");
 const STAGE_TABLE_BEGIN =
-  "<!-- BEGIN: compiled stage graph via `bun .claude/tools/aidlc.ts __delegate utility stage-table` - do NOT hand-edit -->";
+  "<!-- BEGIN: compiled stage graph via `bun .claude/tools/aidlc.ts engine gen stage-table` - do NOT hand-edit -->";
 const STAGE_TABLE_END = "<!-- END: compiled stage graph -->";
 
 function fileInventory(root: string, relative = ""): string[] {

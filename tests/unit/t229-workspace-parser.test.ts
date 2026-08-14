@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  createIntent,
+  birthIntent,
   classifyTerminalCommand,
   parseWorkspaceCommand,
   RESERVED_RECORD_NAME_LIST,
@@ -132,7 +132,7 @@ describe("parseWorkspaceCommand", () => {
     });
   });
 
-  test("ports the spike parser cases for intent list, explicit switch, and create rest", () => {
+  test("ports the spike parser cases for intent list, explicit switch, and birth rest", () => {
     expect(parseWorkspaceCommand(["intent", "260711-simple-calc"])).toEqual({
       kind: "switch",
       noun: "intent",
@@ -162,8 +162,8 @@ describe("parseWorkspaceCommand", () => {
       verb: "switch",
       message: "Usage: aidlc intent switch <name>",
     });
-    expect(parseWorkspaceCommand(["intent", "create", "--scope", "poc", "--label", "x"])).toEqual({
-      kind: "create-intent",
+    expect(parseWorkspaceCommand(["intent", "birth", "--scope", "poc", "--label", "x"])).toEqual({
+      kind: "birth",
       noun: "intent",
       rest: ["--scope", "poc", "--label", "x"],
     });
@@ -220,11 +220,11 @@ describe("parseWorkspaceCommand", () => {
       "help",
       "list",
       "switch",
+      "birth",
       "create",
       "archive",
       "rename",
       "show",
-      "birth",
     ]);
     for (const name of RESERVED_RECORD_NAME_LIST) {
       expect(RESERVED_RECORD_NAMES.has(name)).toBe(true);
@@ -234,20 +234,21 @@ describe("parseWorkspaceCommand", () => {
 });
 
 describe("classifier and next parser parity", () => {
-  test("workspace migration rows render the same utility subcommand at both call sites", () => {
-    const rows: Array<{ args: string[]; invocation: string }> = [
-      { args: ["space"], invocation: "space" },
-      { args: ["space", "teamB"], invocation: "space teamB" },
-      { args: ["space", "create", "teamB"], invocation: "space-create teamB" },
-      { args: ["space", "list"], invocation: "space" },
-      { args: ["space", "list", "--json"], invocation: "space --json" },
-      { args: ["space", "switch", "teamB"], invocation: "space switch teamB" },
-      { args: ["space-create", "teamB"], invocation: "space-create teamB" },
-      { args: ["intent", "some-slug"], invocation: "intent some-slug" },
-      { args: ["intent", "list"], invocation: "intent" },
-      { args: ["intent", "list", "--json"], invocation: "intent --json" },
-      { args: ["intent", "switch", "list"], invocation: "intent switch list" },
-      { args: ["space", "foo", "--status"], invocation: "space foo" },
+  test("workspace migration rows preserve classifier argv and semantic dispatcher routes", () => {
+    const rows: Array<{ args: string[]; invocation: string; route: string }> = [
+      { args: ["space"], invocation: "space", route: "space list" },
+      { args: ["space", "teamB"], invocation: "space teamB", route: "space teamB" },
+      { args: ["space", "create", "teamB"], invocation: "space-create teamB", route: "space create teamB" },
+      { args: ["space", "list"], invocation: "space", route: "space list" },
+      { args: ["space", "list", "--json"], invocation: "space --json", route: "space list --json" },
+      { args: ["space", "switch", "teamB"], invocation: "space switch teamB", route: "space switch teamB" },
+      { args: ["space-create", "teamB"], invocation: "space-create teamB", route: "space create teamB" },
+      { args: ["intent", "some-slug"], invocation: "intent some-slug", route: "intent some-slug" },
+      { args: ["intent", "list"], invocation: "intent", route: "intent list" },
+      { args: ["intent", "list", "--json"], invocation: "intent --json", route: "intent list --json" },
+      { args: ["intent", "switch", "list"], invocation: "intent switch list", route: "intent switch list" },
+      { args: ["intent", "birth", "--scope", "poc", "--label", "x"], invocation: "intent-birth --scope poc --label x", route: "intent birth --scope poc --label x" },
+      { args: ["space", "foo", "--status"], invocation: "space foo", route: "space foo" },
     ];
     for (const row of rows) {
       const cmd = classifyTerminalCommand(row.args);
@@ -258,24 +259,10 @@ describe("classifier and next parser parity", () => {
       try {
         const d = directive(projectDir, row.args);
         expect(d.kind, row.args.join(" ")).toBe("print");
-        expect(d.message, row.args.join(" ")).toContain(`aidlc-utility.ts ${row.invocation}`);
+        expect(d.message, row.args.join(" ")).toContain(`aidlc.ts engine ${row.route}`);
       } finally {
         cleanup(projectDir);
       }
-    }
-  });
-
-  test("intent create stays on the session-aware workflow path", () => {
-    const args = ["intent", "create", "--scope", "poc", "--label", "x"];
-    expect(classifyTerminalCommand(args)).toBeNull();
-
-    const projectDir = scratchProject();
-    try {
-      const d = directive(projectDir, args);
-      expect(d.kind).toBe("print");
-      expect(d.message).toContain("aidlc-utility.ts intent-create --scope poc --label x");
-    } finally {
-      cleanup(projectDir);
     }
   });
 
@@ -324,8 +311,8 @@ describe("classifier and next parser parity", () => {
     try {
       const d = directive(projectDir, ["space", "foo", "--status"]);
       expect(d.kind).toBe("print");
-      expect(d.message).toContain("aidlc-utility.ts space foo");
-      expect(d.message).not.toContain("aidlc-utility.ts status");
+      expect(d.message).toContain("aidlc.ts engine space foo");
+      expect(d.message).not.toContain("aidlc.ts engine status");
     } finally {
       cleanup(projectDir);
     }
@@ -336,7 +323,7 @@ describe("utility handlers and reservation chokepoints", () => {
   test("intent and space handlers accept explicit list, switch, create, and JSON forms", () => {
     const projectDir = scratchProject();
     try {
-      createIntent(projectDir, "alpha-work", "default", "feature");
+      birthIntent(projectDir, "alpha-work", "default", "feature");
 
       const intents = runUtility(projectDir, ["intent", "list", "--json"]);
       expect(intents.status).toBe(0);
@@ -371,9 +358,10 @@ describe("utility handlers and reservation chokepoints", () => {
 
       const d = directive(projectDir, ["intent", "switch", "birth"]);
       expect(d.kind).toBe("print");
-      expect(d.message).toContain("aidlc-utility.ts intent switch birth");
+      expect(d.message).toContain("aidlc.ts engine intent switch birth");
 
       const r = runDispatcher(REPO_ROOT, [
+        "engine",
         "intent",
         "switch",
         "birth",
@@ -390,11 +378,11 @@ describe("utility handlers and reservation chokepoints", () => {
     }
   });
 
-  test("createIntent and space-create refuse every reserved record name", () => {
+  test("birthIntent and space-create refuse every reserved record name", () => {
     for (const name of RESERVED_RECORD_NAME_LIST) {
       const projectDir = scratchProject();
       try {
-        expect(() => createIntent(projectDir, name, "default", "feature"), name).toThrow("reserved name");
+        expect(() => birthIntent(projectDir, name, "default", "feature"), name).toThrow("reserved name");
         const r = runUtility(projectDir, ["space-create", name]);
         expect(r.status, name).not.toBe(0);
         if (name === "help") {
@@ -458,15 +446,15 @@ describe("Kiro quoted argv tokenizer", () => {
       const cases = [
         {
           args: ["space", "create", "My Space"],
-          command: "aidlc-utility.ts space-create 'My Space'",
+          command: "aidlc.ts engine space create 'My Space'",
         },
         {
           args: ["space", "switch", "My Space"],
-          command: "aidlc-utility.ts space switch 'My Space'",
+          command: "aidlc.ts engine space switch 'My Space'",
         },
         {
-          args: ["intent", "create", "--scope", "poc", "--label", "My Work"],
-          command: "aidlc-utility.ts intent-create --scope poc --label 'My Work'",
+          args: ["intent", "birth", "--scope", "poc", "--label", "My Work"],
+          command: "aidlc.ts engine intent birth --scope poc --label 'My Work'",
         },
       ];
       for (const item of cases) {

@@ -33,7 +33,6 @@ sensors:
 scopes:
   - enterprise
   - feature
-  - classic
   - workshop
 inputs: NFR requirements from nfr-requirements stage, NFR design from nfr-design stage, deployed application, observability data from observability-setup stage
 outputs: load-test-plan.md, test-results.md, nfr-validation-matrix.md, performance-validation-questions.md (under this stage's record dir, engine-resolved)
@@ -76,8 +75,8 @@ Create load test plan, performance test results (latency, throughput, error rate
 ### Step 6: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
-`{{INVOKE}} __delegate orchestrate report --stage performance-validation --result <outcome>`.
-That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
+`{{INVOKE}} engine orchestrate report --stage performance-validation --result <outcome>`.
+The engine owns all lifecycle transitions and advancement.
 
 ### Step 7: Present Completion & Request Approval
 

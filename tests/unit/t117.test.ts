@@ -42,8 +42,8 @@
 //   - .sh T9  OUT  'Cannot use --stage and --phase together' -> t9
 //   - .sh T10 OUT  '"kind":"error"'                   -> t10 (env-scope)
 //             OUT  'Invalid AWS_AIDLC_DEFAULT_SCOPE'   -> t10 (verbatim)
-//   - .sh T11 OUT  'scope-change --scope mvp'         -> t11 (print names move)
-//   - .sh T12 OUT  'config-change --depth comprehensive' -> t12
+//   - .sh T11 OUT  'scope change --scope mvp'         -> t11 (print names move)
+//   - .sh T12 OUT  'config set depth comprehensive' -> t12
 //   - .sh T13 OUT  '"stage":"functional-design"'      -> t13 (phase jump)
 //   - .sh T14 OUT  '"kind":"ask"'                     -> t14 (freeform intent)
 //   - .sh T15 OUT  'Cannot jump to initialization stages' -> t15 (--stage init)
@@ -282,31 +282,31 @@ describe("t117 resume branch", () => {
 // (.sh Tests 7-8)
 // ============================================================
 
-describe("t117 birth branch (P4: --init retired, engine names intent-create)", () => {
+describe("t117 birth branch (P4: --init retired, engine names intent-birth)", () => {
   // --- Test 7: a named scope over EXISTING state is NOT a birth ---
   // P4 removed the `--init` flag. A scope named over an existing workflow is a
   // resume/happy-path or a scope-change, never a birth — the engine must NOT
   // emit a birth print (the old "Use --force" re-init guard no longer exists
   // because there is no re-init move).
-  test("7: named scope over existing state → not a birth (no intent-create print)", () => {
+  test("7: named scope over existing state → not a birth (no intent-birth print)", () => {
     const p = proj("state-mid-ideation.md"); // feature scope state
     // Same scope as state → happy path (run the current stage), no birth.
     const r = next(["--scope", "feature"], p);
-    expect(r.out).not.toContain("intent-create");
+    expect(r.out).not.toContain("intent-birth");
     expect(r.out).not.toContain("Use --force to reinitialize");
   });
 
   // --- Test 8: a named scope on a clean workspace → birth print (no mutation) ---
-  // The engine NAMES the `intent-create` move (read-only) and the conductor runs
+  // The engine NAMES the `intent-birth` move (read-only) and the conductor runs
   // it; `next` itself must create NO state (mutation stays conductor-side).
-  test("8: named scope on a clean workspace → print naming intent-create AND no state created", () => {
+  test("8: named scope on a clean workspace → print naming intent-birth AND no state created", () => {
     const p = cleanProj(); // genuinely empty workspace (seeded record stripped)
     const r = next(["--scope", "poc"], p);
     expect(r.out).toContain('"kind":"print"');
     const d = directive(r.stdout);
     expect(d.kind).toBe("print");
-    // The named move is the deterministic intent-create handler.
-    expect(d.message).toContain("intent-create");
+    // The named move is the deterministic intent-birth handler.
+    expect(d.message).toContain("intent birth");
     // File effect: `next` must NOT create state (mutation stays conductor-side).
     expect(existsSync(seededStateFile(p))).toBe(false);
   });
@@ -342,18 +342,18 @@ describe("t117 flag-validation, env-scope, scope/config change, phase jump, free
   // --- Test 11: scope-change against existing state → print (names the move) ---
   // state-mid-ideation is feature scope; --scope mvp is a scope change → print
   // names the scope-change command rather than performing it.
-  test("11: scope-change against existing state → print naming scope-change --scope mvp", () => {
+  test("11: scope-change against existing state → print naming scope change --scope mvp", () => {
     const p = proj("state-mid-ideation.md");
     const r = next(["--scope", "mvp"], p);
-    expect(r.out).toContain("scope-change --scope mvp");
+    expect(r.out).toContain("scope change --scope mvp");
     expect(directive(r.stdout).kind).toBe("print");
   });
 
   // --- Test 12: config-change (depth) against existing state → print ---
-  test("12: config-change (depth) against existing state → print naming config-change --depth", () => {
+  test("12: config-change (depth) against existing state → print naming config set depth", () => {
     const p = proj("state-mid-ideation.md");
     const r = next(["--depth", "comprehensive"], p);
-    expect(r.out).toContain("config-change --depth comprehensive");
+    expect(r.out).toContain("config set depth comprehensive");
     expect(directive(r.stdout).kind).toBe("print");
   });
 

@@ -2,7 +2,7 @@
 
 One of the framework's harnesses: `dist/kiro-ide/` runs the same AI-DLC
 methodology inside [Kiro IDE](https://kiro.dev/). One deterministic core —
-the tools, 33 stage files, protocols, knowledge, sensors, scopes, and rules —
+the tools, 32 stage files, protocols, knowledge, sensors, scopes, and rules —
 is byte-shared across every harness; only the shell (skills, agent configs,
 hook wiring, activation) differs.
 
@@ -37,27 +37,23 @@ hook wiring, activation) differs.
 
 ```bash
 curl -fsSL https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh \
-  | bash -s -- --harness kiro-ide
+  | bash
 cd your-project
-aidlc init
+aidlc config
 aidlc doctor
 ```
 
-The installer verifies the release metadata, executable, and Kiro IDE data
-against the published SHA-256 checksums. The installed runtime does not require
-Bun, Node.js, or Git. The literal `--harness` flag is required in automation.
-An interactive run without it opens a controlling-terminal picker, including
-when the Unix script is piped.
+The installer verifies the release metadata, executable, and all-harness runtime archive against the published SHA-256 checksums. The installed runtime does not require Bun, Node.js, or Git. Harness selection happens in `aidlc config`.
 
 On Windows, download `install.ps1` and run
-`& $installer --harness kiro-ide`. An interactive run may omit the flag;
+`& $installer`. An interactive run may omit the flag;
 redirected input, `pwsh -NonInteractive`, `--yes`, `--json`, and `--quiet`
 require it. For an air-gapped package, use
-`install.sh --from <release-directory> --offline --harness kiro-ide` on Unix or
-`& $installer -From <release-directory> -Offline --harness kiro-ide` on Windows.
+`install.sh --from <release-directory> --offline` on Unix or
+`& $installer -From <release-directory> -Offline` on Windows.
 
-`aidlc init` projects the IDE shell before the project is opened. It merges the
-native `aidlc *` trust entry into `.vscode/settings.json` without replacing
+`aidlc config` projects the IDE shell before the project is opened. It merges the
+native `aidlc engine *` trust entry into `.vscode/settings.json` without replacing
 user-owned settings. Open `your-project/` in Kiro IDE and run
 `/aidlc --doctor` in chat before the first workflow.
 
@@ -75,26 +71,15 @@ git checkout v2
 
 ```bash
 mkdir -p your-project/.kiro your-project/aidlc
-# Safe on fresh installs; required when upgrading from v2.5.56 or earlier.
-for retired_hook in \
-  audit-logger block mint runtime-compile stop sync-statusline
-do
-  rm -f \
-    "your-project/.kiro/hooks/aidlc-${retired_hook}.json" \
-    "your-project/.kiro/hooks/aidlc-${retired_hook}.kiro.hook"
-done
 cp -R dist/kiro-ide/.kiro/. your-project/.kiro/
 cp -R dist/kiro-ide/aidlc/. your-project/aidlc/     # the workspace shell (spaces/default/memory) — a sibling of .kiro/, not inside it
 cp dist/kiro-ide/AGENTS.md your-project/AGENTS.md   # merge if you already have one
 ```
 
-The removal loop is the v2.5.57 hook-name migration. An overlay copy cannot
-delete retired registrations; leaving them in place would register both the old
-and new names. The loop is a no-op on a fresh install. After that cleanup, the
-`cp -R <src>/. <dst>/` form copies the tree **contents** whether
-`your-project/.kiro` already exists or not. A plain
-`cp -r dist/kiro-ide/.kiro your-project/.kiro` nests a second `.kiro` inside an
-existing `.kiro/` and the IDE never sees the new files.
+The `cp -R <src>/. <dst>/` form copies the tree **contents** — it works the
+same whether `your-project/.kiro` already exists (an upgrade) or not (a fresh
+install). A plain `cp -r dist/kiro-ide/.kiro your-project/.kiro` nests a second
+`.kiro` inside an existing `.kiro/` and the IDE never sees the new files.
 
 The `aidlc/` directory is the workspace shell — it ships the pre-built
 `aidlc/spaces/default/memory/` method tree the engine reads. It is a **sibling**
@@ -102,7 +87,7 @@ of `.kiro/`, so copy it separately (or copy the whole `dist/kiro-ide/` tree at
 once). `/aidlc --doctor` fails its "workspace shell ready" check if it is missing.
 
 This source/development channel requires Git and Bun. It does not use
-`aidlc init`; the copied tree already contains the workspace shell.
+`aidlc config`; the copied tree already contains the workspace shell.
 
 Open `your-project/` in Kiro IDE. The install ships:
 
@@ -125,23 +110,23 @@ In the chat panel, run `/aidlc --doctor` to verify the setup, then
 Identical to the Claude Code harness: `/aidlc <description>` starts a
 workflow, `/aidlc --status` reports position, `/aidlc --doctor`, `--stage`,
 `--phase`, `--depth`, `--test-strategy` all work, and the
-per-stage (`/aidlc-domain-design`) and per-scope (`/aidlc-feature`) runner
-skills are installed. A copy install needs no init command because the copied
-tree already contains the shell; a native install runs `aidlc init` once. The
+per-stage (`/aidlc-application-design`) and per-scope (`/aidlc-feature`) runner
+skills are installed. A copy install needs no config command because the copied
+tree already contains the shell; a native install runs `aidlc config` once. The
 first intent auto-births on your first `/aidlc` in either channel.
 
 ## Refresh and version skew
 
-`aidlc upgrade` updates the machine runtime without changing project files.
+`aidlc update` updates the machine runtime without changing project files.
 `aidlc doctor` reports project/runtime version skew. Between workflows, preview
 and apply a project refresh:
 
 ```bash
-aidlc init --dry-run
-aidlc init
+aidlc config --dry-run
+aidlc config
 ```
 
-Init preserves user-owned content and reports local framework edits as
+Config preserves user-owned content and reports local framework edits as
 conflicts. It refuses refresh while any workflow is active; complete the
 workflow first. Upgrade and rollback remain safe during a workflow because
 they do not touch the project.
@@ -152,43 +137,36 @@ Kiro IDE registers hooks through v2 hook JSON files
 (`{"version":"v1","hooks":[{name,trigger,matcher,action}]}`, PascalCase
 triggers) under `.kiro/hooks/` (a different mechanism from Kiro CLI, which
 reads a `hooks` block inside the agent JSON). Native hook commands route through
-`aidlc adapter kiro-ide`; source/development copies route through the projected
+`aidlc engine adapter kiro-ide`; source/development copies route through the projected
 `aidlc-kiro-adapter.ts` shim. Both normalize the IDE event into the shape the
 shared core hooks expect.
 
 Kiro IDE 1.x delivers hook context as **JSON on stdin** (snake_case:
-`{ session_id, tool_name, tool_input, tool_response }`; the older 0.12 builds instead set
+`{ tool_name, tool_input, tool_response }`; the older 0.12 builds instead set
 the `USER_PROMPT` environment variable with a camelCase equivalent, and the
 adapter accepts both). Captured PostToolUse write/shell events leave tool inputs
 empty on both channels, so their written path must be recovered from the result
-text and audit-tail hooks (`rebuild-stage-graph`, `sync-workflow-state`) run
-from the audit trail. The graph-rebuild route also retains the shell result and session
-identity so a successful `intent-create` binds to the invoking session: modern
-events carry the exact `session_id`, while the legacy channel reuses the
-synthetic identity retained by SessionStart. Modern Stop likewise prefers its
-event-local `session_id`, preventing one concurrent chat from consuming
-another chat's post-create handoff; legacy agentStop falls back to the retained
-identity. Later 1.x builds populate some PreToolUse and delegation inputs; the
-adapter preserves those fields without depending on them.
+text and payload-free hooks (`runtime-compile`, `sync-statusline`) run from the
+audit trail. Later 1.x builds populate some PreToolUse and delegation inputs;
+the adapter preserves those fields without depending on them.
 
 The payload acquisition is **gated to payload-dependent targets**
-(`audit-and-sensors`, `log-subagent`, `rebuild-stage-graph`) plus `session-start`
-and `continue-workflow` for their modern `session_id`. A non-empty
-`USER_PROMPT` is consumed immediately on 0.12 builds (which open stdin without
-ever writing); otherwise the adapter reads the 1.x stdin channel with a 2s
-broken-channel ceiling. Every other target - including `block`, which fires on
-every `PreToolUse` - touches neither channel and keeps its zero-latency path.
+(`audit-and-sensors`, `log-subagent`). A non-empty `USER_PROMPT` is consumed
+immediately on 0.12 builds (which open stdin without ever writing); otherwise
+the adapter reads the 1.x stdin channel with a 2s broken-channel ceiling.
+Every other target - including `block`, which fires on every `PreToolUse` -
+touches neither channel and keeps its zero-latency path.
 
 | Hook | Trigger (matcher) | Purpose |
 |------|-------------------|---------|
 | `aidlc-session-start` | `SessionStart` | Injects workflow resume context once per session (the legacy pre-1.0 file stays wired to per-prompt `promptSubmit` — that generation has no session-start trigger) |
 | `aidlc-mint` | `UserPromptSubmit` | Records a human-turn event on every prompt (human-presence gate) |
-| `aidlc-continue-workflow` | `Stop` | Forwarding-loop audit (advisory-only; the Stop trigger cannot block on the IDE - enforcement relies on the conductor's own Stop protocol) |
+| `aidlc-stop` | `Stop` | Forwarding-loop audit (advisory-only; the Stop trigger cannot block on the IDE - enforcement relies on the conductor's own Stop protocol) |
 | `aidlc-block` | `PreToolUse` | Hard-blocks tool calls while an approval gate is open and no human has acted since (human-presence floor) |
-| `aidlc-write-audit-log` | `PostToolUse` (`fs_write\|str_replace\|fs_append`) | Logs artifact create/update, then fires applicable sensors (path from the tool result) |
+| `aidlc-audit-logger` | `PostToolUse` (`fs_write\|str_replace\|fs_append`) | Logs artifact create/update, then fires applicable sensors (path from the tool result) |
 | `aidlc-log-subagent` | `PostToolUse` (`^(subagent_.+\|invoke_sub_agent)$`) | Records `SUBAGENT_COMPLETED` with the delegate's identity. The matcher is broad so any delegate name reaches the adapter; the adapter drops the auxiliary `subagent_response` shell |
-| `aidlc-rebuild-stage-graph` | `PostToolUse` (`execute_bash`) | Recompiles the runtime graph (gated on the audit tail) |
-| `aidlc-sync-workflow-state` | `PostToolUse` (`execute_bash`) | Forward-only sync of `Current Stage` from the latest `STAGE_STARTED` in the audit (the IDE surfaces no task payload to parse) |
+| `aidlc-runtime-compile` | `PostToolUse` (`execute_bash`) | Recompiles the runtime graph (gated on the audit tail) |
+| `aidlc-sync-statusline` | `PostToolUse` (`execute_bash`) | Forward-only sync of `Current Stage` from the latest `STAGE_STARTED` in the audit (the IDE surfaces no task payload to parse) |
 
 `aidlc-session-end` has **no v2 registration**: the IDE's `Stop` trigger fires
 at the end of every assistant turn, not at conversation close, so registering
@@ -268,8 +246,8 @@ Installed and activated? The methodology is the same on every harness — keep
 going with the neutral chapters:
 
 - [Your First Workflow](../02-your-first-workflow.md) — an annotated end-to-end run.
-- [Phases and Stages](../04-phases-and-stages.md) — the 5 phases and 33 stages.
+- [Phases and Stages](../04-phases-and-stages.md) — the 5 phases and 32 stages.
 - [Scopes, Depth, and Test Strategy](../05-scopes-and-depth.md) — right-sizing a run.
 - [Glossary](../glossary.md) — every term defined.
 
-Other harnesses: [AI-DLC on Codex CLI](codex-cli.md) · [AI-DLC on Cursor](cursor.md) · [the harness family index](README.md).
+Other harnesses: [AI-DLC on Codex CLI](codex-cli.md) · [the harness family index](README.md).

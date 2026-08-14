@@ -1,13 +1,8 @@
 {
-<<<<<<< HEAD
-  "name": "claude",
-||||||| parent of f5c8f8211 (feat: add transactional install lifecycle (recovered PR2 snapshot))
-=======
   "schemaVersion": 1,
   "distribution": "claude",
   "productName": "Claude Code",
-  "initNextStep": "open Claude Code in this project and run `/aidlc --doctor`",
->>>>>>> f5c8f8211 (feat: add transactional install lifecycle (recovered PR2 snapshot))
+  "configNextStep": "open Claude Code in this project and run `/aidlc --doctor`",
   "harnessDir": ".claude",
   "rulesSubdir": "rules"
 }

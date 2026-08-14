@@ -1,13 +1,8 @@
 {
-<<<<<<< HEAD
-  "name": "kiro-ide",
-||||||| parent of f5c8f8211 (feat: add transactional install lifecycle (recovered PR2 snapshot))
-=======
   "schemaVersion": 1,
   "distribution": "kiro-ide",
   "productName": "Kiro IDE",
-  "initNextStep": "open this project in Kiro IDE, then run `/aidlc --doctor`",
->>>>>>> f5c8f8211 (feat: add transactional install lifecycle (recovered PR2 snapshot))
+  "configNextStep": "open this project in Kiro IDE, then run `/aidlc --doctor`",
   "harnessDir": ".kiro",
   "rulesSubdir": "steering"
 }

@@ -77,7 +77,7 @@ START deciding. Target: complete in ≤ 4 tool calls when CodeKB is present.
 
 ### Step 1: Detect Workspace
 
-Run `{{INVOKE}} __delegate utility detect --json`. Returns workspace scan
+Run `{{INVOKE}} engine workspace detect --json`. Returns workspace scan
 (projectType, languages, frameworks, buildSystem) and the resolved `scopesDir`
 + `scopeGridPath`. You write ONLY to those two printed paths.
 
@@ -157,7 +157,7 @@ Do NOT compute the composite, bands, or any downstream number yourself. Score
 the five components with cited evidence, then run:
 
 ```
-{{INVOKE}} __delegate graph ars --iae <s> --csu <s> --ve <s> --r <s> --ua <s> [--completed <csv>] [--project-type <t>]
+{{INVOKE}} engine graph ars --iae <s> --csu <s> --ve <s> --r <s> --ua <s> [--completed <csv>] [--project-type <t>]
 ```
 
 and copy its numbers verbatim. The tool owns the weighted composite, the band
@@ -555,7 +555,7 @@ gate.
 
 Write your ARS-derived grid to a temp file and run:
 ```
-{{INVOKE}} __delegate graph validate-grid --proposal <path> --project-type <greenfield|brownfield>
+{{INVOKE}} engine graph validate-grid --proposal <path> --project-type <greenfield|brownfield>
 ```
 Lenient mode for a front/report proposal; for an IN-FLIGHT proposal add
 `--strict` (the same strict check the recompose verb re-runs after approval -
@@ -756,7 +756,7 @@ Composed scopes ship `keywords: []`. They resolve by `--scope <name>` but never
 participate in inference. Making a scope inferable is an explicit human choice
 at the gate. If keywords are granted, run the collision check:
 ```
-{{INVOKE}} __delegate graph validate-grid --proposal <path> --keywords <granted,csv>
+{{INVOKE}} engine graph validate-grid --proposal <path> --keywords <granted,csv>
 ```
 
 ---

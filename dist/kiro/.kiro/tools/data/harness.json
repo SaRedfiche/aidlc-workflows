@@ -1,13 +1,8 @@
 {
-<<<<<<< HEAD
-  "name": "kiro",
-||||||| parent of f5c8f8211 (feat: add transactional install lifecycle (recovered PR2 snapshot))
-=======
   "schemaVersion": 1,
   "distribution": "kiro",
   "productName": "Kiro CLI",
-  "initNextStep": "run `kiro-cli chat`, then `/aidlc --doctor`",
->>>>>>> f5c8f8211 (feat: add transactional install lifecycle (recovered PR2 snapshot))
+  "configNextStep": "run `kiro-cli chat`, then `/aidlc --doctor`",
   "harnessDir": ".kiro",
   "rulesSubdir": "steering"
 }

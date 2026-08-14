@@ -201,8 +201,8 @@ describe("t145 packager contract regressions", () => {
       expect(descriptor.harnessDir).toBe(".foo");
       expect(graph).toContain('"path": ".foo/sensors/');
       expect(graph).not.toContain('"path": ".claude/sensors/');
-      expect(runner).toContain("bun .foo/tools/aidlc-utility.ts");
-      expect(runner).not.toContain("bun .claude/tools/aidlc-utility.ts");
+      expect(runner).toContain("bun .foo/tools/aidlc.ts engine intent birth");
+      expect(runner).not.toContain("bun .claude/tools/aidlc.ts");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -240,7 +240,7 @@ describe("t145 packager contract regressions", () => {
       expect(commands.length).toBeGreaterThan(0);
       expect(
         commands.every((command: string) =>
-          command.startsWith("bun .foo/tools/aidlc.ts adapter foo")
+          command.startsWith("bun .foo/tools/aidlc.ts engine adapter foo")
         ),
       ).toBe(true);
 
@@ -257,8 +257,8 @@ describe("t145 packager contract regressions", () => {
         join(distRoot, ".agents", "skills", "aidlc-init", "SKILL.md"),
         "utf-8",
       );
-      expect(runner).toContain("bun .foo/tools/aidlc-utility.ts");
-      expect(runner).not.toContain("bun .codex/tools/aidlc-utility.ts");
+      expect(runner).toContain("bun .foo/tools/aidlc.ts engine intent birth");
+      expect(runner).not.toContain("bun .codex/tools/aidlc.ts");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -286,7 +286,7 @@ describe("t145 packager contract regressions", () => {
       ).toContain('"path": ".foo/sensors/');
       expect(
         readFileSync(join(generated, "skills", "aidlc-init", "SKILL.md"), "utf-8"),
-      ).toContain("bun .foo/tools/aidlc-utility.ts");
+      ).toContain("bun .foo/tools/aidlc.ts engine intent birth");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
