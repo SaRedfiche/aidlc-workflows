@@ -1,40 +1,20 @@
 #!/usr/bin/env bun
-import { createHash } from "node:crypto";
-import { existsSync, readFileSync, realpathSync, writeSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { existsSync, writeSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
-  errorMessage,
-  parseWorkspaceCommand,
-  workspaceCommandUtilityArgv,
-} from "./aidlc-lib.ts";
-import type { RouteNamespaceName } from "./aidlc-command.ts";
-import { parseSensorManifest } from "./aidlc-sensor-schema.ts";
+  dispatcherWorkspaceUtilityArgv,
+  launcherRouteUsesPin,
+  parseDispatcherPluginCommand,
+  parseDispatcherWorkspaceCommand,
+  type RouteNamespaceName,
+} from "./aidlc-command.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
-import {
-  installRoot,
-  inspectInstalledVersion,
-  installedVersionFingerprint,
-  machineTransactionRoot,
-  projectDirFrom,
-  STRICT_SEMVER,
-  versionRoot,
-} from "./aidlc-install-paths.ts";
-import { executePlan, transactionState, writeOperation } from "./aidlc-transaction.ts";
 import {
   discoverProjectHarnesses,
   packagedDistributionRoot,
   runtimeHarnessDir,
 } from "./aidlc-runtime-paths.ts";
-import { cachedUpdateNotice } from "./aidlc-update.ts";
-import {
-  recoverWindowsUninstallContinuations,
-} from "./aidlc-windows-uninstall.ts";
-import claimSourcesSensorSource from "../sensors/aidlc-claim-sources.md" with { type: "text" };
-import linterSensorSource from "../sensors/aidlc-linter.md" with { type: "text" };
-import requiredSectionsSensorSource from "../sensors/aidlc-required-sections.md" with { type: "text" };
-import typeCheckSensorSource from "../sensors/aidlc-type-check.md" with { type: "text" };
-import upstreamCoverageSensorSource from "../sensors/aidlc-upstream-coverage.md" with { type: "text" };
 
 type Classification = "passthrough" | "translation" | "stub" | "routing-only" | "help";
 type RouteKind =
@@ -138,6 +118,7 @@ export const TOOLS = {
   sensorClaimSources: "aidlc-sensor-claim-sources.ts",
   sensorLinter: "aidlc-sensor-linter.ts",
   sensorRequiredSections: "aidlc-sensor-required-sections.ts",
+  sensorTraceability: "aidlc-sensor-traceability.ts",
   sensorTypeCheck: "aidlc-sensor-type-check.ts",
   sensorUpstreamCoverage: "aidlc-sensor-upstream-coverage.ts",
   state: "aidlc-state.ts",
@@ -149,11 +130,12 @@ export const TOOLS = {
 } as const;
 
 const SENSOR_WORKERS = [
-  [claimSourcesSensorSource, TOOLS.sensorClaimSources],
-  [linterSensorSource, TOOLS.sensorLinter],
-  [requiredSectionsSensorSource, TOOLS.sensorRequiredSections],
-  [typeCheckSensorSource, TOOLS.sensorTypeCheck],
-  [upstreamCoverageSensorSource, TOOLS.sensorUpstreamCoverage],
+  ["claim-sources", TOOLS.sensorClaimSources],
+  ["linter", TOOLS.sensorLinter],
+  ["required-sections", TOOLS.sensorRequiredSections],
+  ["traceability", TOOLS.sensorTraceability],
+  ["type-check", TOOLS.sensorTypeCheck],
+  ["upstream-coverage", TOOLS.sensorUpstreamCoverage],
 ] as const;
 
 export const SLASH_FLAG_ALIASES: readonly Alias[] = [
@@ -510,6 +492,7 @@ export const ROUTES: readonly Route[] = [
       "merge",
       "park",
       "unpark",
+      "unit",
     ],
     helpSections: [
       {
@@ -693,11 +676,11 @@ export const ROUTES: readonly Route[] = [
     group: "intent",
     kind: "custom",
     classification: "translation",
-    verbs: ["list", "switch", "<name>", "birth"],
+    verbs: ["list", "switch", "<name>", "create"],
     custom: "workspace",
     ...PUBLIC_ENGINE,
-    human: [{ command: "intent [list|switch|birth]", summary: "list, switch, or create intent context" }],
-    all: ["list [--json]", "switch <name>", "<name>", "birth [args]"],
+    human: [{ command: "intent [list|switch|create]", summary: "list, switch, or create intent context" }],
+    all: ["list [--json]", "switch <name>", "<name>", "create [args]"],
   },
   {
     id: "space",
@@ -745,13 +728,14 @@ export const ROUTES: readonly Route[] = [
     group: "config",
     kind: "custom",
     classification: "translation",
-    verbs: ["set depth", "set test-strategy", "get", "list"],
+    verbs: ["set depth", "set test-strategy", "set review", "get", "list"],
     custom: "config",
     ...PUBLIC_ENGINE,
     visibility: "hidden",
     targets: {
       "set depth": "config-change",
       "set test-strategy": "config-change",
+      "set review": "config-change",
       get: "config-get",
       list: "config-list",
     },
@@ -760,7 +744,7 @@ export const ROUTES: readonly Route[] = [
       { command: "config set <key> <value>", summary: "change supported project configuration" },
       { command: "config list", summary: "list supported project configuration" },
     ],
-    all: ["set depth <value>", "set test-strategy <value>", "get <key>", "list"],
+    all: ["set depth <value>", "set test-strategy <value>", "set review <value>", "get <key>", "list"],
   },
   {
     id: "plugin",
@@ -842,9 +826,8 @@ export const ROUTES: readonly Route[] = [
     ...HIDDEN_ENGINE,
     all: ["help"],
   },
-  ...SENSOR_WORKERS.map(([source, tool]): Route => {
-    const manifest = parseSensorManifest(source);
-    const group = `sensor-${manifest.id}`;
+  ...SENSOR_WORKERS.map(([sensorId, tool]): Route => {
+    const group = `sensor-${sensorId}`;
     return {
     id: `engine-${group}`,
     namespace: "engine",
@@ -860,7 +843,6 @@ export const ROUTES: readonly Route[] = [
     networkPolicy: "forbidden",
     mutationScope: "project",
     outputModes: ["human", "quiet", "json"],
-    helpSummary: manifest.description,
   };
   }),
   {
@@ -935,6 +917,10 @@ function text(fd: number, value: string | Uint8Array): void {
   writeSync(fd, value);
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function dispatcherDir(): string {
   return dirname(fileURLToPath(import.meta.url));
 }
@@ -948,16 +934,23 @@ function toolsDir(): string {
   return dispatcherDir();
 }
 
-type AdapterHarness = "codex" | "kiro" | "kiro-ide";
+type AdapterHarness = "codex" | "cursor" | "kiro" | "kiro-ide";
 
 const ADAPTER_HARNESS_LEAF: Record<AdapterHarness, string> = {
   codex: ".codex",
+  cursor: ".cursor",
   kiro: ".kiro",
   "kiro-ide": ".kiro",
 };
 
 function isAdapterHarness(value: string): value is AdapterHarness {
   return Object.hasOwn(ADAPTER_HARNESS_LEAF, value);
+}
+
+function adapterFile(harness: AdapterHarness): string {
+  if (harness === "codex") return "aidlc-codex-adapter.ts";
+  if (harness === "cursor") return "aidlc-cursor-adapter.ts";
+  return "aidlc-kiro-adapter.ts";
 }
 
 function resolveHookPath(
@@ -974,6 +967,10 @@ function resolveHookPath(
     : [
         runtimeLeaf,
         ...discoverProjectHarnesses(projectDir).map((candidate) => candidate.harnessDir),
+        ".claude",
+        ".kiro",
+        ".codex",
+        ".cursor",
       ].filter((value, index, values): value is string =>
         typeof value === "string" && value.length > 0 && values.indexOf(value) === index
       );
@@ -1011,7 +1008,10 @@ function stripHelpGroupPrefix(group: string, form: string): string {
   return form.startsWith(`${group} `) ? form.slice(group.length + 1) : form;
 }
 
-export function renderNamespaceHelp(options: NamespaceHelpOptions): string {
+export function renderNamespaceHelp(
+  options: NamespaceHelpOptions,
+  summaryOverrides: ReadonlyMap<string, string> = new Map(),
+): string {
   const lines: string[] = [options.usage, "", options.header];
   const grouped = new Map<string, string[]>();
   const summaries = new Map<string, string>();
@@ -1027,7 +1027,8 @@ export function renderNamespaceHelp(options: NamespaceHelpOptions): string {
       ? route.id.replace(/^top-/, "")
       : route.group;
     grouped.set(group, [...(grouped.get(group) ?? []), ...routeForms(route)]);
-    if (route.helpSummary) summaries.set(group, route.helpSummary);
+    const summary = summaryOverrides.get(group) ?? route.helpSummary;
+    if (summary) summaries.set(group, summary);
     if (route.helpSections) sections.set(group, route.helpSections);
   }
   for (const [group, forms] of grouped) {
@@ -1052,6 +1053,11 @@ export function renderNamespaceHelp(options: NamespaceHelpOptions): string {
     lines.push(`  ${group}: ${rendered.filter(Boolean).join(", ")}`);
   }
   return `${lines.join("\n")}\n`;
+}
+
+export async function renderEngineHelp(): Promise<string> {
+  const { sensorHelpSummaries } = await import("./aidlc-sensor.ts");
+  return renderNamespaceHelp(ENGINE_NAMESPACE_HELP, sensorHelpSummaries());
 }
 
 export function renderAllHelp(): string {
@@ -1093,12 +1099,12 @@ function isSafeName(value: string): boolean {
 
 // TRANSLATION_LOGIC_START
 function handleWorkspace(argv: string[]): Action {
-  const command = parseWorkspaceCommand(argv);
+  const command = parseDispatcherWorkspaceCommand(argv);
   if (command.kind === "not-workspace") return nounError(argv[0], argv[1]);
   if (command.kind === "error") {
     return { type: "error", code: 2, message: `${command.message}\n` };
   }
-  const utilityArgv = workspaceCommandUtilityArgv(command);
+  const utilityArgv = dispatcherWorkspaceUtilityArgv(command);
   if (utilityArgv === null) return nounError(argv[0], argv[1]);
   return { type: "delegate", tool: TOOLS.utility, args: utilityArgv };
 }
@@ -1123,20 +1129,29 @@ function handleConfig(route: Route, argv: string[]): Action {
     if (missing) return missing;
     return { type: "delegate", tool: TOOLS.utility, args: ["config-change", "--test-strategy", value, ...argv.slice(4)] };
   }
+  if (key === "review") {
+    const missing = requireValue("config", "set review", value);
+    if (missing) return missing;
+    return { type: "delegate", tool: TOOLS.utility, args: ["config-change", "--review", value, ...argv.slice(4)] };
+  }
   return nounError("config", key ? `set ${key}` : "set");
 }
 
-function handlePlugin(route: Route, argv: string[]): Action {
-  const verb = argv[1];
-  if (verb === "select") {
-    const target = route.targets?.select ?? "select-plugins";
-    return { type: "delegate", tool: TOOLS.utility, args: [target, ...argv.slice(2)] };
+function handlePlugin(argv: string[]): Action {
+  const command = parseDispatcherPluginCommand(argv);
+  if (command.kind === "help") {
+    return { type: "help", scope: "engine" };
   }
-  if (verb === "sync" || verb === "list") {
-    const target = route.targets?.[verb];
-    if (target) return { type: "delegate", tool: TOOLS.plugin, args: [target, ...argv.slice(2)] };
+  if (command.kind === "error") {
+    return { type: "error", code: 1, message: `${command.message}\n` };
   }
-  return nounError("plugin", verb);
+  if (command.kind === "run") {
+    if (argv[1] === "list" || argv[1] === "sync") {
+      return { type: "delegate", tool: TOOLS.plugin, args: [argv[1], ...argv.slice(2)] };
+    }
+    return { type: "delegate", tool: TOOLS.utility, args: command.argv };
+  }
+  return nounError("plugin", argv[1]);
 }
 
 function handleGen(argv: string[]): Action {
@@ -1164,7 +1179,7 @@ function handleGen(argv: string[]): Action {
 function handleCustom(route: Route, argv: string[]): Action {
   if (route.custom === "workspace") return handleWorkspace(argv);
   if (route.custom === "config") return handleConfig(route, argv);
-  if (route.custom === "plugin") return handlePlugin(route, argv);
+  if (route.custom === "plugin") return handlePlugin(argv);
   if (route.custom === "gen") return handleGen(argv);
   return nounError(argv[0], argv[1]);
 }
@@ -1190,7 +1205,7 @@ function handleRouteOnly(route: Route, argv: string[]): Action {
     if (!isAdapterHarness(harness)) return nounError("adapter", harness);
     if (!target) return nounError("adapter", undefined);
     if (!isSafeName(target)) return nounError("adapter", target);
-    const file = harness === "codex" ? "aidlc-codex-adapter.ts" : "aidlc-kiro-adapter.ts";
+    const file = adapterFile(harness);
     return {
       type: "adapter",
       harness,
@@ -1220,6 +1235,7 @@ function resolveAlias(argv: string[], engineNamespace = false): Action | undefin
       "claim-sources": TOOLS.sensorClaimSources,
       linter: TOOLS.sensorLinter,
       "required-sections": TOOLS.sensorRequiredSections,
+      traceability: TOOLS.sensorTraceability,
       "type-check": TOOLS.sensorTypeCheck,
       "upstream-coverage": TOOLS.sensorUpstreamCoverage,
     };
@@ -1414,9 +1430,7 @@ export function resolveAction(argv: string[]): Action {
       action.path = resolveHookPath("aidlc-statusline.ts", undefined, absoluteProjectDir);
     } else if (action.type === "adapter") {
       action.projectDir = absoluteProjectDir;
-      const file = action.harness === "codex"
-        ? "aidlc-codex-adapter.ts"
-        : "aidlc-kiro-adapter.ts";
+      const file = adapterFile(action.harness);
       action.path = resolveHookPath(file, action.harness, absoluteProjectDir);
     } else if (action.type === "sensor-script-file") {
       action.projectDir = absoluteProjectDir;
@@ -1504,6 +1518,8 @@ async function loadDelegate(tool: string): Promise<DelegateModule | null> {
       return import("./aidlc-sensor-linter.ts");
     case TOOLS.sensorRequiredSections:
       return import("./aidlc-sensor-required-sections.ts");
+    case TOOLS.sensorTraceability:
+      return import("./aidlc-sensor-traceability.ts");
     case TOOLS.sensorTypeCheck:
       return import("./aidlc-sensor-type-check.ts");
     case TOOLS.sensorUpstreamCoverage:
@@ -1653,7 +1669,13 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
     let input = "";
     if (action.harness !== "kiro-ide") {
       input = await readStdin();
-    } else if (action.target === "audit-and-sensors" || action.target === "log-subagent") {
+    } else if (
+      action.target === "audit-and-sensors" ||
+      action.target === "log-subagent" ||
+      action.target === "rebuild-stage-graph" ||
+      action.target === "session-start" ||
+      action.target === "continue-workflow"
+    ) {
       // Mirror the adapter entry point's dual-generation channel contract.
       // IDE 0.12 provides USER_PROMPT and leaves stdin open forever, so consume
       // a non-empty env payload immediately. IDE 1.x leaves USER_PROMPT empty
@@ -1720,18 +1742,20 @@ async function execute(action: Action): Promise<number> {
       : runDelegateDev(action.tool, action.args);
   }
   if (action.type === "help") {
+    const rendered = action.scope === "engine"
+      ? await renderEngineHelp()
+      : action.scope === "system"
+      ? renderNamespaceHelp(SYSTEM_NAMESPACE_HELP)
+      : action.scope === "all"
+      ? renderAllHelp()
+      : renderHumanHelp();
     text(
       1,
-      action.scope === "engine"
-        ? renderNamespaceHelp(ENGINE_NAMESPACE_HELP)
-        : action.scope === "system"
-        ? renderNamespaceHelp(SYSTEM_NAMESPACE_HELP)
-        : action.scope === "all"
-        ? renderAllHelp()
-        : renderHumanHelp(),
+      rendered,
     );
     if (action.scope === "human" && process.stdout.isTTY) {
       try {
+        const { cachedUpdateNotice } = await import("./aidlc-update.ts");
         const notice = cachedUpdateNotice();
         if (notice) text(1, `\n${notice}\n`);
       } catch {
@@ -1856,216 +1880,62 @@ export function routePolicyFor(argv: readonly string[]): Route | null {
 }
 
 function routePinPolicy(argv: readonly string[]): PinPolicy {
-  return routePolicyFor(argv)?.pinPolicy ?? "active";
-}
-
-function projectDistribution(projectDir: string): string | null {
-  const harnessDir = runtimeHarnessDir(projectDir);
-  return discoverProjectHarnesses(projectDir)
-    .find((candidate) => candidate.harnessDir === harnessDir)?.distribution ?? null;
-}
-
-type PinResolutionCache = {
-  schemaVersion: 1;
-  session: string;
-  version: string;
-  distribution: string | null;
-  fingerprint: string;
-  validatedAt: number;
-};
-
-const PIN_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-
-function hashIdentity(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
-function pinSessionId(argv: readonly string[], input: string | null): string | null {
-  if (input) {
-    try {
-      const value = JSON.parse(input) as { session_id?: unknown };
-      if (typeof value.session_id === "string" && value.session_id.length > 0) {
-        return value.session_id;
-      }
-    } catch {
-      // Host-specific fallbacks below cover transports without JSON stdin.
-    }
+  const route = routePolicyFor(argv);
+  if (
+    route &&
+    (route.pinPolicy === "pinned") !== launcherRouteUsesPin(argv)
+  ) {
+    throw new Error(`launcher pin policy drift for route ${route.id}`);
   }
-  const clean = withoutProjectDirFlag(argv);
-  if (clean[0] === "engine" && clean[1] === "adapter" && clean[2] === "kiro-ide") {
-    const vscodePid = process.env.VSCODE_PID?.trim();
-    const vscodeIpc = process.env.VSCODE_IPC_HOOK?.trim();
-    if (vscodePid || vscodeIpc) {
-      return `kiro-ide:${vscodePid ?? ""}:${vscodeIpc ?? ""}`;
-    }
-  }
-  return null;
+  return route?.pinPolicy ?? "active";
 }
 
-function pinCachePath(projectDir: string, sessionId: string): string {
-  const project = existsSync(projectDir) ? realpathSync(projectDir) : resolve(projectDir);
-  return join(
-    installRoot(),
-    "pin-resolution-cache",
-    `${hashIdentity(project)}-${hashIdentity(sessionId)}.json`,
-  );
+function dispatcherProjectDirFrom(argv: readonly string[]): string {
+  const index = argv.indexOf("--project-dir");
+  const explicit = index >= 0 ? argv[index + 1] : undefined;
+  const value = explicit || process.env.AIDLC_PROJECT_DIR ||
+    process.env.CLAUDE_PROJECT_DIR || process.env.KIRO_PROJECT_DIR;
+  return value
+    ? (isAbsolute(value) ? value : resolve(process.cwd(), value))
+    : process.cwd();
 }
 
-function readPinCache(projectDir: string, sessionId: string): PinResolutionCache | null {
-  try {
-    const value = JSON.parse(
-      readFileSync(pinCachePath(projectDir, sessionId), "utf-8"),
-    ) as PinResolutionCache;
-    return value.schemaVersion === 1 &&
-        typeof value.session === "string" &&
-        typeof value.version === "string" &&
-        (value.distribution === null || typeof value.distribution === "string") &&
-        typeof value.fingerprint === "string" &&
-        typeof value.validatedAt === "number"
-      ? value
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function writePinCache(
-  projectDir: string,
-  sessionId: string,
-  version: string,
-  distribution: string | null,
-  fingerprint: string,
-): void {
-  const path = pinCachePath(projectDir, sessionId);
-  const root = machineTransactionRoot();
-  const value: PinResolutionCache = {
-    schemaVersion: 1,
-    session: hashIdentity(sessionId),
-    version,
-    distribution,
-    fingerprint,
-    validatedAt: Date.now(),
-  };
-  executePlan({
-    schemaVersion: 1,
-    root,
-    operations: [writeOperation(
-      relative(root, path),
-      `${JSON.stringify(value, null, 2)}\n`,
-      transactionState(path),
-    )],
-  });
-}
-
-function completePinnedVersion(
-  projectDir: string,
-  sessionId: string | null,
-  version: string,
-  distribution: string | null,
-): boolean {
-  try {
-    const fingerprint = installedVersionFingerprint(version);
-    if (sessionId && fingerprint) {
-      const cache = readPinCache(projectDir, sessionId);
-      if (
-        cache &&
-        cache.session === hashIdentity(sessionId) &&
-        cache.version === version &&
-        cache.distribution === distribution &&
-        cache.fingerprint === fingerprint &&
-        Date.now() - cache.validatedAt >= 0 &&
-        Date.now() - cache.validatedAt <= PIN_CACHE_MAX_AGE_MS
-      ) {
-        return true;
-      }
-    }
-    const inspection = inspectInstalledVersion(version, distribution);
-    if (!inspection.complete) return false;
-    const verifiedFingerprint = installedVersionFingerprint(version);
-    if (!verifiedFingerprint || (fingerprint && fingerprint !== verifiedFingerprint)) return false;
-    if (sessionId) {
-      try {
-        writePinCache(projectDir, sessionId, version, distribution, verifiedFingerprint);
-      } catch {
-        // A cache failure may cost latency, but cannot weaken or block pin enforcement.
-      }
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function reconcilePinRegistration(projectDir: string, version: string): void {
-  const path = join(installRoot(), "pins.json");
-  let pins: Record<string, string> = {};
-  try {
-    if (existsSync(path)) pins = JSON.parse(readFileSync(path, "utf-8")) as Record<string, string>;
-  } catch {
-    return;
-  }
-  const project = existsSync(projectDir) ? realpathSync(projectDir) : resolve(projectDir);
-  let changed = pins[project] !== version;
-  for (const [registered, pinned] of Object.entries(pins)) {
-    if (pinned === version && registered !== project && !existsSync(registered)) {
-      delete pins[registered];
-      changed = true;
-    }
-  }
-  if (!changed) return;
-  pins[project] = version;
-  const machineRoot = machineTransactionRoot();
-  executePlan({
-    schemaVersion: 1,
-    root: machineRoot,
-    operations: [writeOperation(
-      relative(machineRoot, path),
-      `${JSON.stringify(pins, null, 2)}\n`,
-      transactionState(path),
-    )],
-  });
-}
-
-function dispatchPinnedVersion(argv: string[], input: string | null): number | null {
+async function dispatchPinnedVersion(
+  argv: string[],
+  input: string | null,
+): Promise<number | null> {
   if (routePinPolicy(argv) !== "pinned") return null;
-  const projectDir = projectDirFrom(argv);
+  const projectDir = dispatcherProjectDirFrom(argv);
   const pinPath = join(projectDir, ".aidlc-version");
   if (!existsSync(pinPath)) return null;
-  const version = readFileSync(pinPath, "utf-8").trim();
-  if (!STRICT_SEMVER.test(version)) {
+  const { resolvePinnedDispatch } = await import("./aidlc-lifecycle.ts");
+  const result = resolvePinnedDispatch(argv, input);
+  if (result.kind === "none") return null;
+  if (result.kind === "failure") {
     return renderDispatcherFailure(
       argv,
-      2,
-      `${pinPath} must contain one strict semver`,
-      "aidlc config --unpin",
+      result.code,
+      result.message,
+      result.remediation,
     );
   }
-  if (process.env.AIDLC_PIN_DISPATCHED === version) return null;
-  const distribution = projectDistribution(projectDir);
-  if (!completePinnedVersion(projectDir, pinSessionId(argv, input), version, distribution)) {
-    return renderDispatcherFailure(
-      argv,
-      1,
-      `this project requires ${version}, which is not installed completely`,
-      `aidlc config --pin ${version}`,
-    );
-  }
-  reconcilePinRegistration(projectDir, version);
-  if (version === AIDLC_VERSION) return null;
-  const executable = join(versionRoot(version), process.platform === "win32" ? "aidlc.exe" : "aidlc");
-  const child = Bun.spawnSync([executable, ...argv], {
+  const child = Bun.spawnSync([result.executable, ...argv], {
     cwd: process.cwd(),
     stdin: input === null ? "inherit" : new TextEncoder().encode(input),
     stdout: "inherit",
     stderr: "inherit",
-    env: { ...process.env, AIDLC_PIN_DISPATCHED: version, AIDLC_ACTIVE_VERSION: AIDLC_VERSION },
+    env: {
+      ...process.env,
+      AIDLC_PIN_DISPATCHED: result.version,
+      AIDLC_ACTIVE_VERSION: AIDLC_VERSION,
+    },
   });
   return child.exitCode ?? 1;
 }
 
 function refuseUnpinnedMajorSkew(argv: readonly string[]): number | null {
   if (routePinPolicy(argv) !== "pinned") return null;
-  const projectDir = projectDirFrom(argv);
+  const projectDir = dispatcherProjectDirFrom(argv);
   if (existsSync(join(projectDir, ".aidlc-version"))) return null;
   for (const harness of discoverProjectHarnesses(projectDir)) {
     if (
@@ -2130,7 +2000,7 @@ function basicPolicyError(route: Route, argv: readonly string[]): string | null 
 
 function projectPolicyError(route: Route, argv: readonly string[]): string | null {
   if (route.projectRequirement !== "required") return null;
-  const projectDir = projectDirFrom(argv);
+  const projectDir = dispatcherProjectDirFrom(argv);
   const recognized = [
     ".git",
     "package.json",
@@ -2150,7 +2020,7 @@ async function withRoutePolicy(route: Route, argv: readonly string[], run: () =>
     AIDLC_ROUTE_ID: route.id,
     AIDLC_ROUTE_NETWORK_POLICY: route.networkPolicy,
     AIDLC_ROUTE_MUTATION_SCOPE: route.mutationScope,
-    AIDLC_ROUTE_PROJECT_DIR: projectDirFrom(argv),
+    AIDLC_ROUTE_PROJECT_DIR: dispatcherProjectDirFrom(argv),
     AIDLC_ROUTE_OUTPUT_MODE: requestedOutputMode(argv),
   };
   const prior = Object.fromEntries(
@@ -2188,6 +2058,9 @@ export async function main(argv: string[]): Promise<void> {
     !["doctor", "--doctor", "uninstall"].includes(argv[0] ?? "")
   ) {
     try {
+      const { recoverWindowsUninstallContinuations } = await import(
+        "./aidlc-windows-uninstall.ts"
+      );
       const recovered = recoverWindowsUninstallContinuations();
       if (recovered > 0) {
         process.exitCode = renderDispatcherFailure(
@@ -2222,7 +2095,7 @@ export async function main(argv: string[]): Promise<void> {
   ) {
     await readStdin();
   }
-  const pinnedCode = dispatchPinnedVersion(argv, bufferedStdin);
+  const pinnedCode = await dispatchPinnedVersion(argv, bufferedStdin);
   if (pinnedCode !== null) {
     process.exitCode = pinnedCode;
     return;
