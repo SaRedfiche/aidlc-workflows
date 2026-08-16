@@ -23,7 +23,12 @@ import type { EmitContext } from "../../scripts/manifest-types.ts";
 import { absorbReviewerKnowledge } from "../../scripts/agent-knowledge.ts";
 import { renderOnboarding } from "../../scripts/onboarding.ts";
 import onboardingFills from "./onboarding.fills.ts";
-import { projectTier } from "../../core/tools/aidlc-tiers.ts";
+import type { Tier } from "../../core/tools/aidlc-tiers.ts";
+import {
+  modelAgentName,
+  resolveModelPolicy,
+  writeCodexAgentSurface,
+} from "../../core/tools/aidlc-model-policy.ts";
 
 // ---------------------------------------------------------------------------
 // Hook wiring (kiro-normative shape: register ONLY events with a real core-hook
@@ -376,30 +381,19 @@ export default function emit(ctx: EmitContext): void {
     // packager's own reader strips it for the other harnesses).
     const tier = fm.tier?.trim();
     if (!tier) throw new Error(`${mdPath}: agent frontmatter has no tier: line.`);
-    const proj = projectTier(tier, "codex", tierCap); // throws on unknown tier
-    // The harness-neutral reviewer persona cites its own turn cap as "the
-    // `maxTurns: <n>` frontmatter above - keep the two numbers in sync". That
-    // citation assumes a YAML frontmatter block sits above the body - true on
-    // every other harness surface, but Codex TOML personas have no
-    // frontmatter at all (Codex agent discovery reads only the TOML; this
-    // `developer_instructions` string IS the whole persona) and no native
-    // per-agent cap key ships in the emitted TOML. Rewrite the citation for
-    // this surface instead of shipping a dangling pointer, mirroring the
-    // opencode emitter's own prose rename for its `steps:` key.
-    const instructions = rewriteProse(absorbedBody).replace(
-      /the `maxTurns: (\d+)` frontmatter above - keep the two numbers in sync/g,
-      "the core persona's `maxTurns: $1` cap - Codex TOML personas carry no " +
-        "frontmatter and no native per-agent cap key, so this number is " +
-        "prose-only here; update it by hand if the authored cap changes",
+    const effective = resolveModelPolicy(
+      null,
+      modelAgentName(mdPath),
+      tier as Tier,
+      "codex",
+      tierCap,
     );
-    const modelLines =
-      (proj.model !== null ? `model = "${proj.model}"\n` : "") +
-      (proj.effort !== null ? `model_reasoning_effort = "${proj.effort}"\n` : "");
-    return (
+    const instructions = rewriteProse(absorbedBody);
+    return writeCodexAgentSurface(
       `name = "${name}"\n` +
       `description = "${description.replace(/"/g, '\\"')}"\n` +
-      modelLines +
-      `developer_instructions = ${tomlMultiline(instructions.trim())}\n`
+      `developer_instructions = ${tomlMultiline(instructions.trim())}\n`,
+      effective,
     );
   }
 
@@ -489,11 +483,8 @@ export default function emit(ctx: EmitContext): void {
     emissions.push({ path: join(dir, "SKILL.md"), content: () => rewriteProse(gen.renderRunner(scope, scopes[scope].description)) });
     emissions.push({ path: join(dir, "agents", "openai.yaml"), content: () => IMPLICIT_GUARD });
   }
-  // (d) standalone core skills — byte-copy + prose rewrite from core/skills/.
-  // Codex alone does NOT enumerate core/skills/, so this list is the only thing
-  // that ships them here: a skill missing from it silently reaches every OTHER
-  // harness and not this one.
-  for (const skill of ["aidlc-session-cost", "aidlc-replay", "aidlc-outcomes-pack", "aidlc-knowledge"]) {
+  // (d) session skills — byte-copy + prose rewrite from core/skills/
+  for (const skill of ["aidlc-session-cost", "aidlc-replay", "aidlc-outcomes-pack"]) {
     const srcDir = join(coreRoot, "skills", skill);
     if (!existsSync(srcDir)) continue;
     for (const file of walk(srcDir)) {
