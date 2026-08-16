@@ -42,6 +42,7 @@ import {
   activeSpace,
   modelRatesPath,
   readSessionIntentUuid,
+  resolveProjectFlag,
   sessionsDir,
   withAuditLock,
   writeFileAtomic,
@@ -137,6 +138,17 @@ function readRatesFile(path: string): Record<string, PriceRow> {
   } catch {
     return {};
   }
+}
+
+// The usage-tracking kill switch. Set AIDLC_DISABLE_USAGE_TRACKING=1 to stop
+// the ledger producer from writing and every consumer from reading: the fold
+// hooks and Stop-hook flush become no-ops, the statusline renders no cost
+// segment, and STAGE_COMPLETED / WORKFLOW_COMPLETED add no rollup fields.
+// Follows the AIDLC_DISABLE_* hook-flag convention (exact string "1"). Read at
+// call time, never cached - each hook/tool is a fresh process, and tests
+// toggle it mid-process.
+export function usageTrackingDisabled(): boolean {
+  return resolveProjectFlag("AIDLC_DISABLE_USAGE_TRACKING") === "1";
 }
 
 let _rates: Record<string, PriceRow> | null = null;
@@ -1236,6 +1248,7 @@ export function stageUsageAuditFields(
   stageSlug: string,
   workflowKey: string = intentUsageKey(projectDir),
 ): Record<string, string> {
+  if (usageTrackingDisabled()) return {};
   const stage =
     loadLedger(projectDir).workflows[workflowKey]?.byStage[stageSlug];
   return stage ? aggregateUsageAuditFields(stage) : {};
@@ -1245,6 +1258,7 @@ export function workflowUsageAuditFields(
   projectDir: string,
   workflowKey: string = intentUsageKey(projectDir),
 ): Record<string, string> {
+  if (usageTrackingDisabled()) return {};
   const workflow = loadLedger(projectDir).workflows[workflowKey];
   return workflow && hasAnyTokens(workflow.totals)
     ? aggregateUsageAuditFields(workflow)
@@ -1257,6 +1271,7 @@ export function sessionUsageAggregate(
   workflowKey?: string,
   sessionId?: string,
 ): UsageAggregate | null {
+  if (usageTrackingDisabled()) return null;
   const resolvedTranscript =
     transcriptPath ?? (sessionId ? readCurrentTranscriptPath(projectDir, sessionId) : null);
   const sessionKey = sessionUsageKey(resolvedTranscript ?? undefined, sessionId);
@@ -1288,6 +1303,8 @@ export function writeCurrentTranscriptPath(
   sessionId: string,
   transcriptPath: string,
 ): void {
+  // Only usage consumers read these pointers, so the kill switch covers them.
+  if (usageTrackingDisabled()) return;
   if (!transcriptPath) return;
   try {
     mkdirSync(sessionsDir(projectDir), { recursive: true });
@@ -1599,6 +1616,8 @@ export function foldTranscriptIntoLedger(
   modeOrFlush: FoldMode | boolean = "holdback",
   context: UsageContext = {},
 ): Ledger {
+  // Kill switch: the producer writes nothing (existing ledger left untouched).
+  if (usageTrackingDisabled()) return emptyLedger();
   try {
     return withUsageLedgerLock(projectDir, () => {
       const mode: FoldMode =

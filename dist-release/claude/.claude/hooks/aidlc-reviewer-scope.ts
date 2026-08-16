@@ -53,6 +53,7 @@ import {
   isoTimestamp,
   recordHookDrop,
   releaseAuditLock,
+  resolveProjectFlag,
   resolveProjectDirFromHook,
   REVIEWER_DISPATCH_TTL_MS,
   reviewerDispatchPath,
@@ -706,7 +707,7 @@ const REVIEW_AGENT_RE = /^aidlc-(architecture-reviewer|product-lead)-agent$/;
 
 export async function run(input: string): Promise<number> {
   // Deterministic off-switch: enforcement disabled entirely.
-  if (process.env.AIDLC_DISABLE_REVIEWER_SCOPE_HOOK === "1") return 0;
+  if (resolveProjectFlag("AIDLC_DISABLE_REVIEWER_SCOPE_HOOK") === "1") return 0;
 
   const projectDir = resolveProjectDirFromHook(import.meta.url);
 

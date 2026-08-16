@@ -125,6 +125,7 @@ import {
   resolveBoltDag,
   type BoltDagResolution,
   resolveProjectDir,
+  resolveProjectFlag,
   scopeCostSummary,
   selectionAwareDefaultScope,
   resolveDefaultScope,
@@ -640,7 +641,7 @@ function resolveScope(
   if (flags.positionalScope && flags.positionalScope.length > 0) {
     return { scope: flags.positionalScope, source: "positional" };
   }
-  const envScope = (process.env.AWS_AIDLC_DEFAULT_SCOPE || "").trim();
+  const envScope = (resolveProjectFlag("AWS_AIDLC_DEFAULT_SCOPE") || "").trim();
   if (envScope.length > 0) {
     if (validScopes().has(envScope)) return { scope: envScope, source: "env" };
     // Only installed-but-disabled scopes participate in selection-aware
@@ -3829,7 +3830,7 @@ function checkEnsembleEvidence(
     !isGated ||
     !requiresEnsembleEvidence(node) ||
     options.settledSwarm === true ||
-    process.env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE === "1"
+    resolveProjectFlag("AIDLC_DISABLE_ENSEMBLE_EVIDENCE") === "1"
   ) {
     return { ok: true };
   }
@@ -4497,7 +4498,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     isGated &&
     stageCheckbox.state !== "completed" &&
     readAutonomyMode(stateContent) !== "autonomous" &&
-    process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD !== "1" &&
+    resolveProjectFlag("AIDLC_SKIP_HUMAN_PRESENCE_GUARD") !== "1" &&
     !flags.userInput?.trim()
   ) {
     emit(errorDirective(
