@@ -3608,6 +3608,127 @@ export function isNonAnswer(text: string | undefined | null): boolean {
   return t.length === 0 || NON_ANSWER_RE.test(t);
 }
 
+// HUMAN_TURN proves only that a prompt-submit seam fired after the previous
+// resolution. Several harnesses do not expose trusted prompt text, so the
+// framework cannot prove that --user-input/--feedback/--details came from the
+// human. This helper enforces the narrower property that IS mechanically
+// available: reject recognized, explicit statements that attribute THIS
+// authority-bearing decision to the conductor/model. Unlabelled or unknown
+// wording deliberately fails open; this is a defense-in-depth tripwire, not an
+// authorship boundary.
+export type DecisionKind = "approval" | "rejection" | "answer";
+
+export interface SelfAttributionMarker {
+  category: "non-human-decision" | "model-authored-decision" | "conductor-default";
+  phrase: string;
+}
+
+function maskQuotedDecisionExamples(text: string): string {
+  const mask = (value: string): string => value.replace(/[^\n]/g, " ");
+  return text
+    .replace(/(```|~~~)[\s\S]*?\1/g, mask)
+    .replace(/(^|\n)[ \t]*(?:```|~~~)[^\n]*(?:\n[\s\S]*|$)/g, mask)
+    .replace(/``[^`\n]*``|`[^`\n]*`/g, mask)
+    .replace(/^ {0,3}>[^\n]*(?:\n(?!\s*$)[^>\n][^\n]*)*/gm, mask)
+    .replace(/"[^"\n]*"|“[^”\n]*”|‘[^’\n]*’/g, mask)
+    .replace(/(^|[\s([{:])'[^'\n]+'(?=$|[\s)\]},.;:!?])/gm, mask);
+}
+
+export function selfAttributedDecisionMarker(
+  text: string | undefined | null,
+  kind: DecisionKind,
+): SelfAttributionMarker | null {
+  const original = text ?? "";
+  const candidate = maskQuotedDecisionExamples(original);
+  const actor = "(?:agent|assistant|conductor|model|ai)";
+  const noun = kind === "approval"
+    ? "(?:approval|approve|decision|choice|confirmation)"
+    : kind === "rejection"
+      ? "(?:rejection|reject|decision|choice|change[ -]request|request changes)"
+      : "(?:answer|decision|choice|confirmation)";
+  const verb = kind === "approval"
+    ? "(?:approv(?:e|ed|ing)|choos(?:e|en|ing)|select(?:ed|ing))"
+    : kind === "rejection"
+      ? "(?:reject(?:ed|ing)?|request(?:ed|ing)? changes|choos(?:e|en|ing)|select(?:ed|ing))"
+      : "(?:answer(?:ed|ing)?|respond(?:ed|ing)?|choos(?:e|en|ing)|select(?:ed|ing))";
+  const decisionTail = String.raw`(?=(?:\s*(?:[,.;:!?。！？；：，、)）]|$|\b(?:to|because|so|for)\b)|\s+[-–—]))`;
+  const categories: Array<{
+    category: SelfAttributionMarker["category"];
+    regex: RegExp;
+  }> = [
+    {
+      category: "non-human-decision",
+      regex: new RegExp(
+        String.raw`\b(?:not|isn['’]t)\s+(?:(?:a|the)\s+)?human(?:['’]s)?\s+${noun}\b${decisionTail}`,
+        "i",
+      ),
+    },
+    {
+      category: "model-authored-decision",
+      regex: new RegExp(
+        String.raw`(?:^|\n)\s*(?:[A-Z]\.\s*)?${actor}[-\s]+initiated\s+(?:(?:this|the|an?)\s+)?${noun}\b${decisionTail}`,
+        "i",
+      ),
+    },
+    {
+      category: "model-authored-decision",
+      regex: new RegExp(
+        String.raw`(?:^|\n)\s*(?:[A-Z]\.\s*)?${actor}[-\s]+(?:authored|generated|recorded|written)\s+(?:(?:this|the|an?)\s+)?${noun}\b${decisionTail}`,
+        "i",
+      ),
+    },
+    {
+      category: "model-authored-decision",
+      regex: new RegExp(
+        String.raw`\b${noun}\s+(?:was|is)\s+(?:generated|authored|written|supplied|entered|selected|chosen|made)\s+by\s+(?:(?:an?|the)\s+)?${actor}\b${decisionTail}`,
+        "i",
+      ),
+    },
+    {
+      category: "model-authored-decision",
+      regex: new RegExp(
+        String.raw`\bi\s*,?\s+(?:as\s+)?(?:the\s+)?${actor}\s*,?\s+(?:am|have)\s+${verb}\b`,
+        "i",
+      ),
+    },
+    {
+      category: "model-authored-decision",
+      regex: new RegExp(
+        String.raw`\b${actor}\s+(?:chose|selected)\s+(?:this\s+)?${noun}\b${decisionTail}`,
+        "i",
+      ),
+    },
+    ...(kind === "rejection"
+      ? [{
+          category: "model-authored-decision" as const,
+          regex: new RegExp(String.raw`\b${actor}\s+rejected\s+this\b${decisionTail}`, "i"),
+        }]
+      : []),
+    {
+      category: "conductor-default",
+      regex: /(?:^|\n)\s*(?:[A-Z]\.\s*)?(?:[^\n]{1,80}?\s[-–—:]\s*)?conductor(?:['’]s)?[ -]+default(?=(?:\s*(?:[,.?!;:。！？；：，、()[\]]|$)|\s+[-–—]))/i,
+    },
+  ];
+
+  for (const { category, regex } of categories) {
+    const match = regex.exec(candidate);
+    if (match?.index !== undefined) {
+      return {
+        category,
+        phrase: original.slice(match.index, match.index + match[0].length),
+      };
+    }
+  }
+  return null;
+}
+
+export function isAutonomousConstructionDecision(
+  stateContent: string | null,
+  stagePhase: string | null | undefined,
+): boolean {
+  return stagePhase === "construction" && isAutonomousMode(stateContent);
+}
+
 // True when any stage sits at [?] (awaiting-approval) in the state file: the
 // "a gate is actually OPEN" predicate for the per-harness preToolUse floors.
 // Without it a floor would keep refusing tool calls AFTER a legitimate approval

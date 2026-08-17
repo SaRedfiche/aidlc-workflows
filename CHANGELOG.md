@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.13] - 2026-08-17
+
+Authority-bearing commands now reject a narrow set of explicit statements that attribute the current approval, rejection, or interview answer to the conductor/model rather than the human. This is a defense-in-depth tripwire for self-labelled automation observed in issue #742; it does not prove human authorship and deliberately fails open for unlabelled or unrecognized wording. **Upgrade:** refresh `dist/<harness>/` in your project.
+
+* `approve --user-input`, `reject --feedback`, and `aidlc-log answer --details` reject recognized high-confidence self-attribution phrases without emitting the authority receipt or mutating workflow state.
+* The tripwire is scoped by decision kind and avoids generic phrases about Human Resources, response time, conductor services, unattended systems, quoted examples, or code being changed by an agent.
+* Autonomous exemption applies only to ordinary Construction-stage approvals, rejections, and answers while Construction Autonomy Mode is active; Ideation, Inception, and Operation remain guarded even if that field is present, and consolidated summary confirmation remains human-backed.
+* `HUMAN_TURN` remains presence/freshness evidence only. Audit and reference documentation explicitly state that caller-supplied decision prose is not an authenticated human transcript.
+
 ## [2.6.12] - 2026-08-17
 
 GitHub Copilot now preserves the latest delivered AI-DLC directive across Stop and rejects replay through an atomic Copilot-owned engine cursor rather than relying on hook admission. The shared engine records both `load-steering` and `run-stage` routing metadata, while `sessionless:` and non-Copilot continuation remain stateless in this release. **Upgrade:** refresh `dist/copilot/` and start a fresh Copilot conversation for an in-flight workflow so pre-upgrade transport markers cannot be reused.
