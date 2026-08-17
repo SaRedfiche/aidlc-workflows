@@ -13,6 +13,7 @@ paths = [
     '''\.gitleaks-baseline\.json$''',
     '''uv\.lock$''',
     '''packages/shared/tests/test_credential_scrubber\.py$''',
+    '''tests/harness/eval/shared-credential-scrubber\.test\.ts$''',
 ]
 regexes = [
     '''argv-secret-7f4d2''',
