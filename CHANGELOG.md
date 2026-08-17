@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.14] - 2026-08-17
+
+New structured audit blocks no longer carry duplicate `**Timestamp**:` lines. `renderAuditBlock` now exclusively owns the `Timestamp` and `Event` fields, while `park`, `unpark`, and the `practices-promote` write-failure path no longer pass redundant timestamps. **Upgrade:** re-copy your `dist/<harness>/` shell into the project. Existing shards remain byte-unchanged: block-aware readers need no migration, while flat readers must split on `---` and use the first emitter-owned timestamp in each block (or deduplicate historical timestamp fields).
+
+* `aidlc-state.ts park`, `unpark`, and the `practices-promote` write-failure path no longer pass a redundant `Timestamp` field; the emitter-written value is unchanged.
+* `audit append --field Timestamp=...` remains accepted for compatibility, but the supplied value is intentionally ignored because structured emitters own `Timestamp`; sibling fields still render normally.
+* Audit references now document emitter-owned fields, the accepted-but-ignored compatibility behavior, and the reader requirements for historical duplicate blocks.
+
 ## [2.6.13] - 2026-08-17
 
 Authority-bearing commands now reject a narrow set of explicit statements that attribute the current approval, rejection, or interview answer to the conductor/model rather than the human. This is a defense-in-depth tripwire for self-labelled automation observed in issue #742; it does not prove human authorship and deliberately fails open for unlabelled or unrecognized wording. **Upgrade:** refresh `dist/<harness>/` in your project.
@@ -30,7 +38,6 @@ Review receipt invalidation is now recoverable without weakening normal review b
 * Per-Unit waves expose `recovery-required` with the exact next ordinal and `escalation-required` after recovery is spent, while mixed stale/never-reviewed completion refusals now give both groups an actionable remedy.
 * Retry and recovery-spent refusals no longer contradict each other. Interactive attempts, including autonomous inline waves after recovery is spent, reset only after a human Request Changes decision; autonomous Bolt Units halt before `finalize` and use a human-approved restart instead of waiting for an unreachable post-merge gate.
 * Intact receipts retain their existing advisory normal-flow and adversarial iteration budgets; ordinary over-budget requests are still refused.
-
 ## [2.6.8] - 2026-08-15
 
 The reviewer work loop gets a hard backstop: both review-only agents (`aidlc-architecture-reviewer-agent`, `aidlc-product-lead-agent`) now carry a 60-turn cap - authored once as `maxTurns: 60` in the persona frontmatter, enforced natively on every harness with a lever (Claude Code `maxTurns`, opencode `steps`) and mirrored as a harness-neutral `## Turn Budget` persona section everywhere - and the stage protocol closes the previously undefined branch where a reviewer that dies before writing its verdict (turn cap, crash, context exhaustion) left the conductor reading a stale, partial, or missing `## Review`. A review now counts only when it parses: exactly one current `## Review` section with exactly one canonical READY/NOT-READY verdict. Anything else is an incomplete attempt that retries the same review once with `--retry-pending` (consuming no review iteration - an advisory budget is one pass) and then records a terminal `NOT-READY` receipt with the finding "review did not complete within its turn budget", so the gate is never presented on - or deadlocked by - a silently missing verdict. Before every reviewer dispatch the conductor now deletes any existing `## Review` section (review history lives in the audit ledger), closing the revision-path gap where a stale pre-revision READY could be misread as covering revised work. The GitHub Copilot orchestrator also catches up to the review-class engine. **Upgrade:** re-copy your `dist/<harness>/` tree into the project (the reviewer agent files, `aidlc-common/protocols/stage-protocol.md`, and every orchestrator SKILL.md changed).
