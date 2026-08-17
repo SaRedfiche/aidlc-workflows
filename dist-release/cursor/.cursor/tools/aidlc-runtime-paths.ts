@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const MODULE_TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
 const MODULE_HARNESS_ROOT = join(MODULE_TOOLS_DIR, "..");
-const PROJECTED_INVOKE = "bun .aidlc/tools/aidlc.ts";
+const PROJECTED_INVOKE = "aidlc";
 
 export interface HarnessLocation {
   harnessDir?: string;
