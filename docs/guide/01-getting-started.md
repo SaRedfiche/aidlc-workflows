@@ -147,8 +147,17 @@ Missing credentials are not blocking. A server you have no credentials for — n
 
 ## Installation
 
-The recommended path installs a checksum-verified native executable and every
-harness runtime, then `aidlc config` selects the project harness.
+AI-DLC installs by copying its distribution for your harness into your project.
+Step 1 below has the copy commands for every harness; the rest of this chapter
+continues on **Claude Code** (the `dist/claude/` tree, which ships as a
+`.claude/` directory). On another harness, finish the install in its chapter
+instead - [Running on Kiro CLI](harnesses/kiro-cli.md),
+[Running on Kiro IDE](harnesses/kiro-ide.md),
+[Running on Codex CLI](harnesses/codex-cli.md),
+[AI-DLC on Cursor](harnesses/cursor.md),
+[AI-DLC on opencode](harnesses/opencode.md), or
+[AI-DLC on GitHub Copilot](harnesses/copilot.md) - each covers the prerequisites
+and post-copy steps that differ.
 
 ### Step 1: Install the native runtime
 
@@ -292,6 +301,17 @@ Apply the copy channel's `.gitignore` and hook trust steps from
 </details>
 
 <details markdown="1">
+<summary><strong>Cursor</strong></summary>
+
+```bash
+bun dist/cursor/install.ts your-project
+```
+
+Then continue in [AI-DLC on Cursor](harnesses/cursor.md) for IDE and CLI usage, hook behavior, permissions, and installer refresh rules.
+
+</details>
+
+<details markdown="1">
 <summary><strong>opencode</strong></summary>
 
 ```bash
@@ -352,7 +372,8 @@ Run the health check to confirm everything is in place:
 /aidlc --doctor
 ```
 
-`--doctor` exits 0 when every check passes and 1 when any check fails; the full report writes to stdout in both cases.
+`--doctor` exits 0 for a clean or warnings-only report and 1 when any check
+fails; the full report writes to stdout in both cases.
 
 ### What `--doctor` checks
 
@@ -375,25 +396,21 @@ Run the health check to confirm everything is in place:
 ### Example copy-install output
 
 ```
-✓ bun installed (required for CLI tools and hooks)
-✓ aidlc-audit-logger.ts present
-✓ aidlc-sync-statusline.ts present
-✓ aidlc-validate-state.ts present
-✓ aidlc-log-subagent.ts present
-✓ aidlc-session-start.ts present
-✓ aidlc-session-end.ts present
-✓ aidlc-statusline.ts present
-✓ settings.json present
-✓ AWS_AIDLC_DEFAULT_SCOPE (unset — no project default)
-✓ workspace shell ready (.claude/ + aidlc/spaces/default/memory/)
-✓ Hook heartbeats: not yet fired (first workflow stage will populate)
-✓ State matches last audit event (no drift)
-✓ Cycle detection: 0 cycles
-✓ Orphan stage files: 32 graph entries all have files
-✓ Scope validation: 9 scopes valid (29 advisories)
-✓ Schema validation: 32/32 stages valid
-✓ Graph references: 122 artifacts + edges resolved
-✓ Keyword overlap: no conflicts
+AI-DLC doctor
+
+Machine
+  ok    bun installed (required for CLI tools and hooks)
+
+Project (.claude, Claude Code)
+  ok    settings.json present
+  warn  Hook heartbeats: not yet fired
+        fix: Run the first workflow stage to populate hook heartbeats
+
+Framework integrity
+  ok    all checks passed (12 framework checks)
+
+0 problems, 1 warning.
+Warnings are advisory - if everything works, ignore them.
 ```
 
 ### Fixing failures
@@ -405,7 +422,7 @@ Run the health check to confirm everything is in place:
 | `settings.json` missing | Native: run `aidlc config`. Copy: re-copy `dist/claude/.claude/settings.json`. |
 | Workspace shell missing | Native: run `aidlc config`. Copy: re-copy the workspace shell from `dist/claude/` into the project root. |
 | State file issues | Archive the active intent's record dir under `aidlc/spaces/<space>/intents/` and run `/aidlc` to start fresh |
-| Graph/scope/schema/keyword failures | The diagnostic reports the specific artifact, slug, or scope name at fault. These indicate authoring drift in `.claude/aidlc-common/stages/` or `.claude/scopes/`; regenerate the compiled graph + scope grid with `bun .claude/tools/aidlc-graph.ts compile` or inspect the named stage/scope directly. |
+| Graph/scope/schema/keyword failures | The diagnostic reports the specific artifact, slug, or scope name at fault. These indicate authoring drift in `.claude/aidlc-common/stages/` or `.claude/scopes/`; regenerate the compiled graph + scope grid with `{{INVOKE}} engine graph compile` or inspect the named stage/scope directly. |
 
 ---
 
