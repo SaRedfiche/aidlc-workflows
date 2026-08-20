@@ -1,6 +1,16 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.105] - 2026-08-26
+
+Existing vision documents, PRDs, requirements briefs, and other referenced files now feed the workflow through a deterministic, trust-marked read boundary. Multiline initial requests persist outside the line-oriented state grammar, and ambiguous, missing, redirected, out-of-workspace, non-text, or oversized document references stop for clarification instead of being guessed. **Upgrade:** refresh your `dist/<harness>/` shell so the updated utility, stage instructions, and description sidecar are installed together.
+
+* Reference one explicit project-root-relative document path in the initial request, such as `/aidlc Read ./vision.md and build what it describes`; the stage transfers it through the active record's fixed `.aidlc-document-input-path` file, so filename metacharacters never enter a shell command, and direct reads do not search by basename or follow symlinks.
+* Direct UTF-8 text and Markdown input is emitted with the same `UNTRUSTED DATA - NOT INSTRUCTIONS` and `UNTRUSTED PATHS - NOT INSTRUCTIONS` boundary as DocumentKB. Binary and unsupported formats must use `/aidlc knowledge onboard` and `show`; oversized inputs are refused before their payload is allocated.
+* Explicitly delimited pasted documents receive the same inert-data treatment. Intent Capture uses document claims only to shape clarifying questions until confirmed through `[Q<n>]`; Requirements Analysis treats bounded content as primary data without granting it workflow authority.
+* Unmatched, nested, or directionless `<document>` input is refused before intent creation, so clarification cannot strand a partially initialized record.
+* The exact initial description is stored as one JSON string in committed `<record>/project-description.json`; downstream stages treat that marked sidecar as authoritative across resume and clone, while pre-2.6.105 records retain the legacy state-field fallback.
+
 ## [2.6.104] - 2026-08-26
 
 Error recovery now keeps the same project-focused voice as normal workflow progress without weakening terminal errors or state-aware review recovery. **Upgrade:** refresh your `dist/<harness>/` shell so every harness receives the updated conductor rules, tools, and hooks.
@@ -16,7 +26,6 @@ Kind-vacuous Construction units no longer deadlock summary-confirmation routing 
 
 * Unit-major iteration now advances past kind-vacuous units to the next applicable stage and unit instead of emitting `Refusing to complete`.
 * Stage-major per-unit approval now presents the normal gate when all units are kind-vacuous, without requiring nonexistent questions or summary confirmation.
-
 ## [2.6.102] - 2026-08-26
 
 Rule files can now carry validated lifecycle metadata, and doctor separates stale team/project overlaps from live contradiction-review candidates without changing runtime rule delivery. **Upgrade:** refresh your `dist/<harness>/` shell; add lifecycle fields only where you want file-level drift triage.
@@ -196,7 +205,6 @@ Concurrent sessions in one checkout now keep workflow selection, usage, lifecycl
 * Learning surfacing, usage folding, SessionEnd, and Stop-hook fresh-intent handoffs resolve through the session binding instead of accepting a concurrently moved shared cursor.
 * Hook payload identity, `AIDLC_SESSION_OVERRIDE`, and validated PID ancestry provide one session identity for spawned tools; conflicting identities refuse before workflow writes. The Codex adapter pins its validated payload into every POSIX Bash command and core-hook child, so sandboxed macOS does not depend on `ps` ancestry.
 * Harness-native method includes remain one mutable checkout-wide surface, so concurrent sessions in different spaces can still race on ambient delivered rules. Windows and shared-process harness sessions retain shared-cursor behavior where no distinct identity is available.
-
 ## [2.6.79] - 2026-08-25
 
 Stop-hook recovery now preserves an opaque load-steering continuation token ahead of the potentially large rule payload without changing the required apply-then-continue action order. **Upgrade:** re-copy your `dist/<harness>/` shell into the project; active workflows need no state migration.
