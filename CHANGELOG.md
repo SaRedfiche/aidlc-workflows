@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.28] - 2026-08-20
+
+Kiro plugin projections now make their actual installation contract explicit: folder-drop the projection, then run the composer. **Upgrade:** a previously dropped Kiro plugin may have left a dead `<project>/hooks/aidlc-plugin-compose.kiro.hook`; no Kiro runtime ever read that location, so the file can be deleted. Continue to run `aidlc plugin sync` or `bun <plugin-root>/hooks/compose.ts` after each drop.
+
+* Kiro CLI and Kiro IDE plugin projections no longer emit the inert `hooks/aidlc-plugin-compose.kiro.hook` manifest.
+* The projection retains `hooks/compose.ts`, and the plugin authoring and mechanism guides identify the explicit composer command as Kiro's arming step.
+* Projection tests require Kiro plugin hook directories to contain only `compose.ts` while preserving host wiring checks for other harnesses.
+
 ## [2.6.18] - 2026-08-19
 
 Classic and Express are new scope options, and the implicit default scope is now Classic — a **declared behavior change**: invocations that name no scope and match no keyword now run the v1-style lifecycle without Ideation instead of the full-lifecycle Feature scope. Exactly two things control the implicit default: the `AWS_AIDLC_DEFAULT_SCOPE` env var (which overrides) and the framework's hard-coded `classic` fallback. Express has a deterministic requirements-to-conditional-deploy path, and conditional protocol modules reduce fixed context without dropping reviewer recovery behavior. **Upgrade:** refresh your `dist/<harness>/` shell; in-flight workflows keep their persisted scope and need no migration; set `AWS_AIDLC_DEFAULT_SCOPE=feature` (Claude: the `.claude/settings.json` `env` block, which now ships `classic`) to keep the previous full-lifecycle default.

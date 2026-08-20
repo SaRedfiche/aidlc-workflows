@@ -316,9 +316,9 @@ AIDLC_PLUGIN_ROOT="<plugin-root>" AIDLC_PROJECT_DIR="<project>" \
 # open in Kiro IDE or kiro-cli chat → /aidlc
 ```
 
-> **Kiro note.** The emitted `.kiro.hook` still depends on host support for
-> plugin-root env vars. Use `aidlc plugin sync` with `AIDLC_PLUGIN_ROOT` when the binary is available, or
-> the explicit `bun compose.ts` invocation above as the fallback.
+> **Kiro note.** The Kiro projection ships no hook manifest because no Kiro
+> runtime auto-runs a dropped hook. The explicit `aidlc plugin sync` or
+> `bun compose.ts` invocation above is the arming step.
 
 ### Trust
 

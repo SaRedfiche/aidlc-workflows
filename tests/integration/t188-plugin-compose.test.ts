@@ -154,21 +154,29 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       };
       expect(hostManifest.name, harness.name).toBe(`aidlc-${PLUGIN}`);
       expect(existsSync(join(built, "hooks", "compose.ts"))).toBe(true);
-      const wiring = readFileSync(
-        join(built, harness.capabilities.plugin.wiringFile),
-        "utf-8",
-      );
-      if (harness.name === "cursor") {
-        expect(wiring, `${harness.name}: harness dir argument`).toContain(
-          `aidlc-plugin-compose.ts ${harness.manifest.harnessDir}`,
+      const wiringFile = harness.capabilities.plugin.wiringFile;
+      if (wiringFile === null) {
+        expect(
+          existsSync(join(built, "hooks", "aidlc-plugin-compose.kiro.hook")),
+          `${harness.name}: dead Kiro wiring`,
+        ).toBe(false);
+        expect(readdirSync(join(built, "hooks")).sort(), `${harness.name}: hook inventory`).toEqual(
+          ["compose.ts"],
         );
       } else {
-        expect(wiring, `${harness.name}: harness dir wiring`).toContain(
-          `AIDLC_HARNESS_DIR=${harness.manifest.harnessDir}`,
-        );
-        expect(wiring, `${harness.name}: harness name wiring`).toContain(
-          `AIDLC_HARNESS_NAME=${harness.name}`,
-        );
+        const wiring = readFileSync(join(built, wiringFile), "utf-8");
+        if (harness.name === "cursor") {
+          expect(wiring, `${harness.name}: harness dir argument`).toContain(
+            `aidlc-plugin-compose.ts ${harness.manifest.harnessDir}`,
+          );
+        } else {
+          expect(wiring, `${harness.name}: harness dir wiring`).toContain(
+            `AIDLC_HARNESS_DIR=${harness.manifest.harnessDir}`,
+          );
+          expect(wiring, `${harness.name}: harness name wiring`).toContain(
+            `AIDLC_HARNESS_NAME=${harness.name}`,
+          );
+        }
       }
       expect(existsSync(join(built, "stages", "construction", "test-pro-integration.md"))).toBe(
         true,

@@ -143,7 +143,7 @@ const manifest: HarnessManifest = {
 
   emit: null,
 
-  // Folder-drop + .kiro.hook, same as Kiro CLI (both .kiro trees). No host store.
+  // Folder-drop + explicit composer run, same as Kiro CLI. No host store.
   plugin: { manifestDir: ".kiro-plugin", kind: "kiro" },
 };
 

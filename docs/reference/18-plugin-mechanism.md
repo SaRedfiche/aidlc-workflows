@@ -35,9 +35,9 @@ The delivery vehicle is the **host's own plugin system**, not a bespoke AIDLC in
 
 - **We run no distribution infrastructure.** Customers host their own plugin repos (git + semver tags + a `marketplace.json`). One marketplace entry lists a plugin for a mixed fleet.
 - **Trust is host-native.** Org restrictions use the host's managed allowlist (Claude `strictKnownMarketplaces`, unoverridable by users; Codex hash-pinned trust). AIDLC builds no trust layer.
-- **The composer runs on install, triggered by a host hook.** No pre-built per-combination tree; the SessionStart hook composes the chosen set locally.
+- **The composer runs on install.** Host hooks trigger it where the host supports plugin wiring; Kiro users run the explicit composer after the folder-drop. No pre-built per-combination tree is needed.
 
-> **Security note — Kiro's folder-drop has no install-time trust gate.** Claude and Codex mediate a plugin through their own trust prompts (managed marketplace / hash-pinned approval) *before* its hooks can run. Kiro has no plugin store, so the folder-drop path copies the plugin's files — including the `.kiro.hook` that runs `compose.ts` on the next prompt — with **no equivalent gate**: dropping the tree *is* the trust decision. Treat a Kiro plugin drop like `git clone && run`: only install plugins from a source you would run code from, review the diff the drop introduces, and pin the plugin repo to a reviewed tag rather than tracking a moving branch. The composer itself is additive and never edits `core/`, but the hook it installs executes with your shell's privileges.
+> **Security note — Kiro's folder-drop has no install-time trust gate.** Claude and Codex mediate a plugin through their own trust prompts (managed marketplace / hash-pinned approval) *before* its hooks can run. Kiro has no plugin store, so dropping the tree and then running its composer has **no equivalent gate**: dropping the tree *is* the trust decision. Treat a Kiro plugin drop like `git clone && run`: only install plugins from a source you would run code from, review the diff the drop introduces, and pin the plugin repo to a reviewed tag rather than tracking a moving branch. The composer is additive and never edits `core/`, but it executes with your shell's privileges.
 
 The contribution seam (§6) is why this matters: it is structurally VS Code's `contributes` + Cargo's additive feature-union — the best-composing model in the field — and it is available to *every* plugin, first- and third-party alike, with no gatekeeping.
 
@@ -105,7 +105,7 @@ The steps (identical regardless of trigger):
 3. **Merge contributions** — every active contribution to a stage is folded into the target stage's source (§6): structural surfaces set-unioned, prose fragments spliced at their anchors.
 4. **Compile** — `aidlc-graph compile` regenerates `stage-graph.json` + `scope-grid.json`; the orchestrator routes entirely off those, so a plugin stage runs the moment it is composed — no prose or skill edit needed.
 
-Because composition is one N-way merge (not a sequence of independent overlays), **two plugins that both contribute to the same stage are genuinely merged** — structural additions set-union, prose fragments order deterministically — rather than one silently overwriting the other. The runtime stays **read-only** with respect to composition: all merging happens at compose time, never per session. The merge edits **stage source** (not the compiled JSON), so it is **durable** across any later `aidlc-graph compile` (e.g. the rebuild-stage-graph hook) and **idempotent** — re-running on every SessionStart composes nothing new.
+Because composition is one N-way merge (not a sequence of independent overlays), **two plugins that both contribute to the same stage are genuinely merged** — structural additions set-union, prose fragments order deterministically — rather than one silently overwriting the other. The runtime stays **read-only** with respect to composition: all merging happens at compose time, never per session. The merge edits **stage source** (not the compiled JSON), so it is **durable** across any later `aidlc-graph compile` (e.g. the rebuild-stage-graph hook) and **idempotent** — re-running from a hooked SessionStart or an explicit Kiro sync composes nothing new.
 
 ## 5. Selection
 
@@ -366,9 +366,10 @@ holds the realpath-keyed workspace lock for the full transaction; if graph
 compilation fails, newly copied files and contribution writes are restored
 before the retry marker is written.
 
-The emitted SessionStart command probes for `aidlc` on `PATH` first and runs
-`aidlc plugin sync` when it is available. The portable launchers fall back to
-the direct bun `hooks/compose.ts` invocation when the CLI is unavailable.
+For hosts with plugin hook wiring, the emitted SessionStart command probes for
+`aidlc` on `PATH` first and runs `aidlc plugin sync` when it is available. The
+portable launchers fall back to the direct bun `hooks/compose.ts` invocation
+when the CLI is unavailable.
 
 Cursor's emitted hook uses Cursor's flat camelCase schema
 (`hooks.sessionStart[].command`) and invokes

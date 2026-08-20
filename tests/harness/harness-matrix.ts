@@ -27,7 +27,7 @@ type HarnessCapabilities = {
   plugin: {
     kind: "store" | "kiro" | "cursor";
     manifestDir: string;
-    wiringFile: string;
+    wiringFile: string | null;
   };
   memoryInclude:
     | "claude-import"
@@ -134,7 +134,7 @@ const HARNESS_CAPABILITIES = {
     plugin: {
       kind: "kiro",
       manifestDir: ".kiro-plugin",
-      wiringFile: "hooks/aidlc-plugin-compose.kiro.hook",
+      wiringFile: null,
     },
     memoryInclude: "kiro-steering",
     kiroAgentJson: true,
@@ -153,7 +153,7 @@ const HARNESS_CAPABILITIES = {
     plugin: {
       kind: "kiro",
       manifestDir: ".kiro-plugin",
-      wiringFile: "hooks/aidlc-plugin-compose.kiro.hook",
+      wiringFile: null,
     },
     memoryInclude: "kiro-resources",
     kiroAgentJson: true,

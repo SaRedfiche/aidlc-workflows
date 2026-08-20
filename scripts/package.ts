@@ -1033,66 +1033,59 @@ function buildPluginProjection(pluginName: string, harnessName: string, outDir: 
     if (f === "aidlc-plugin-compose.ts" && kind !== "cursor") continue;
     cpSync(join(templateHooks, f), join(hooksDir, f));
   }
-  // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell parameter expansions
-  const rootExpr = harnessName === "claude" ? "${CLAUDE_PLUGIN_ROOT}" : "${PLUGIN_ROOT}";
-  let command: string;
-  if (kind === "cursor") {
-    // Cursor runs on native Windows too. Its hook command invokes a Bun script
-    // directly; the launcher probes aidlc and falls back to sibling compose.ts
-    // without relying on sh, command -v, or POSIX parameter expansion.
-    command = `bun ./hooks/aidlc-plugin-compose.ts ${harnessLeaf}`;
-  } else {
-    const composePath = `${rootExpr}/hooks/compose.ts`;
-    // Probe aidlc on PATH first, then bun on PATH / ~/.bun/bin. If neither is
-    // executable, exit 0 with a note rather than running a non-existent binary.
-    const aidlcExpr =
-      'AIDLC=$(command -v aidlc 2>/dev/null || true); ' +
-      `[ -n "$AIDLC" ] && { AIDLC_HARNESS_DIR=${harnessLeaf} AIDLC_HARNESS_NAME=${targetHarnessName} "$AIDLC" plugin sync && exit 0; }; `;
-    const bunExpr =
-      'BUN=$(command -v bun 2>/dev/null || true); ' +
-      '[ -z "$BUN" ] && [ -x "$HOME/.bun/bin/bun" ] && BUN="$HOME/.bun/bin/bun"; ' +
-      '[ -z "$BUN" ] && { echo "aidlc plugin compose: aidlc and bun not found, skipping" >&2; exit 0; }';
-    command = `sh -c '${aidlcExpr}${bunExpr}; AIDLC_HARNESS_DIR=${harnessLeaf} AIDLC_HARNESS_NAME=${targetHarnessName} "$BUN" "${composePath}"'`;
-  }
-
   if (kind === "kiro") {
-    writeFileSync(
-      join(hooksDir, "aidlc-plugin-compose.kiro.hook"),
-      JSON.stringify({
-        version: "1.0.0",
-        enabled: true,
-        name: `aidlc-${pluginName}-compose`,
-        description: `Composes the ${pluginName} AIDLC plugin on first interaction.`,
-        when: { type: "promptSubmit" },
-        // biome-ignore lint/suspicious/noThenProperty: required Kiro hook schema field
-        then: { type: "runCommand", command },
-      }, null, 2) + "\n"
-    );
-  } else if (kind === "cursor") {
-    // `version` is load-bearing, not decoration: Cursor's hook loader silently
-    // delivers ZERO events for a hooks.json without it (probe-verified against
-    // cursor-agent 2026.07.23 - no error, no diagnostic, rc 0), so omitting it
-    // would leave every plugin hook inert and the breakage invisible.
-    writeFileSync(
-      join(hooksDir, "hooks.json"),
-      JSON.stringify({
-        version: 1,
-        hooks: {
-          sessionStart: [{ command }],
-        },
-      }, null, 2) + "\n"
-    );
+    // No Kiro runtime scans the dropped hooks/ location: CLI hooks live in agent
+    // JSON and IDE hooks live under .kiro/hooks/. No Kiro host sets ${PLUGIN_ROOT},
+    // either, so the explicit composer is the installation mechanism.
   } else {
-    writeFileSync(
-      join(hooksDir, "hooks.json"),
-      JSON.stringify({
-        hooks: {
-          SessionStart: [{
-            hooks: [{ type: "command", command, statusMessage: `AIDLC ${pluginName}: composing plugin` }],
-          }],
-        },
-      }, null, 2) + "\n"
-    );
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell parameter expansions
+    const rootExpr = harnessName === "claude" ? "${CLAUDE_PLUGIN_ROOT}" : "${PLUGIN_ROOT}";
+    let command: string;
+    if (kind === "cursor") {
+      // Cursor runs on native Windows too. Its hook command invokes a Bun script
+      // directly; the launcher probes aidlc and falls back to sibling compose.ts
+      // without relying on sh, command -v, or POSIX parameter expansion.
+      command = `bun ./hooks/aidlc-plugin-compose.ts ${harnessLeaf}`;
+    } else {
+      const composePath = `${rootExpr}/hooks/compose.ts`;
+      // Probe aidlc on PATH first, then bun on PATH / ~/.bun/bin. If neither is
+      // executable, exit 0 with a note rather than running a non-existent binary.
+      const aidlcExpr =
+        'AIDLC=$(command -v aidlc 2>/dev/null || true); ' +
+        `[ -n "$AIDLC" ] && { AIDLC_HARNESS_DIR=${harnessLeaf} AIDLC_HARNESS_NAME=${targetHarnessName} "$AIDLC" plugin sync && exit 0; }; `;
+      const bunExpr =
+        'BUN=$(command -v bun 2>/dev/null || true); ' +
+        '[ -z "$BUN" ] && [ -x "$HOME/.bun/bin/bun" ] && BUN="$HOME/.bun/bin/bun"; ' +
+        '[ -z "$BUN" ] && { echo "aidlc plugin compose: aidlc and bun not found, skipping" >&2; exit 0; }';
+      command = `sh -c '${aidlcExpr}${bunExpr}; AIDLC_HARNESS_DIR=${harnessLeaf} AIDLC_HARNESS_NAME=${targetHarnessName} "$BUN" "${composePath}"'`;
+    }
+
+    if (kind === "cursor") {
+      // `version` is load-bearing, not decoration: Cursor's hook loader silently
+      // delivers ZERO events for a hooks.json without it (probe-verified against
+      // cursor-agent 2026.07.23 - no error, no diagnostic, rc 0), so omitting it
+      // would leave every plugin hook inert and the breakage invisible.
+      writeFileSync(
+        join(hooksDir, "hooks.json"),
+        JSON.stringify({
+          version: 1,
+          hooks: {
+            sessionStart: [{ command }],
+          },
+        }, null, 2) + "\n"
+      );
+    } else {
+      writeFileSync(
+        join(hooksDir, "hooks.json"),
+        JSON.stringify({
+          hooks: {
+            SessionStart: [{
+              hooks: [{ type: "command", command, statusMessage: `AIDLC ${pluginName}: composing plugin` }],
+            }],
+          },
+        }, null, 2) + "\n"
+      );
+    }
   }
 
   // 4. Copy plugin content verbatim (stages keep number/name/plugin/when).
