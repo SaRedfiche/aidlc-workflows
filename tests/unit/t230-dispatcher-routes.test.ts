@@ -564,6 +564,28 @@ describe("t230 dispatcher route parity", () => {
     expect(routed.exitCode).toBe(0);
     expect(existsSync(join(projectDir, "aidlc", "spaces", "interleaved-space"))).toBe(true);
   });
+
+  test("duplicate --project-dir values fail before either project is mutated", () => {
+    const trusted = makeProject();
+    const target = makeProject();
+    const result = viaDispatcher([
+      "--project-dir",
+      trusted,
+      "engine",
+      "space",
+      "create",
+      "must-not-exist",
+      "--project-dir",
+      target,
+    ], REPO_ROOT);
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr.toString()).toContain(
+      "--project-dir may be specified only once",
+    );
+    expect(existsSync(join(trusted, "aidlc", "spaces", "must-not-exist"))).toBe(false);
+    expect(existsSync(join(target, "aidlc", "spaces", "must-not-exist"))).toBe(false);
+  });
 });
 
 describe("t230 version-aware startup", () => {
@@ -614,7 +636,7 @@ describe("t230 version-aware startup", () => {
     expect(result.stderr.toString()).toContain("not installed completely");
   });
 
-  test("session pin caches coexist, support Kiro IDE identity, and invalidate on executable change", () => {
+  test("pinned validation is read-only and invalidates on executable content change", () => {
     const project = makeProject();
     const machine = mkdtempSync(join(tmpdir(), "aidlc-t230-pin-cache-"));
     const root = join(machine, "versions", AIDLC_VERSION);
@@ -642,34 +664,9 @@ describe("t230 version-aware startup", () => {
       AIDLC_BIN_DIR: join(machine, "bin"),
     };
     const inputA = JSON.stringify({ session_id: "t230-pin-cache-a" });
-    const inputB = JSON.stringify({ session_id: "t230-pin-cache-b" });
     const first = viaDispatcher( ["engine", "hook", "validate-state"], project, env, inputA);
     expect(first.exitCode, first.stderr.toString()).toBe(0);
-    expect(readdirSync(join(machine, "pin-resolution-cache"))).toHaveLength(1);
-
-    const second = viaDispatcher( ["engine", "hook", "validate-state"], project, env, inputB);
-    expect(second.exitCode, second.stderr.toString()).toBe(0);
-    const resumed = viaDispatcher( ["engine", "hook", "validate-state"], project, env, inputA);
-    expect(resumed.exitCode, resumed.stderr.toString()).toBe(0);
-    expect(readdirSync(join(machine, "pin-resolution-cache"))).toHaveLength(2);
-
-    cpSync(
-      join(REPO_ROOT, "dist", "kiro-ide", ".kiro"),
-      join(project, ".kiro"),
-      { recursive: true },
-    );
-    const ide = viaDispatcher(
-       ["engine", "adapter", "kiro-ide", "mint"],
-      project,
-      {
-        ...env,
-        USER_PROMPT: "{}",
-        VSCODE_PID: "23001",
-        VSCODE_IPC_HOOK: join(machine, "vscode-ipc.sock"),
-      },
-    );
-    expect(ide.exitCode, ide.stderr.toString()).toBe(0);
-    expect(readdirSync(join(machine, "pin-resolution-cache"))).toHaveLength(3);
+    expect(existsSync(join(machine, "pin-resolution-cache"))).toBe(false);
 
     writeFileSync(executable, `${readFileSync(executable, "utf-8")}# changed\n`);
     const changed = viaDispatcher( ["engine", "hook", "validate-state"], project, env, inputA);
@@ -947,7 +944,7 @@ describe("t230 dispatcher route completeness", () => {
         }]),
     );
     expect(Object.fromEntries(publicPolicy)).toEqual(expect.objectContaining({
-      "top-config": { networkPolicy: "explicit-only", mutationScope: "project" },
+      "top-config": { networkPolicy: "explicit-only", mutationScope: "project-and-machine" },
       "top-update": { networkPolicy: "explicit-only", mutationScope: "machine" },
       "top-use": { networkPolicy: "explicit-only", mutationScope: "machine" },
       "top-uninstall": { networkPolicy: "forbidden", mutationScope: "machine" },
@@ -955,7 +952,7 @@ describe("t230 dispatcher route completeness", () => {
     expect(
       ROUTES.filter((route) => route.visibility === "public")
         .some((route) => route.mutationScope === "project-and-machine"),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       ROUTES.filter((route) => route.visibility === "public" && route.id !== "top-help")
         .map((route) => route.id)

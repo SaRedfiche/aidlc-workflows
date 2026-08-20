@@ -164,25 +164,40 @@ and post-copy steps that differ.
 On macOS, Linux, or WSL:
 
 ```bash
-curl -fsSL https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh \
-  | bash
+tmp="$(mktemp -d)"
+gh release download --repo awslabs/aidlc-workflows --dir "$tmp" \
+  --pattern install.sh --pattern aidlc-release.intoto.jsonl
+gh attestation verify "$tmp/install.sh" \
+  --bundle "$tmp/aidlc-release.intoto.jsonl" \
+  --repo awslabs/aidlc-workflows \
+  --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml
+sh "$tmp/install.sh"
+rm -rf "$tmp"
 ```
 
-The installer verifies the release manifest, native executable, and all-harness
-runtime archive against the published SHA-256 checksums before installation. The
-installed AI-DLC runtime has no Bun, Node.js, or Git dependency; Codex project
-hook discovery still requires the target project to be a Git repository.
+The bootstrap verifies the installer against GitHub's signed release
+attestation. The installer then verifies the attested checksum manifest, native
+executable, and all-harness runtime archive before installation. The installed
+AI-DLC runtime has no Bun or Node.js dependency; Codex project hook discovery
+still requires the target project to be a Git repository.
 
 On Windows PowerShell:
 
 ```powershell
-$installer = Join-Path $env:TEMP install-aidlc.ps1
-irm https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.ps1 -OutFile $installer
-& $installer
+$download = Join-Path $env:TEMP "aidlc-install-$PID"
+New-Item -ItemType Directory -Force $download | Out-Null
+gh release download --repo awslabs/aidlc-workflows --dir $download `
+  --pattern install.ps1 --pattern aidlc-release.intoto.jsonl
+gh attestation verify (Join-Path $download install.ps1) `
+  --bundle (Join-Path $download aidlc-release.intoto.jsonl) `
+  --repo awslabs/aidlc-workflows `
+  --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml
+& (Join-Path $download install.ps1)
+Remove-Item -Recurse -Force $download
 ```
 
 The installer places a stable `aidlc.cmd` under
-`%LOCALAPPDATA%\aidlc\bin` and verifies the same checksums.
+`%LOCALAPPDATA%\aidlc\bin` and verifies the same provenance and checksums.
 
 For an air-gapped package, use
 `install.sh --from <release-directory> --offline` or

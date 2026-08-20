@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { basename, dirname, isAbsolute, join, parse, resolve } from "node:path";
-import { projectionFiles } from "./aidlc-distribution.ts";
+import { projectionFiles, sha256File, walkFiles } from "./aidlc-distribution.ts";
 
 export const STRICT_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
@@ -235,48 +235,11 @@ export function installedExecutablePath(version: string): string {
 export function installedVersionFingerprint(version: string): string | null {
   try {
     const root = versionRoot(version);
-    const runtime = runtimeRoot(version);
-    const paths = [
-      root,
-      installedExecutablePath(version),
-      join(root, "version.json"),
-      runtime,
-    ];
-    for (const distribution of readdirSync(runtime).sort()) {
-      const distributionRoot = join(runtime, distribution);
-      const harnessDirs = readdirSync(distributionRoot)
-        .filter((entry) =>
-          existsSync(join(
-            distributionRoot,
-            entry,
-            "tools",
-            "data",
-            "aidlc-stamp.json",
-          ))
-        )
-        .sort();
-      if (harnessDirs.length !== 1) return null;
-      const harnessRoot = join(distributionRoot, harnessDirs[0]);
-      paths.push(
-        distributionRoot,
-        harnessRoot,
-        join(harnessRoot, "tools", "data", "aidlc-stamp.json"),
-        join(harnessRoot, "tools", "data", "aidlc-projection.json"),
-      );
-    }
-    const metadata = paths.map((path) => {
-      const stat = statSync(path);
-      return [
-        path.slice(root.length),
-        stat.dev,
-        stat.ino,
-        stat.mode,
-        stat.size,
-        stat.mtimeMs,
-        stat.ctimeMs,
-      ].join(":");
-    }).join("\n");
-    return createHash("sha256").update(metadata).digest("hex");
+    const rows = walkFiles(root).map((file) => {
+      const path = join(root, file);
+      return `${file.replaceAll("\\", "/")}:${statSync(path).mode & 0o777}:${sha256File(path)}`;
+    });
+    return createHash("sha256").update(rows.join("\n")).digest("hex");
   } catch {
     return null;
   }

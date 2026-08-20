@@ -2,8 +2,9 @@
 
 The native release channel installs a self-contained `aidlc` command and one
 or more harness runtimes. `aidlc config` then creates or refreshes a project from
-that local runtime. The installer and config path do not require Bun, Node.js,
-or Git.
+that local runtime. The installed command and config path do not require Bun or
+Node.js. The authenticated bootstrap requires GitHub CLI (`gh`) so the installer
+script is verified before execution.
 
 This chapter describes the native install lifecycle available in this release.
 The planned `aidlc setup` experience, npm package, and package-manager formulas
@@ -26,19 +27,33 @@ The installer includes `claude`, `kiro`, `kiro-ide`, `codex`, and `opencode`
 together:
 
 ```bash
-curl -fsSL https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh \
-  | bash
+tmp="$(mktemp -d)"
+gh release download --repo awslabs/aidlc-workflows --dir "$tmp" \
+  --pattern install.sh --pattern aidlc-release.intoto.jsonl
+gh attestation verify "$tmp/install.sh" \
+  --bundle "$tmp/aidlc-release.intoto.jsonl" \
+  --repo awslabs/aidlc-workflows \
+  --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml
+sh "$tmp/install.sh"
+rm -rf "$tmp"
 ```
 
 ### macOS and Linux
 
 ```bash
-curl -fsSL https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh \
-  | bash
+tmp="$(mktemp -d)"
+gh release download --repo awslabs/aidlc-workflows --dir "$tmp" \
+  --pattern install.sh --pattern aidlc-release.intoto.jsonl
+gh attestation verify "$tmp/install.sh" \
+  --bundle "$tmp/aidlc-release.intoto.jsonl" \
+  --repo awslabs/aidlc-workflows \
+  --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml
+sh "$tmp/install.sh"
+rm -rf "$tmp"
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-An online run needs `curl` or `wget`; every run needs `sha256sum` or `shasum`.
+An online run needs `gh` plus `curl` or `wget`; every run needs `sha256sum` or `shasum`.
 It installs
 versions under `${XDG_DATA_HOME:-$HOME/.local/share}/aidlc/versions/` and
 links `$HOME/.local/bin/aidlc` to the active version by default.
@@ -51,9 +66,16 @@ of the file.
 ### Windows PowerShell
 
 ```powershell
-$installer = Join-Path $env:TEMP install-aidlc.ps1
-irm https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.ps1 -OutFile $installer
-& $installer
+$download = Join-Path $env:TEMP "aidlc-install-$PID"
+New-Item -ItemType Directory -Force $download | Out-Null
+gh release download --repo awslabs/aidlc-workflows --dir $download `
+  --pattern install.ps1 --pattern aidlc-release.intoto.jsonl
+gh attestation verify (Join-Path $download install.ps1) `
+  --bundle (Join-Path $download aidlc-release.intoto.jsonl) `
+  --repo awslabs/aidlc-workflows `
+  --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml
+& (Join-Path $download install.ps1)
+Remove-Item -Recurse -Force $download
 ```
 
 Windows installs versions under `%LOCALAPPDATA%\aidlc\versions\` and keeps a
@@ -95,11 +117,14 @@ requires the explicit `--offline` or `--from` spelling.
 
 The installer:
 
-1. Downloads or reads `version.json` and `checksums.txt`.
-2. Verifies the `version.json` SHA-256 before trusting its asset metadata.
-3. Verifies the selected binary and harness archives by SHA-256 and declared
+1. Verifies the installer script against the release's Sigstore bundle before execution.
+2. Downloads or reads `version.json` and `checksums.txt`.
+3. Verifies the remote `checksums.txt` attestation against the repository,
+   signer workflow, and release tag before trusting any checksum.
+4. Verifies the `version.json` SHA-256 before trusting its asset metadata.
+5. Verifies the selected binary and harness archives by SHA-256 and declared
    byte length.
-4. Lets the verified binary validate and transactionally install the release.
+6. Lets the verified binary validate and transactionally install the release.
 
 Metadata is limited to 1 MiB and individual release assets to 1 GiB. Asset
 names cannot contain paths. Archive extraction rejects links, special files,
@@ -613,11 +638,10 @@ writes `.aidlc-version`, records the absolute binary target under the
 gitignored `aidlc/.aidlc-sessions/` runtime directory, and registers the real
 project path in machine-local `pins.json`.
 
-Commit only `.aidlc-version`. For normal installed invocations, the stable
-`aidlc` launcher validates the machine-local target and starts the pinned
-binary directly before project data loads. A direct binary invocation retains
-the dispatcher validation fallback. A missing, malformed, or unavailable
-target fails closed with `aidlc config --pin <version>` remediation, and
+Commit only `.aidlc-version`. The stable `aidlc` launcher starts the
+integrity-checked active binary, whose dispatcher validates the complete pinned
+binary and runtime before selecting it. A missing, malformed, tampered, or
+unavailable target fails closed with `aidlc config --pin <version>` remediation, and
 `aidlc doctor` reports the same condition. Machine lifecycle commands use the
 active binary; `doctor`, `config`, and `use` are never trapped behind a broken
 pin.
@@ -626,8 +650,15 @@ A fresh clone or CI runner installs the committed version before config:
 
 ```bash
 version=$(cat .aidlc-version)
-curl -fsSL https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh \
-  | bash --version "$version" --quiet --yes
+tmp="$(mktemp -d)"
+gh release download "v$version" --repo awslabs/aidlc-workflows --dir "$tmp" \
+  --pattern install.sh --pattern aidlc-release.intoto.jsonl
+gh attestation verify "$tmp/install.sh" \
+  --bundle "$tmp/aidlc-release.intoto.jsonl" \
+  --repo awslabs/aidlc-workflows \
+  --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml
+sh "$tmp/install.sh" --version "$version" --quiet --yes
+rm -rf "$tmp"
 aidlc config --project-dir "$PWD" --harness claude --mcp none --quiet
 aidlc doctor --project-dir "$PWD" --quiet
 ```

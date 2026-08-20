@@ -45,6 +45,9 @@ export class ReleaseUnavailableError extends Error {
 const MAX_ASSET_BYTES = 1024 * 1024 * 1024;
 const MAX_METADATA_BYTES = 1024 * 1024;
 const PROGRESS_WIDTH = 72;
+const PROVENANCE_BUNDLE = "aidlc-release.intoto.jsonl";
+const RELEASE_REPOSITORY = "awslabs/aidlc-workflows";
+const RELEASE_WORKFLOW = "awslabs/aidlc-workflows/.github/workflows/release.yml";
 
 function progress(url: string, complete: boolean): void {
   if (process.env.AIDLC_ROUTE_OUTPUT_MODE !== "human") return;
@@ -99,6 +102,43 @@ function verifiedChecksums(directory: string): Map<string, string> {
     throw new Error(`version.json: checksum mismatch (expected ${expected}, got ${actual})`);
   }
   return rows;
+}
+
+function verifyReleaseProvenance(
+  directory: string,
+  version: string,
+): void {
+  const bundle = join(directory, PROVENANCE_BUNDLE);
+  if (!existsSync(bundle)) {
+    throw new Error(`release is missing ${PROVENANCE_BUNDLE}`);
+  }
+  const result = Bun.spawnSync([
+    "gh",
+    "attestation",
+    "verify",
+    join(directory, "checksums.txt"),
+    "--bundle",
+    bundle,
+    "--repo",
+    RELEASE_REPOSITORY,
+    "--signer-workflow",
+    RELEASE_WORKFLOW,
+    "--source-ref",
+    `refs/tags/v${version}`,
+  ], {
+    env: { ...process.env },
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (result.exitCode !== 0) {
+    const stderr = Buffer.from(result.stderr ?? new Uint8Array()).toString("utf-8").trim();
+    throw new Error(
+      `release provenance verification failed${
+        stderr ? `: ${stderr.split(/\r?\n/)[0]}` : ""
+      }; install GitHub CLI and verify the release bundle`,
+    );
+  }
 }
 
 export function readReleaseManifest(directory: string): ReleaseManifest {
@@ -442,8 +482,18 @@ export async function fetchReleaseMetadata(options: {
       ["text/plain", "application/octet-stream", "binary/octet-stream"],
       metadataTimeoutMs,
     );
-    verifiedChecksums(temporary);
+    await download(
+      releaseUrl(baseUrl, version, PROVENANCE_BUNDLE),
+      join(temporary, PROVENANCE_BUNDLE),
+      remainingTimeout(metadataDeadline, "release provenance"),
+      settings.caBundle,
+      MAX_METADATA_BYTES,
+      ["application/json", "application/octet-stream", "binary/octet-stream", "text/plain"],
+      metadataTimeoutMs,
+    );
     const manifest = readReleaseManifest(temporary);
+    verifyReleaseProvenance(temporary, manifest.version);
+    verifiedChecksums(temporary);
     if (version && manifest.version !== version) {
       throw new Error(`release endpoint returned ${manifest.version}, not requested ${version}`);
     }

@@ -191,7 +191,11 @@ $temporary = Join-Path ([IO.Path]::GetTempPath()) "aidlc-install-$PID-$([Guid]::
 
 try {
   $metadataSegment = if ($Version) { "download/v$Version" } else { 'latest/download' }
-  $metadata = @('version.json', 'checksums.txt')
+  $metadata = if ($From) {
+    @('version.json', 'checksums.txt')
+  } else {
+    @('version.json', 'checksums.txt', 'aidlc-release.intoto.jsonl')
+  }
   foreach ($name in $metadata) {
     $output = Join-Path $temporary $name
     if ($From) {
@@ -212,6 +216,26 @@ try {
       Stop-Install 4 'failed' "$([IO.Path]::GetFileName($metadataPath)) exceeds the 1 MiB metadata limit"
     }
   }
+  $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+  if ($manifest.schemaVersion -ne 1 -or $manifest.version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+    Stop-Install 4 'failed' 'version.json has an invalid schema or version'
+  }
+  if (-not $From) {
+    $gh = Get-Command gh -CommandType Application -ErrorAction SilentlyContinue |
+      Select-Object -First 1
+    if (-not $gh) {
+      Stop-Install 1 'failed' 'GitHub CLI is required to verify release provenance' 'install gh, then rerun this installer'
+    }
+    $bundle = Join-Path $temporary 'aidlc-release.intoto.jsonl'
+    & $gh.Source attestation verify $checksumsPath `
+      --bundle $bundle `
+      --repo awslabs/aidlc-workflows `
+      --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml `
+      --source-ref "refs/tags/v$($manifest.version)" | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+      Stop-Install 4 'failed' 'release provenance verification failed' 'obtain the release from awslabs/aidlc-workflows'
+    }
+  }
   $manifestHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $manifestPath).Hash.ToLowerInvariant()
   if ($manifestHash -ne (Get-ExpectedHash $checksumsPath 'version.json')) {
     Stop-Install 4 'failed' 'checksum mismatch for version.json'
@@ -225,10 +249,6 @@ try {
   $installerHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $verifiedInstaller).Hash.ToLowerInvariant()
   if ($installerHash -ne (Get-ExpectedHash $checksumsPath 'install.ps1')) {
     Stop-Install 4 'failed' 'checksum mismatch for install.ps1'
-  }
-  $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
-  if ($manifest.schemaVersion -ne 1 -or $manifest.version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
-    Stop-Install 4 'failed' 'version.json has an invalid schema or version'
   }
   if ($Version -and $manifest.version -ne $Version) {
     Stop-Install 4 'failed' "release endpoint returned $($manifest.version), not requested $Version"

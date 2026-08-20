@@ -794,6 +794,49 @@ describe("t293 config models CLI", () => {
       resolvedPolicy(project, "kiro"),
     )).toEqual([]);
   }, 60_000);
+  test("global settings roll back when the coordinated project refresh cannot lock", () => {
+    const project = install("claude");
+    const machine = temp("aidlc-t293-global-rollback-");
+    const env = {
+      ...runtimeEnv(),
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+    };
+    const initial = run([
+      "config",
+      "models",
+      "--project-dir",
+      project,
+      "--global",
+      "--preset",
+      "minimal",
+      "--yes",
+    ], project, env);
+    expect(initial.status, initial.stdout + initial.stderr).toBe(0);
+    const settingsPath = join(machine, "aidlc.settings.json");
+    const priorSettings = readFileSync(settingsPath);
+    const agentPath = join(project, ".claude", "agents", "aidlc-product-lead-agent.md");
+    const priorAgent = readFileSync(agentPath);
+    writeFileSync(
+      join(project, ".aidlc-transaction.lock"),
+      `${JSON.stringify({ pid: process.pid, staging: ".aidlc-txn-live" })}\n`,
+    );
+
+    const failed = run([
+      "config",
+      "models",
+      "--project-dir",
+      project,
+      "--global",
+      "--preset",
+      "thorough",
+      "--yes",
+    ], project, env);
+    expect(failed.status).not.toBe(0);
+    expect(readFileSync(settingsPath)).toEqual(priorSettings);
+    expect(readFileSync(agentPath)).toEqual(priorAgent);
+    rmSync(join(project, ".aidlc-transaction.lock"));
+  }, 60_000);
 });
 
 describe("t293 doctor model policy advisory", () => {

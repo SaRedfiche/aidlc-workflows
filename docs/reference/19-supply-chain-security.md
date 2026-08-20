@@ -30,8 +30,12 @@ digest check does not prove the file on disk is the attested subject.
 
 The publication boundary is one GitHub Release for an existing `v*` tag. The
 workflow starts from either a protected tag pushed from a reviewed release-prep
-commit or a manual dispatch naming an existing tag. `gh release create` uses
-`--verify-tag`; the publish job also requires the tag to equal
+commit or a manual dispatch naming an existing tag. Its authorization job proves
+that the immutable tag commit is an ancestor of `origin/v2`. A manual dispatch
+must itself run on that tag (`refs/tags/<tag>`), so the attestation source ref
+cannot silently remain the branch from which the workflow was opened.
+`gh release create` uses `--verify-tag`; the protected `release` environment
+requires non-author approval, and the publish job also requires the tag to equal
 `v<version.json.version>` before it can continue
 (`.github/workflows/release.yml`).
 
@@ -61,21 +65,30 @@ attestations provide the signed SLSA provenance for the staged digests.
 
 ### Release or tag hijack
 
-Tag protection is a required repository setting. It is not represented by a
-file in this repository and is not yet confirmed as applied. The release job
-uses `gh release create --verify-tag`, and the tag/version equality check
-compares the selected tag with `version.json.version` before attestation or
-publication (`.github/workflows/release.yml`).
+Tag protection and the protected `release` environment are required repository
+settings. They are not represented by files in this repository and must be
+confirmed before the first publication. The workflow independently rejects a
+tag whose commit is not on `v2`, rechecks that SHA in the publish job, uses
+`gh release create --verify-tag`, and compares the selected tag with
+`version.json.version` before attestation or publication
+(`.github/workflows/release.yml`).
 
 ### Mirror or download tampering
 
 The publish job runs `sha256sum -c checksums.txt` immediately before
-attestation. `core/tools/aidlc-release.ts` verifies the `version.json` checksum
-before trusting manifest fields, then verifies each selected asset against
-both the manifest and checksum row. Asset names are basename-only and metadata
-and asset sizes are bounded. Mirrors carry the complete manifest-driven asset
-set plus `aidlc-release.intoto.jsonl`, allowing independent provenance
-verification.
+attestation. Remote installers and `core/tools/aidlc-release.ts` first verify
+the attestation for `checksums.txt` against the repository, signer workflow,
+and release tag using `aidlc-release.intoto.jsonl`; only then do they verify the
+`version.json` checksum and each selected asset against both the manifest and
+checksum row. Asset names are basename-only and metadata and asset sizes are
+bounded. Mirrors must carry the complete manifest-driven asset set plus the
+bundle.
+
+Provenance authenticates a release set; it does not prove freshness. When no
+explicit version is requested, a compromised download source can replay an
+older genuine `version.json`, checksum file, and matching bundle. Consumers
+that require a specific release or a monotonic deployment policy must request
+that version explicitly and retain their own accepted-version floor.
 
 ### Partial publication failure
 
@@ -132,7 +145,8 @@ Offline or mirror verification from the shipped bundle:
 ```bash
 gh attestation verify ./aidlc-linux-x64 \
   --bundle ./aidlc-release.intoto.jsonl \
-  --repo awslabs/aidlc-workflows
+  --repo awslabs/aidlc-workflows \
+  --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml
 ```
 
 Verify every artifact covered by the checksum file:
@@ -163,6 +177,8 @@ schema.
 - Workflow-global permissions are `contents: read`.
 - Only the publish job receives `contents: write`, `id-token: write`, and
   `attestations: write`.
+- Publication runs in the protected `release` environment and consumes the
+  authorization job's immutable tag SHA.
 - OIDC supplies short-lived identity to Sigstore; no long-lived signing key is
   stored in the repository.
 - The release tag must be protected and must point to the reviewed
@@ -265,6 +281,8 @@ and explicit metadata refresh, but does not block a user-requested
 
 - Apply and verify the protected-tag repository setting, with its allowlist
   naming `@awslabs/aidlc-admins` per section 7.
+- Create the protected `release` environment with non-author approval and
+  self-review disabled.
 - Confirm the team-based ownership assignment in section 7
   (`@awslabs/aidlc-admins` on every duty, with its two separation-of-duties
   qualifiers).

@@ -200,10 +200,11 @@ if [ -e "$command_target" ] || [ -L "$command_target" ]; then
   if [ -L "$command_target" ]; then
     existing_target=$(readlink "$command_target")
   elif [ -f "$command_target" ] &&
-    [ "$(sed -n '2p' "$command_target")" = "# aidlc-native-launcher-v1" ]; then
+    printf '%s\n' "$(sed -n '2p' "$command_target")" |
+      grep -Eq '^# aidlc-native-launcher-v(1|2)$'; then
     pointer="$INSTALL_ROOT/active-executable"
     existing_target=
-    extra=
+    _extra=
     if [ ! -f "$pointer" ]; then
       fail 4 failed \
         "existing $command_target has no installer-owned active pointer" \
@@ -211,7 +212,7 @@ if [ -e "$command_target" ] || [ -L "$command_target" ]; then
     fi
     {
       IFS= read -r existing_target || [ -n "$existing_target" ] || existing_target=
-      if IFS= read -r extra; then existing_target=; fi
+      if IFS= read -r _extra; then existing_target=; fi
     } < "$pointer"
     if [ -z "$existing_target" ]; then
       fail 4 failed \
@@ -313,6 +314,7 @@ else
   fi
   download "$RELEASE_URL/version.json" "$TMP/version.json"
   download "$RELEASE_URL/checksums.txt" "$TMP/checksums.txt"
+  download "$RELEASE_URL/aidlc-release.intoto.jsonl" "$TMP/aidlc-release.intoto.jsonl"
 fi
 
 for metadata in version.json checksums.txt; do
@@ -320,6 +322,29 @@ for metadata in version.json checksums.txt; do
   [ "$metadata_bytes" -le 1048576 ] ||
     fail 4 failed "$metadata exceeds the 1 MiB metadata limit"
 done
+if [ -z "$FROM" ]; then
+  provenance_bytes=$(wc -c <"$TMP/aidlc-release.intoto.jsonl" | tr -d ' ')
+  [ "$provenance_bytes" -le 1048576 ] ||
+    fail 4 failed "aidlc-release.intoto.jsonl exceeds the 1 MiB metadata limit"
+fi
+
+candidate_version=$VERSION
+[ -n "$candidate_version" ] ||
+  candidate_version=$(sed -n 's/.*"version":[[:space:]]*"\([0-9][0-9.]*\)".*/\1/p' "$TMP/version.json" | head -n 1)
+[ -n "$candidate_version" ] || fail 4 failed "version.json has no valid version."
+if [ -z "$FROM" ]; then
+  command -v gh >/dev/null 2>&1 ||
+    fail 1 failed "GitHub CLI is required to verify release provenance" \
+      "install gh, then rerun this installer"
+  gh attestation verify "$TMP/checksums.txt" \
+    --bundle "$TMP/aidlc-release.intoto.jsonl" \
+    --repo awslabs/aidlc-workflows \
+    --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml \
+    --source-ref "refs/tags/v$candidate_version" \
+    >/dev/null 2>"$TMP/provenance.err" ||
+    fail 4 failed "release provenance verification failed" \
+      "obtain the release from awslabs/aidlc-workflows"
+fi
 
 expected_manifest=$(sed -n 's/^\([a-f0-9]\{64\}\)  version\.json$/\1/p' "$TMP/checksums.txt")
 [ -n "$expected_manifest" ] || fail 4 failed "No checksum for version.json."
@@ -328,8 +353,10 @@ actual_manifest=$(sha256_file "$TMP/version.json")
   fail 4 failed "Checksum mismatch for version.json."
 }
 
-[ -n "$VERSION" ] || VERSION=$(sed -n 's/.*"version":[[:space:]]*"\([0-9][0-9.]*\)".*/\1/p' "$TMP/version.json" | head -n 1)
-[ -n "$VERSION" ] || fail 4 failed "version.json has no valid version."
+if [ -n "$VERSION" ] && [ "$VERSION" != "$candidate_version" ]; then
+  fail 4 failed "release endpoint returned $candidate_version, not requested $VERSION"
+fi
+VERSION=$candidate_version
 BINARY="aidlc-$TARGET"
 ASSETS="$BINARY aidlc-runtime.tar.gz"
 [ -z "$FROM" ] || ASSETS="$ASSETS install.sh"

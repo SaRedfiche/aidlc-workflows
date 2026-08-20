@@ -18,7 +18,35 @@ permissions:
   contents: read
 
 jobs:
+  authorize:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.authorize.outputs.tag }}
+      sha: ${{ steps.authorize.outputs.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+      - name: Authorize immutable release tag
+        id: authorize
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"
+          fi
+          git fetch --no-tags origin v2
+          tag_sha="$(git rev-parse "$RELEASE_TAG^{commit}")"
+          test "$(git rev-parse HEAD)" = "$tag_sha"
+          git merge-base --is-ancestor "$tag_sha" origin/v2
+          printf 'tag=%s\nsha=%s\n' "$RELEASE_TAG" "$tag_sha" >> "$GITHUB_OUTPUT"
+
   verify:
+    needs: authorize
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -284,13 +312,22 @@ jobs:
             --project-dir "$offline_project" --harness opencode --mcp none --quiet
 
   publish:
-    needs: [musl-smoke, windows-lifecycle, unix-lifecycle]
+    needs: [authorize, musl-smoke, windows-lifecycle, unix-lifecycle]
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: write
       id-token: write
       attestations: write
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          ref: ${{ needs.authorize.outputs.tag }}
+      - name: Recheck authorized tag target
+        env:
+          AUTHORIZED_SHA: ${{ needs.authorize.outputs.sha }}
+        run: test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-candidate

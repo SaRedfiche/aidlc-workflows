@@ -83,7 +83,7 @@ function copiedProject(prefix: string): string {
 }
 
 function releaseFixture(): string {
-  const root = temp("aidlc-t301-release-");
+  const root = temp("aidlc-t305-release-");
   writeReleaseFixture({
     root,
     repoRoot: REPO_ROOT,
@@ -105,9 +105,9 @@ function expectNoEsc(result: { stdout: string; stderr: string }, label: string):
   expect(`${result.stdout}${result.stderr}`, label).not.toContain(ESC);
 }
 
-describe("t301 public CLI color gating", () => {
+describe("t305 public CLI color gating", () => {
   test("every touched non-TTY surface emits zero ESC bytes", () => {
-    const project = copiedProject("aidlc-t301-purity-");
+    const project = copiedProject("aidlc-t305-purity-");
     const results: Array<[string, ReturnType<typeof run>]> = [];
     results.push(["doctor", run(DISPATCHER, ["doctor"], project)]);
     results.push(["doctor verbose", run(DISPATCHER, ["doctor", "--verbose"], project)]);
@@ -148,7 +148,7 @@ describe("t301 public CLI color gating", () => {
       run(DISPATCHER, ["config", "flags", "--show"], project),
     ]);
 
-    const configured = temp("aidlc-t301-config-");
+    const configured = temp("aidlc-t305-config-");
     mkdirSync(join(configured, ".git"));
     results.push([
       "config non-TTY completion",
@@ -166,7 +166,7 @@ describe("t301 public CLI color gating", () => {
       ], configured),
     ]);
 
-    const machine = temp("aidlc-t301-machine-");
+    const machine = temp("aidlc-t305-machine-");
     const release = releaseFixture();
     results.push([
       "lifecycle dry-run",
@@ -196,7 +196,7 @@ describe("t301 public CLI color gating", () => {
   }, 120_000);
 
   test("FORCE_COLOR applies restrained semantic SGR", () => {
-    const project = copiedProject("aidlc-t301-force-");
+    const project = copiedProject("aidlc-t305-force-");
     const harnessPath = join(project, ".claude", "tools", "data", "harness.json");
     writeFileSync(harnessPath, "{\n");
     const doctor = run(DISPATCHER, ["doctor"], project, {
@@ -223,7 +223,7 @@ describe("t301 public CLI color gating", () => {
     expect(error.stderr).toContain("\x1b[1musage:\x1b[0m");
 
     const release = releaseFixture();
-    const machine = temp("aidlc-t301-force-machine-");
+    const machine = temp("aidlc-t305-force-machine-");
     const dryRun = run(LIFECYCLE, [
       "update",
       "--version",
@@ -250,7 +250,7 @@ describe("t301 public CLI color gating", () => {
   }, 120_000);
 
   test("NO_COLOR and --no-color override FORCE_COLOR", () => {
-    const project = copiedProject("aidlc-t301-precedence-");
+    const project = copiedProject("aidlc-t305-precedence-");
     const noColorEnv = run(DISPATCHER, ["--help"], project, {
       FORCE_COLOR: "1",
       NO_COLOR: "",

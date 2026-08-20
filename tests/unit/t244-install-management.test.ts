@@ -1,7 +1,7 @@
 // covers: tool:aidlc-lifecycle, tool:aidlc-machine-config, tool:aidlc-update
 // covers: tool:aidlc-completions, file:scripts/install.sh, file:scripts/install.ps1
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -16,7 +16,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   activeExecutablePath,
@@ -52,6 +52,13 @@ const LIFECYCLE = join(REPO_ROOT, "core", "tools", "aidlc-lifecycle.ts");
 const INSTALL_SH = join(REPO_ROOT, "scripts", "install.sh");
 const INSTALL_PS1 = join(REPO_ROOT, "scripts", "install.ps1");
 const temporary: string[] = [];
+const originalPath = process.env.PATH;
+
+beforeAll(() => {
+  process.env.PATH = `${join(REPO_ROOT, "tests", "fixtures", "bin")}${delimiter}${
+    originalPath ?? ""
+  }`;
+});
 function patchVersion(offset: number): string {
   const [major, minor, patch] = AIDLC_VERSION.split(".").map(Number);
   return `${major}.${minor}.${patch + offset}`;
@@ -62,6 +69,8 @@ const STALE_PIN_VERSION = patchVersion(3);
 const REMOVABLE_VERSION = patchVersion(4);
 
 afterAll(() => {
+  if (originalPath === undefined) delete process.env.PATH;
+  else process.env.PATH = originalPath;
   for (const path of temporary) rmSync(path, { recursive: true, force: true });
 });
 
@@ -891,7 +900,7 @@ describe("t244 management lifecycle", () => {
       expect(existsSync(join(machine, "versions", version))).toBe(true);
     }
     expect(existsSync(join(machine, "versions", REMOVABLE_VERSION))).toBe(false);
-  }, process.platform === "win32" ? 300_000 : 120_000);
+  }, process.platform === "win32" ? 300_000 : 240_000);
 
   test("uninstall removes command and versions while preserving machine state and projects", async () => {
     const release = fixture(AIDLC_VERSION, { binary: "executable" });
@@ -1281,6 +1290,9 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(script).toContain("$releaseUri.Query");
     expect(script).toContain("$releaseUri.Fragment");
     expect(script).toContain("installer validation failed:");
+    expect(script).toContain("attestation verify");
+    expect(script).toContain("aidlc-release.intoto.jsonl");
+    expect(script).toContain("--signer-workflow");
     expect(script).toContain("$env:Path = \"$binDir;$env:Path\"");
     expect(script).toContain("exceeds the 1 MiB metadata limit");
     const release = fixture(AIDLC_VERSION, { binary: "bytes" });
@@ -1299,7 +1311,10 @@ describe("t244 Windows and completion release surfaces", () => {
     );
     const parsed = Bun.YAML.parse(workflow) as {
       permissions?: Record<string, string>;
-      jobs?: Record<string, { permissions?: Record<string, string> }>;
+      jobs?: Record<string, {
+        permissions?: Record<string, string>;
+        environment?: string;
+      }>;
     };
     expect(parsed.permissions).toEqual({ contents: "read" });
     expect(parsed.jobs?.publish?.permissions).toEqual({
@@ -1307,6 +1322,13 @@ describe("t244 Windows and completion release surfaces", () => {
       "id-token": "write",
       attestations: "write",
     });
+    expect(parsed.jobs?.publish?.environment).toBe("release");
+    expect(workflow).toContain("name: Authorize immutable release tag");
+    expect(workflow).toContain("git merge-base --is-ancestor");
+    expect(workflow).toContain(
+      'test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"',
+    );
+    expect(workflow).toContain('test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"');
     const actionRefs = [...workflow.matchAll(
       /^\s*(?:-\s+)?uses:\s+([^\s#]+)(?:\s+#.*)?$/gm,
     )].map((match) => match[1]);

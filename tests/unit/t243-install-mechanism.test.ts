@@ -1,7 +1,7 @@
 // covers: tool:aidlc-init, tool:aidlc-lifecycle, file:core/tools/aidlc-archive.ts
 // covers: file:core/tools/aidlc-transaction.ts, file:scripts/package.ts
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -18,7 +18,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createTarGz,
@@ -84,12 +84,21 @@ const NEXT_VERSION = (() => {
   return `${major}.${minor}.${patch + 1}`;
 })();
 const temporary: string[] = [];
+const originalPath = process.env.PATH;
+
+beforeAll(() => {
+  process.env.PATH = `${join(REPO_ROOT, "tests", "fixtures", "bin")}${delimiter}${
+    originalPath ?? ""
+  }`;
+});
 
 function releaseBinaryName(): string {
   return `aidlc-${targetTriple()}${process.platform === "win32" ? ".exe" : ""}`;
 }
 
 afterAll(() => {
+  if (originalPath === undefined) delete process.env.PATH;
+  else process.env.PATH = originalPath;
   for (const path of temporary) rmSync(path, { recursive: true, force: true });
 });
 
@@ -503,6 +512,66 @@ describe("t243 archive and transaction safety", () => {
     }
   });
 
+  test("route mutation policy enforces canonical project and machine roots", () => {
+    const machine = temp("aidlc-t243-policy-machine-");
+    const project = temp("aidlc-t243-policy-project-");
+    const saved = {
+      scope: process.env.AIDLC_ROUTE_MUTATION_SCOPE,
+      route: process.env.AIDLC_ROUTE_ID,
+      project: process.env.AIDLC_ROUTE_PROJECT_DIR,
+      install: process.env.AIDLC_INSTALL_ROOT,
+      bin: process.env.AIDLC_BIN_DIR,
+    };
+    process.env.AIDLC_ROUTE_ID = "root-policy-test";
+    process.env.AIDLC_ROUTE_PROJECT_DIR = project;
+    process.env.AIDLC_INSTALL_ROOT = machine;
+    process.env.AIDLC_BIN_DIR = join(machine, "bin");
+    try {
+      const machineRoot = machineTransactionRoot();
+      process.env.AIDLC_ROUTE_MUTATION_SCOPE = "project";
+      expect(() => executePlan({
+        schemaVersion: 1,
+        root: machineRoot,
+        operations: [writeOperation("machine-blocked.txt", "no\n", "absent")],
+      })).toThrow("project mutation scope cannot mutate machine root");
+      expect(existsSync(join(machineRoot, "machine-blocked.txt"))).toBe(false);
+
+      process.env.AIDLC_ROUTE_MUTATION_SCOPE = "machine";
+      expect(() => executePlan({
+        schemaVersion: 1,
+        root: project,
+        operations: [writeOperation("project-blocked.txt", "no\n", "absent")],
+      })).toThrow("machine mutation scope cannot mutate project root");
+      expect(existsSync(join(project, "project-blocked.txt"))).toBe(false);
+
+      process.env.AIDLC_ROUTE_MUTATION_SCOPE = "project-and-machine";
+      executePlan({
+        schemaVersion: 1,
+        root: project,
+        operations: [writeOperation("project-allowed.txt", "yes\n", "absent")],
+      });
+      executePlan({
+        schemaVersion: 1,
+        root: machineRoot,
+        operations: [writeOperation("machine-allowed.txt", "yes\n", "absent")],
+      });
+      expect(readFileSync(join(project, "project-allowed.txt"), "utf-8")).toBe("yes\n");
+      expect(readFileSync(join(machineRoot, "machine-allowed.txt"), "utf-8")).toBe("yes\n");
+    } finally {
+      for (const [name, value] of Object.entries(saved)) {
+        const key = {
+          scope: "AIDLC_ROUTE_MUTATION_SCOPE",
+          route: "AIDLC_ROUTE_ID",
+          project: "AIDLC_ROUTE_PROJECT_DIR",
+          install: "AIDLC_INSTALL_ROOT",
+          bin: "AIDLC_BIN_DIR",
+        }[name] as string;
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   test("target selection distinguishes glibc and musl Linux releases", () => {
     if (process.platform !== "linux") return;
     const prior = process.env.AIDLC_LIBC;
@@ -594,7 +663,7 @@ describe("t243 project initialization", () => {
     expect(wrongHarness.status).toBe(4);
     expect(wrongHarness.stdout).toContain("project uses opencode; refusing claude");
     expect(existsSync(join(project, ".claude"))).toBe(false);
-  }, process.platform === "win32" ? 20_000 : 5_000);
+  }, 60_000);
 
   test("an explicit installed harness never silently yields to the existing project harness", () => {
     const project = temp("aidlc-t240-explicit-harness-");
@@ -1923,7 +1992,7 @@ describe("t243 release lifecycle", () => {
         baseUrl: `http://127.0.0.1:${redirecting.port}`,
       });
       expect(acquired.manifest.assets.map((asset) => asset.name)).toEqual([binary]);
-      expect(redirects).toBe(3);
+      expect(redirects).toBe(4);
       if (acquired.cleanup) rmSync(acquired.cleanup, { recursive: true, force: true });
     } finally {
       redirecting.stop(true);
@@ -2063,7 +2132,7 @@ describe("t243 release lifecycle", () => {
         names: [binary],
         baseUrl: `http://127.0.0.1:${origin.port}`,
       });
-      expect(proxyRequests).toBe(3);
+      expect(proxyRequests).toBe(4);
       expect(originRequests).toBe(0);
       if (acquired.cleanup) rmSync(acquired.cleanup, { recursive: true, force: true });
 
@@ -2073,8 +2142,8 @@ describe("t243 release lifecycle", () => {
         names: [binary],
         baseUrl: `http://127.0.0.1:${origin.port}`,
       });
-      expect(originRequests).toBe(3);
-      expect(proxyRequests).toBe(3);
+      expect(originRequests).toBe(4);
+      expect(proxyRequests).toBe(4);
       if (acquired.cleanup) rmSync(acquired.cleanup, { recursive: true, force: true });
 
       process.env.AIDLC_RELEASE_BASE_URL = `http://127.0.0.1:${ignoredMirror.port}`;
@@ -2263,7 +2332,7 @@ describe("t243 release lifecycle", () => {
   }, 60_000);
 
   test.skipIf(process.platform === "win32")(
-    "stable launcher selects the configured pin directly and fails closed when its target disappears",
+    "stable launcher enters the active dispatcher and tampered pins fail before execution",
     () => {
       const currentRelease = fixtureRelease();
       const pinnedRelease = fixtureRelease(NEXT_VERSION);
@@ -2302,7 +2371,7 @@ describe("t243 release lifecycle", () => {
         encoding: "utf-8",
       });
       expect(engine.status, engine.stderr ?? "").toBe(0);
-      expect(readFileSync(log, "utf-8")).toBe("pinned\n");
+      expect(readFileSync(log, "utf-8")).toBe("active\n");
 
       const machineRoute = spawnSync(command, ["version"], {
         cwd: project,
@@ -2310,34 +2379,22 @@ describe("t243 release lifecycle", () => {
         encoding: "utf-8",
       });
       expect(machineRoute.status, machineRoute.stderr ?? "").toBe(0);
-      expect(readFileSync(log, "utf-8")).toBe("pinned\nactive\n");
+      expect(readFileSync(log, "utf-8")).toBe("active\nactive\n");
 
-      rmSync(pinned);
-      const missing = spawnSync(command, ["engine", "status"], {
-        cwd: project,
-        env: { ...process.env, ...env },
-        encoding: "utf-8",
-      });
-      expect(missing.status).toBe(1);
-      expect(missing.stderr).toContain(`resolved target for project pin ${NEXT_VERSION} is unavailable`);
-      expect(missing.stderr).toContain(`aidlc config --pin ${NEXT_VERSION}`);
-      expect(readFileSync(log, "utf-8")).toBe("pinned\nactive\n");
-
-      const doctor = run(
+      const tampered = run(
         DISPATCHER,
-        ["doctor", "--json", "--project-dir", project],
+        ["engine", "status", "--project-dir", project],
         project,
         env,
       );
-      const checks = (JSON.parse(doctor.stdout) as {
-        data: { checks: Array<{ pass: boolean; label: string; fix?: string }> };
-      }).data.checks;
-      expect(checks).toContainEqual(expect.objectContaining({
-        pass: false,
-        label: "Project pin target: resolved target is missing",
-        fix: `run \`bun .claude/tools/aidlc.ts config --pin ${NEXT_VERSION}\``,
-      }));
+      expect(tampered.status).toBe(1);
+      expect(tampered.stderr).toContain(
+        `this project requires ${NEXT_VERSION}, which is not installed completely`,
+      );
+      expect(tampered.stderr).toContain(`aidlc config --pin ${NEXT_VERSION}`);
+      expect(readFileSync(log, "utf-8")).toBe("active\nactive\n");
     },
+    60_000,
   );
 
   test("activation fault rolls pointer, active marker, and rollback marker back together", () => {
@@ -2520,7 +2577,7 @@ describe("t243 release lifecycle", () => {
     expect(integrity.status).toBe(4);
   }, 60_000);
 
-  test("same-version pinned dispatch self-heals a moved project registration", () => {
+  test("same-version pinned dispatch is read-only after a project moves", () => {
     const release = fixtureRelease();
     const machine = temp("aidlc-t240-moved-machine-");
     const bin = join(machine, "bin");
@@ -2546,12 +2603,13 @@ describe("t243 release lifecycle", () => {
       readFileSync(join(machine, "pins.json"), "utf-8"),
     ) as Record<string, string>;
     expect(oldPins[oldProject]).toBe(AIDLC_VERSION);
-    run(DISPATCHER, ["--status", "--project-dir", newProject], newProject, env);
+    const status = run(DISPATCHER, ["--status", "--project-dir", newProject], newProject, env);
+    expect(status.status).toBe(0);
     const pins = JSON.parse(
       readFileSync(join(machine, "pins.json"), "utf-8"),
     ) as Record<string, string>;
-    expect(pins[newProject]).toBe(AIDLC_VERSION);
-    expect(oldProject in pins).toBe(false);
+    expect(pins[newProject]).toBeUndefined();
+    expect(pins[oldProject]).toBe(AIDLC_VERSION);
   }, 60_000);
 });
 

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 
 export type ProjectionStamp = {
@@ -68,7 +68,12 @@ function validateHashes(value: unknown, label: string): string[] {
   return value;
 }
 
-function validateDescriptor(root: string, stamp: ProjectionStamp, descriptor: ProjectionDescriptor): void {
+export function validateProjectionDescriptor(
+  root: string,
+  stamp: ProjectionStamp,
+  descriptor: ProjectionDescriptor,
+  options: { allowMissingRootIntegrations?: boolean } = {},
+): void {
   if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(stamp.frameworkVersion)) {
     throw new Error(`${root}: projection stamp has an invalid framework version`);
   }
@@ -86,10 +91,19 @@ function validateDescriptor(root: string, stamp: ProjectionStamp, descriptor: Pr
     throw new Error(`${root}: projection descriptor lists are invalid`);
   }
   const declared = new Set<string>();
+  const declare = (safe: string): void => {
+    if (declared.has(safe)) throw new Error(`${root}: duplicate projected path ${safe}`);
+    const overlap = [...declared].find((prior) =>
+      safe.startsWith(`${prior}/`) || prior.startsWith(`${safe}/`)
+    );
+    if (overlap) {
+      throw new Error(`${root}: overlapping projected paths ${overlap} and ${safe}`);
+    }
+    declared.add(safe);
+  };
   for (const directory of descriptor.managedDirectories) {
     const safe = safeRelativePath(directory, "managed directory", true);
-    if (declared.has(safe)) throw new Error(`${root}: duplicate projected path ${safe}`);
-    declared.add(safe);
+    declare(safe);
     const path = join(root, safe);
     if (!existsSync(path) || !lstatSync(path).isDirectory()) {
       throw new Error(`${root}: managed directory is missing or invalid: ${safe}`);
@@ -126,9 +140,14 @@ function validateDescriptor(root: string, stamp: ProjectionStamp, descriptor: Pr
       throw new Error(`${root}: root integration is invalid`);
     }
     const safe = safeRelativePath(integration.path, "root integration path");
-    if (declared.has(safe)) throw new Error(`${root}: duplicate projected path ${safe}`);
-    declared.add(safe);
+    declare(safe);
     const path = join(root, safe);
+    if (
+      !existsSync(path) &&
+      (integration.optional || options.allowMissingRootIntegrations)
+    ) {
+      continue;
+    }
     if (!existsSync(path) || !lstatSync(path).isFile()) {
       throw new Error(`${root}: root integration is missing or invalid: ${safe}`);
     }
@@ -211,7 +230,7 @@ export function projectionFiles(root: string): {
   ) {
     throw new Error(`${root}: projection stamp and descriptor do not describe one distribution`);
   }
-  validateDescriptor(root, stamp, descriptor);
+  validateProjectionDescriptor(root, stamp, descriptor);
   const allowedTopLevel = new Set([
     ...descriptor.managedDirectories,
     ...descriptor.rootIntegrations.map((item) => item.path.split(/[\\/]/)[0]),
@@ -236,7 +255,7 @@ export function walkFiles(root: string): string[] {
   const visit = (dir: string): void => {
     for (const entry of readdirSync(dir).sort()) {
       const path = join(dir, entry);
-      const stat = statSync(path);
+      const stat = lstatSync(path);
       if (stat.isDirectory()) visit(path);
       else if (stat.isFile()) files.push(relative(root, path));
       else throw new Error(`${path}: links and special files are not valid projection content`);

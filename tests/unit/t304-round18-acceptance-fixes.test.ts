@@ -9,6 +9,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -48,7 +49,7 @@ function cleanEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 }
 
 function readmeCopyProject(): string {
-  const project = temp("aidlc-t300-copy-");
+  const project = temp("aidlc-t304-copy-");
   mkdirSync(join(project, ".git"));
   cpSync(join(DIST, "claude", ".claude"), join(project, ".claude"), {
     recursive: true,
@@ -99,7 +100,7 @@ function runWizard(
   stdout: string;
   stderr: string;
 } {
-  const project = temp("aidlc-t300-wizard-");
+  const project = temp("aidlc-t304-wizard-");
   mkdirSync(join(project, ".git"));
   const hasCredentials = options.hasCredentials ?? true;
   const detection = JSON.stringify({
@@ -142,7 +143,85 @@ function runWizard(
   };
 }
 
-describe("t300 copied projection configuration", () => {
+describe("t304 copied projection configuration", () => {
+  test("copied projection descriptors reject traversal before reading outside bytes", () => {
+    const project = readmeCopyProject();
+    const outside = temp("aidlc-t304-outside-");
+    const sentinel = join(outside, "sentinel.txt");
+    writeFileSync(sentinel, "keep\n");
+    const descriptorPath = join(
+      project,
+      ".claude",
+      "tools",
+      "data",
+      "aidlc-projection.json",
+    );
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8"));
+    descriptor.managedDirectories.push("../outside");
+    writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
+
+    const result = runCopied(project, [
+      "config",
+      "models",
+      "--preset",
+      "balanced",
+      "--project",
+      "--yes",
+    ]);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      "managed directory is not a safe top-level name",
+    );
+    expect(readFileSync(sentinel, "utf-8")).toBe("keep\n");
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "copied projection metadata and nested content must be regular files",
+    () => {
+      const metadataProject = readmeCopyProject();
+      const descriptorPath = join(
+        metadataProject,
+        ".claude",
+        "tools",
+        "data",
+        "aidlc-projection.json",
+      );
+      const outsideDescriptor = join(temp("aidlc-t304-metadata-"), "descriptor.json");
+      writeFileSync(outsideDescriptor, readFileSync(descriptorPath));
+      rmSync(descriptorPath);
+      symlinkSync(outsideDescriptor, descriptorPath);
+      const metadata = runCopied(metadataProject, [
+        "config",
+        "models",
+        "--preset",
+        "balanced",
+        "--project",
+        "--yes",
+      ]);
+      expect(metadata.status).not.toBe(0);
+      expect(metadata.stdout + metadata.stderr).toContain(
+        "copied projection metadata must be regular files",
+      );
+
+      const nestedProject = readmeCopyProject();
+      const outside = join(temp("aidlc-t304-link-"), "outside.txt");
+      writeFileSync(outside, "outside\n");
+      symlinkSync(outside, join(nestedProject, ".claude", "linked-outside"));
+      const nested = runCopied(nestedProject, [
+        "config",
+        "models",
+        "--preset",
+        "balanced",
+        "--project",
+        "--yes",
+      ]);
+      expect(nested.status).not.toBe(0);
+      expect(nested.stdout + nested.stderr).toContain(
+        "links and special files are not valid projection content",
+      );
+    },
+  );
+
   test("the exact README Claude copy records settings and diagnostic answers without a runtime", () => {
     const project = readmeCopyProject();
     const models = runCopied(project, [
@@ -237,7 +316,7 @@ describe("t300 copied projection configuration", () => {
 
   test("copy-channel doctor, config, and error output never leaks native invocations", () => {
     const project = readmeCopyProject();
-    const machineRoot = temp("aidlc-t300-machine-");
+    const machineRoot = temp("aidlc-t304-machine-");
     const env = { AIDLC_INSTALL_ROOT: machineRoot };
     const git = spawnSync("git", ["init", "-q"], {
       cwd: project,
@@ -306,7 +385,7 @@ describe("t300 copied projection configuration", () => {
   });
 });
 
-describe("t300 first-run prompt and detection safety", () => {
+describe("t304 first-run prompt and detection safety", () => {
   test("EOF at a no-default harness prompt cancels with bounded output", () => {
     const result = runWizard("");
     expect(result.status).not.toBe(0);
@@ -368,7 +447,7 @@ describe("t300 first-run prompt and detection safety", () => {
   }, 60_000);
 });
 
-describe("t300 diagnostics and release truthfulness", () => {
+describe("t304 diagnostics and release truthfulness", () => {
   test("corrupt harness JSON is a failing provider doctor row with recovery", () => {
     const project = readmeCopyProject();
     const path = join(project, ".claude", "tools", "data", "harness.json");

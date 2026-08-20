@@ -72,14 +72,19 @@ function runWizard(
     harnesses?: Record<string, { found: boolean; version?: string }>;
     aidlc?: boolean;
     runtimeIssue?: boolean;
+    env?: NodeJS.ProcessEnv;
   } = {},
 ): { project: string; status: number; stdout: string; stderr: string } {
   const project = temp("aidlc-t299-project-");
   const bin = temp("aidlc-t299-bin-");
   mkdirSync(join(project, ".git"));
   executable(join(bin, "claude"), "claude 2.1.220");
-  if (options.harnesses?.codex?.found) {
-    executable(join(bin, "codex"), "codex-cli 0.145.0");
+  for (const [name, value] of Object.entries(options.harnesses ?? {})) {
+    if (!value.found || name === "claude" || name === "kiro-ide") continue;
+    executable(
+      join(bin, name === "kiro" ? "kiro-cli" : name),
+      value.version ?? `${name} 1.0.0`,
+    );
   }
   executable(join(bin, "getconf"), bin);
   if (options.aidlc !== false) executable(join(bin, "aidlc"));
@@ -98,6 +103,7 @@ function runWizard(
           options.harnesses,
           options.runtimeIssue,
         ),
+        ...options.env,
       },
       input,
       encoding: "utf-8",
@@ -210,5 +216,37 @@ describe("t299 first-run setup wizard", () => {
       .toBeLessThan(result.stdout.indexOf("AI-DLC setup - first run"));
     expect(result.stdout).toContain("Using Codex CLI.");
     expect(existsSync(join(result.project, ".codex"))).toBe(true);
+  }, 60_000);
+
+  test("OpenCode recommended Bedrock setup records an explicit default choice", () => {
+    const result = runWizard("\n", {
+      harnesses: {
+        claude: { found: false },
+        opencode: { found: true, version: "opencode 1.17.0" },
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const harness = JSON.parse(
+      readFileSync(
+        join(result.project, ".aidlc", "tools", "data", "harness.json"),
+        "utf-8",
+      ),
+    );
+    expect(harness.providers).toEqual(expect.objectContaining({
+      provider: "amazon-bedrock",
+      opencodeDefault: true,
+    }));
+  }, 60_000);
+
+  test("late first-run failure restores every wizard-owned path", () => {
+    const result = runWizard("\n", {
+      env: { AIDLC_TEST_FIRST_RUN_FAIL_AFTER_CHILD: "3" },
+    });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("No setup changes were kept.");
+    expect(existsSync(join(result.project, ".claude"))).toBe(false);
+    expect(existsSync(join(result.project, "aidlc"))).toBe(false);
+    expect(existsSync(join(result.project, "aidlc.settings.json"))).toBe(false);
+    expect(existsSync(join(result.project, ".git"))).toBe(true);
   }, 60_000);
 });

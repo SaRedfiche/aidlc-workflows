@@ -303,6 +303,10 @@ export function writeReleaseFixture(options: ReleaseFixtureOptions): ReleaseFixt
       ].join("\n")
     }\n`,
   );
+  writeFileSync(
+    join(options.root, "aidlc-release.intoto.jsonl"),
+    "aidlc-test-release-provenance\n",
+  );
 
   const hostileArchives: string[] = [];
   if (options.hostileRoot) {

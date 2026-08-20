@@ -40,6 +40,7 @@ import {
   projectionFiles,
   sha256Bytes,
   sha256File,
+  validateProjectionDescriptor,
   walkFiles,
 } from "./aidlc-distribution.ts";
 import {
@@ -56,6 +57,7 @@ import {
   type TransactionPlan,
   executePlan,
   transactionState,
+  validateTransactionPlan,
   writeOperation,
 } from "./aidlc-transaction.ts";
 import { compileStageGraph, __resetGraphCache } from "./aidlc-graph.ts";
@@ -2817,6 +2819,62 @@ function executeGlobalSettingsMutation(
   invalidateSettingsCache(mutation.path);
 }
 
+function executeSettingsAndProjectMutation(
+  mutation: SettingsMutation | undefined,
+  projectPlan: TransactionPlan,
+): void {
+  const operation = globalSettingsOperation(mutation);
+  if (!operation || !mutation) {
+    executePlan(projectPlan);
+    return;
+  }
+  const machinePlan: TransactionPlan = {
+    schemaVersion: 1,
+    root: machineTransactionRoot(),
+    operations: [operation],
+  };
+  validateTransactionPlan(machinePlan);
+  validateTransactionPlan(projectPlan);
+  const priorPresent = pathPresent(mutation.path);
+  const priorBytes = priorPresent ? readFileSync(mutation.path) : null;
+  const priorMode = priorPresent ? lstatSync(mutation.path).mode & 0o777 : undefined;
+  executePlan(machinePlan);
+  invalidateSettingsCache(mutation.path);
+  try {
+    executePlan(projectPlan);
+  } catch (error) {
+    const current = transactionState(mutation.path);
+    const restoreOperations: TransactionOperation[] = priorBytes === null
+      ? current === "absent"
+        ? []
+        : [{
+            kind: "remove",
+            path: relative(machinePlan.root, mutation.path),
+            expected: current,
+          }]
+      : [writeOperation(
+          relative(machinePlan.root, mutation.path),
+          priorBytes.toString("utf-8"),
+          current,
+          priorMode,
+        )];
+    try {
+      executePlan({
+        schemaVersion: 1,
+        root: machinePlan.root,
+        operations: restoreOperations,
+      });
+      invalidateSettingsCache(mutation.path);
+    } catch (rollbackError) {
+      throw new AggregateError(
+        [error, rollbackError],
+        "project configuration failed and global settings rollback was incomplete",
+      );
+    }
+    throw error;
+  }
+}
+
 function regularFilesBelow(root: string): string[] {
   const files: string[] = [];
   const visit = (directory: string): void => {
@@ -3630,11 +3688,21 @@ function copiedProjectSource(
     throw new Error("multiple project harnesses are present; pass one --harness <name>");
   }
   const dataDir = join(selected.root, "tools", "data");
+  const stampPath = join(dataDir, "aidlc-stamp.json");
+  const descriptorPath = join(dataDir, "aidlc-projection.json");
+  if (
+    !existsSync(stampPath) ||
+    !lstatSync(stampPath).isFile() ||
+    !existsSync(descriptorPath) ||
+    !lstatSync(descriptorPath).isFile()
+  ) {
+    throw new Error(`${dataDir}: copied projection metadata must be regular files`);
+  }
   const stamp = JSON.parse(
-    readFileSync(join(dataDir, "aidlc-stamp.json"), "utf-8"),
+    readFileSync(stampPath, "utf-8"),
   ) as ReturnType<typeof projectionFiles>["stamp"];
   const descriptor = JSON.parse(
-    readFileSync(join(dataDir, "aidlc-projection.json"), "utf-8"),
+    readFileSync(descriptorPath, "utf-8"),
   ) as ReturnType<typeof projectionFiles>["descriptor"];
   if (
     stamp.schemaVersion !== 1 ||
@@ -3646,6 +3714,9 @@ function copiedProjectSource(
   ) {
     throw new Error(`${dataDir}: copied projection identity is inconsistent`);
   }
+  validateProjectionDescriptor(projectDir, stamp, descriptor, {
+    allowMissingRootIntegrations: true,
+  });
   const cleanup = mkdtempSync(join(tmpdir(), "aidlc-config-copy-source-"));
   const root = join(cleanup, "projection");
   mkdirSync(root, { recursive: true });
@@ -3667,6 +3738,7 @@ function copiedProjectSource(
     mkdirSync(dirname(target), { recursive: true });
     cpSync(source, target, { preserveTimestamps: true });
   }
+  walkFiles(root);
   rmSync(
     join(root, selected.harnessDir, "tools", "data", "aidlc-manifest.json"),
     { force: true },
@@ -3703,6 +3775,7 @@ type FirstRunChoices = {
   mcp: "defaults" | "none";
   target: SettingsTarget;
   providerVerified: boolean;
+  opencodeDefault: boolean;
 };
 
 class FirstRunCancelled extends Error {}
@@ -3860,6 +3933,8 @@ function awsSummary(credentials: ReturnType<typeof detectAwsCredentials>): {
   };
 }
 
+let firstRunChildCount = 0;
+
 function runConfigChild(args: string[], cwd: string): Record<string, unknown> {
   const env = { ...process.env };
   delete env.AIDLC_TEST_CONFIG_TTY;
@@ -3876,6 +3951,13 @@ function runConfigChild(args: string[], cwd: string): Record<string, unknown> {
   });
   if (result.status !== 0) {
     throw new Error((result.stdout || result.stderr || "configuration failed").trim());
+  }
+  firstRunChildCount++;
+  if (
+    Number(process.env.AIDLC_TEST_FIRST_RUN_FAIL_AFTER_CHILD ?? "0") ===
+      firstRunChildCount
+  ) {
+    throw new Error(`injected first-run failure after child ${firstRunChildCount}`);
   }
   return JSON.parse(result.stdout) as Record<string, unknown>;
 }
@@ -3928,6 +4010,7 @@ function applyFirstRunChoices(
   projectDir: string,
   choices: FirstRunChoices,
 ): void {
+  firstRunChildCount = 0;
   const common = [
     "--project-dir",
     projectDir,
@@ -3974,12 +4057,79 @@ function applyFirstRunChoices(
   if (choices.provider === "amazon-bedrock") {
     providerArgs.push("--region", choices.region);
     if (choices.profile) providerArgs.push("--profile", choices.profile);
+    if (choices.candidate.stamp.distribution === "opencode") {
+      providerArgs.push(
+        "--opencode-default",
+        choices.opencodeDefault ? "yes" : "no",
+      );
+    }
     if (choices.providerVerified) {
       providerArgs.push("--mark-done", "bedrock-model-access");
     }
     providerArgs.push("--yes", "--json");
     runConfigChild(providerArgs, projectDir);
   }
+}
+
+function firstRunMutationPaths(
+  projectDir: string,
+  choices: FirstRunChoices,
+): string[] {
+  return [...new Set([
+    ...choices.candidate.descriptor.managedDirectories.map((path) =>
+      join(projectDir, path)
+    ),
+    ...choices.candidate.descriptor.rootIntegrations.map((integration) =>
+      join(projectDir, integration.path)
+    ),
+    join(projectDir, ".gitignore"),
+    settingsPathForTarget(projectDir, choices.target),
+  ].map((path) => resolve(path)))];
+}
+
+function snapshotFirstRunMutationPaths(
+  projectDir: string,
+  choices: FirstRunChoices,
+): { restore: () => void; cleanup: () => void } {
+  const root = mkdtempSync(join(tmpdir(), "aidlc-first-run-rollback-"));
+  const snapshots = firstRunMutationPaths(projectDir, choices).map((path, index) => {
+    const backup = join(root, String(index));
+    const existed = pathPresent(path);
+    if (existed) {
+      cpSync(path, backup, {
+        recursive: true,
+        dereference: false,
+        verbatimSymlinks: true,
+        preserveTimestamps: true,
+      });
+    }
+    return { path, backup, existed };
+  });
+  return {
+    restore: () => {
+      const errors: unknown[] = [];
+      for (const snapshot of [...snapshots].reverse()) {
+        try {
+          rmSync(snapshot.path, { recursive: true, force: true });
+          if (snapshot.existed) {
+            mkdirSync(dirname(snapshot.path), { recursive: true });
+            cpSync(snapshot.backup, snapshot.path, {
+              recursive: true,
+              dereference: false,
+              verbatimSymlinks: true,
+              preserveTimestamps: true,
+            });
+          }
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      if (errors.length > 0) {
+        throw new AggregateError(errors, "first-run rollback was incomplete");
+      }
+    },
+    cleanup: () => rmSync(root, { recursive: true, force: true }),
+  };
 }
 
 function renderFirstRunEnding(
@@ -4082,6 +4232,7 @@ function customizeFirstRun(
     mcp: initial.stamp.distribution === "claude" ? "defaults" : "none",
     target: "project",
     providerVerified: detection.bedrockReachable === true,
+    opencodeDefault: true,
   };
   const editStep = (step: number): void => {
     if (step === 1) {
@@ -4130,6 +4281,12 @@ function customizeFirstRun(
           choices.profile || "default credential chain",
         );
         choices.profile = profile === "default credential chain" ? "" : profile;
+        if (choices.candidate.stamp.distribution === "opencode") {
+          choices.opencodeDefault = promptYesDefault(
+            "  Make Bedrock OpenCode's default provider",
+            choices.opencodeDefault,
+          );
+        }
         process.stdout.write(
           `  Using amazon-bedrock in ${choices.region} with ${
             choices.profile || "the default credential chain"
@@ -4320,20 +4477,32 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
       mcp: candidate.stamp.distribution === "claude" ? "defaults" : "none",
       target: "project",
       providerVerified: detection.bedrockReachable === true,
+      opencodeDefault: true,
     };
   } else {
     choices = customizeFirstRun(candidate, candidates, detection);
   }
   if (!choices) return true;
+  const snapshot = snapshotFirstRunMutationPaths(projectDir, choices);
   try {
     applyFirstRunChoices(projectDir, choices);
     renderFirstRunEnding(projectDir, choices);
   } catch (error) {
+    try {
+      snapshot.restore();
+    } catch (rollbackError) {
+      throw new AggregateError(
+        [error, rollbackError],
+        "setup failed and rollback was incomplete",
+      );
+    }
     process.stdout.write(
       `\n  Setup stopped: ${error instanceof Error ? error.message : String(error)}\n`,
     );
-    process.stdout.write("  Some project files may already have been written.\n");
+    process.stdout.write("  No setup changes were kept.\n");
     process.exitCode = EXIT.failure;
+  } finally {
+    snapshot.cleanup();
   }
   return true;
   } catch (error) {
@@ -5820,16 +5989,14 @@ export async function main(
         projectDir,
         () => {
           assertRefreshSafe(projectDir);
-          executeGlobalSettingsMutation(settingsMutation);
-          executePlan(plan);
+          executeSettingsAndProjectMutation(settingsMutation, plan);
         },
         undefined,
         undefined,
         600,
       );
     } else {
-      executeGlobalSettingsMutation(settingsMutation);
-      executePlan(plan);
+      executeSettingsAndProjectMutation(settingsMutation, plan);
     }
     if (settingsMutation && settingsMutation.target !== "global") {
       invalidateSettingsCache(settingsMutation.path);

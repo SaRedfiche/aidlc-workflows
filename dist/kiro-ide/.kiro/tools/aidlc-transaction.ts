@@ -95,6 +95,36 @@ function canonicalRoot(path: string): string {
   return suffix.reduce((current, entry) => join(current, entry), base);
 }
 
+function withinRoot(path: string, root: string): boolean {
+  const rel = relative(root, path);
+  return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
+}
+
+function enforceRouteMutationRoot(root: string): void {
+  const scope = process.env.AIDLC_ROUTE_MUTATION_SCOPE;
+  if (!scope) return;
+  const route = process.env.AIDLC_ROUTE_ID ?? "unknown";
+  if (scope === "none") {
+    throw new Error(`route ${route} does not permit filesystem mutation`);
+  }
+  const machineRoot = canonicalRoot(machineTransactionRoot());
+  const projectValue = process.env.AIDLC_ROUTE_PROJECT_DIR;
+  const projectRoot = projectValue ? canonicalRoot(projectValue) : null;
+  const rootClass = withinRoot(root, machineRoot)
+    ? "machine"
+    : projectRoot && withinRoot(root, projectRoot)
+    ? "project"
+    : "outside";
+  const permitted = scope === "project-and-machine" ||
+    (scope === "project" && rootClass === "project") ||
+    (scope === "machine" && rootClass === "machine");
+  if (!permitted) {
+    throw new Error(
+      `route ${route} with ${scope} mutation scope cannot mutate ${rootClass} root ${root}`,
+    );
+  }
+}
+
 function pathExists(path: string): boolean {
   try {
     lstatSync(path);
@@ -227,6 +257,12 @@ function verifyPlan(plan: TransactionPlan, root: string): void {
       throw new Error(`${rel}: symlink target must be absolute`);
     }
   }
+}
+
+export function validateTransactionPlan(plan: TransactionPlan): void {
+  const root = canonicalRoot(plan.root);
+  if (plan.operations.length > 0) enforceRouteMutationRoot(root);
+  verifyPlan(plan, root);
 }
 
 function failpoint(options: TransactionOptions, name: string): void {
@@ -394,15 +430,8 @@ export function executePlan(
   plan: TransactionPlan,
   options: TransactionOptions = {},
 ): void {
-  if (
-    plan.operations.length > 0 &&
-    process.env.AIDLC_ROUTE_MUTATION_SCOPE === "none"
-  ) {
-    throw new Error(
-      `route ${process.env.AIDLC_ROUTE_ID ?? "unknown"} does not permit filesystem mutation`,
-    );
-  }
   const root = canonicalRoot(plan.root);
+  if (plan.operations.length > 0) enforceRouteMutationRoot(root);
   // Reject invalid plans before creating the transaction root, then recheck
   // under the lock to close the preflight race.
   verifyPlan(plan, root);

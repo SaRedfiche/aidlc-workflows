@@ -36,8 +36,15 @@ hook wiring, activation) differs.
 ### Native channel (recommended)
 
 ```bash
-curl -fsSL https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh \
-  | bash
+tmp="$(mktemp -d)"
+gh release download --repo awslabs/aidlc-workflows --dir "$tmp" \
+  --pattern install.sh --pattern aidlc-release.intoto.jsonl
+gh attestation verify "$tmp/install.sh" \
+  --bundle "$tmp/aidlc-release.intoto.jsonl" \
+  --repo awslabs/aidlc-workflows \
+  --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml
+sh "$tmp/install.sh"
+rm -rf "$tmp"
 cd your-project
 aidlc config
 aidlc doctor

@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -16,10 +16,6 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { extractTarGz } from "./aidlc-archive.ts";
-import {
-  PINNED_SYSTEM_GROUPS,
-  PINNED_TOP_LEVEL_ROUTES,
-} from "./aidlc-command.ts";
 import {
   renderCompletion,
   type Shell,
@@ -154,6 +150,68 @@ function completeVersion(version: string): boolean {
   } catch {
     return false;
   }
+}
+
+function reservationRoot(): string {
+  return join(installRoot(), "reservations");
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function reservedVersions(): Set<string> {
+  const reserved = new Set<string>();
+  const root = reservationRoot();
+  if (!existsSync(root)) return reserved;
+  for (const entry of readdirSync(root)) {
+    const match = /^(\d+\.\d+\.\d+)-(\d+)-[a-f0-9-]+$/.exec(entry);
+    const path = join(root, entry);
+    if (!match || !lstatSync(path).isFile()) {
+      reserved.add("*");
+      continue;
+    }
+    const pid = Number(match[2]);
+    if (!Number.isSafeInteger(pid) || pid <= 0 || !processIsAlive(pid)) {
+      rmSync(path, { force: true });
+      continue;
+    }
+    reserved.add(match[1]);
+  }
+  return reserved;
+}
+
+function reserveVersion(version: string): () => void {
+  const root = machineTransactionRoot();
+  const path = join(
+    reservationRoot(),
+    `${requireVersion(version)}-${process.pid}-${randomUUID()}`,
+  );
+  executePlan({
+    schemaVersion: 1,
+    root,
+    operations: [writeOperation(
+      relative(root, path),
+      `${JSON.stringify({ version, pid: process.pid, createdAt: new Date().toISOString() })}\n`,
+      "absent",
+      0o600,
+    )],
+  });
+  return () => {
+    rmSync(path, { force: true });
+    try {
+      if (existsSync(reservationRoot()) && readdirSync(reservationRoot()).length === 0) {
+        rmSync(reservationRoot());
+      }
+    } catch {
+      // Stale reservations fail toward retention and are reaped by the next scan.
+    }
+  };
 }
 
 function pathEntryExists(path: string): boolean {
@@ -323,6 +381,18 @@ function commitProjectPin(projectDir: string, version: string | null): void {
       0o600,
     )],
   }, {
+    validateLocked: () => {
+      if (version === null) return;
+      const inspection = inspectInstalledVersion(version, projectDistribution(projectDir));
+      if (!inspection.complete) {
+        commandError(
+          `retained version ${version} became incomplete before the pin commit: ${
+            inspection.reason ?? "integrity validation failed"
+          }`,
+          EXIT.integrity,
+        );
+      }
+    },
     validateCommitted: () => {
       if (projectOperations.length === 0) return;
       executePlan({
@@ -334,15 +404,6 @@ function commitProjectPin(projectDir: string, version: string | null): void {
   });
 }
 
-type PinResolutionCache = {
-  schemaVersion: 1;
-  session: string;
-  version: string;
-  distribution: string | null;
-  fingerprint: string;
-  validatedAt: number;
-};
-
 export type PinnedDispatchResult =
   | { kind: "none" }
   | {
@@ -353,203 +414,21 @@ export type PinnedDispatchResult =
     }
   | { kind: "execute"; executable: string; version: string };
 
-const PIN_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-
-function withoutProjectDirFlag(argv: readonly string[]): string[] {
-  const clean: string[] = [];
-  for (let index = 0; index < argv.length; index++) {
-    if (
-      ["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"]
-        .includes(argv[index])
-    ) {
-      continue;
-    }
-    if (argv[index] === "--project-dir") {
-      index++;
-      continue;
-    }
-    clean.push(argv[index]);
-  }
-  return clean;
-}
-
-function hashIdentity(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
-function pinSessionId(
-  argv: readonly string[],
-  input: string | null,
-): string | null {
-  if (input) {
-    try {
-      const value = JSON.parse(input) as { session_id?: unknown };
-      if (typeof value.session_id === "string" && value.session_id.length > 0) {
-        return value.session_id;
-      }
-    } catch {
-      // Host-specific fallbacks below cover transports without JSON stdin.
-    }
-  }
-  const clean = withoutProjectDirFlag(argv);
-  if (
-    clean[0] === "engine" &&
-    clean[1] === "adapter" &&
-    clean[2] === "kiro-ide"
-  ) {
-    const vscodePid = process.env.VSCODE_PID?.trim();
-    const vscodeIpc = process.env.VSCODE_IPC_HOOK?.trim();
-    if (vscodePid || vscodeIpc) {
-      return `kiro-ide:${vscodePid ?? ""}:${vscodeIpc ?? ""}`;
-    }
-  }
-  return null;
-}
-
-function pinCachePath(projectDir: string, sessionId: string): string {
-  const project = existsSync(projectDir)
-    ? realpathSync(projectDir)
-    : resolve(projectDir);
-  return join(
-    installRoot(),
-    "pin-resolution-cache",
-    `${hashIdentity(project)}-${hashIdentity(sessionId)}.json`,
-  );
-}
-
-function readPinCache(
-  projectDir: string,
-  sessionId: string,
-): PinResolutionCache | null {
-  try {
-    const value = JSON.parse(
-      readFileSync(pinCachePath(projectDir, sessionId), "utf-8"),
-    ) as PinResolutionCache;
-    return value.schemaVersion === 1 &&
-        typeof value.session === "string" &&
-        typeof value.version === "string" &&
-        (value.distribution === null || typeof value.distribution === "string") &&
-        typeof value.fingerprint === "string" &&
-        typeof value.validatedAt === "number"
-      ? value
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function writePinCache(
-  projectDir: string,
-  sessionId: string,
-  version: string,
-  distribution: string | null,
-  fingerprint: string,
-): void {
-  const path = pinCachePath(projectDir, sessionId);
-  const root = machineTransactionRoot();
-  const value: PinResolutionCache = {
-    schemaVersion: 1,
-    session: hashIdentity(sessionId),
-    version,
-    distribution,
-    fingerprint,
-    validatedAt: Date.now(),
-  };
-  executePlan({
-    schemaVersion: 1,
-    root,
-    operations: [writeOperation(
-      relative(root, path),
-      `${JSON.stringify(value, null, 2)}\n`,
-      transactionState(path),
-    )],
-  });
-}
-
 function completePinnedVersion(
-  projectDir: string,
-  sessionId: string | null,
   version: string,
   distribution: string | null,
 ): boolean {
   try {
-    const fingerprint = installedVersionFingerprint(version);
-    if (sessionId && fingerprint) {
-      const cache = readPinCache(projectDir, sessionId);
-      if (
-        cache &&
-        cache.session === hashIdentity(sessionId) &&
-        cache.version === version &&
-        cache.distribution === distribution &&
-        cache.fingerprint === fingerprint &&
-        Date.now() - cache.validatedAt >= 0 &&
-        Date.now() - cache.validatedAt <= PIN_CACHE_MAX_AGE_MS
-      ) {
-        return true;
-      }
-    }
     const inspection = inspectInstalledVersion(version, distribution);
     if (!inspection.complete) return false;
-    const verifiedFingerprint = installedVersionFingerprint(version);
-    if (!verifiedFingerprint || (fingerprint && fingerprint !== verifiedFingerprint)) {
-      return false;
-    }
-    if (sessionId) {
-      try {
-        writePinCache(
-          projectDir,
-          sessionId,
-          version,
-          distribution,
-          verifiedFingerprint,
-        );
-      } catch {
-        // Cache failure may cost latency, but cannot weaken direct-binary fallback.
-      }
-    }
-    return true;
+    return installedVersionFingerprint(version) !== null;
   } catch {
     return false;
   }
 }
 
-function reconcilePinRegistration(projectDir: string, version: string): void {
-  const path = join(installRoot(), "pins.json");
-  let pins: Record<string, string> = {};
-  try {
-    if (existsSync(path)) {
-      pins = JSON.parse(readFileSync(path, "utf-8")) as Record<string, string>;
-    }
-  } catch {
-    return;
-  }
-  const project = existsSync(projectDir)
-    ? realpathSync(projectDir)
-    : resolve(projectDir);
-  let changed = pins[project] !== version;
-  for (const [registered, pinned] of Object.entries(pins)) {
-    if (pinned === version && registered !== project && !existsSync(registered)) {
-      delete pins[registered];
-      changed = true;
-    }
-  }
-  if (!changed) return;
-  pins[project] = version;
-  const root = machineTransactionRoot();
-  executePlan({
-    schemaVersion: 1,
-    root,
-    operations: [writeOperation(
-      relative(root, path),
-      `${JSON.stringify(pins, null, 2)}\n`,
-      transactionState(path),
-    )],
-  });
-}
-
 export function resolvePinnedDispatch(
   argv: string[],
-  input: string | null,
 ): PinnedDispatchResult {
   const projectDir = projectDirFrom(argv);
   const pinPath = join(projectDir, ".aidlc-version");
@@ -565,14 +444,7 @@ export function resolvePinnedDispatch(
   }
   if (process.env.AIDLC_PIN_DISPATCHED === version) return { kind: "none" };
   const distribution = projectDistribution(projectDir);
-  if (
-    !completePinnedVersion(
-      projectDir,
-      pinSessionId(argv, input),
-      version,
-      distribution,
-    )
-  ) {
+  if (!completePinnedVersion(version, distribution)) {
     return {
       kind: "failure",
       code: EXIT.failure,
@@ -580,7 +452,6 @@ export function resolvePinnedDispatch(
       remediation: `aidlc config --pin ${version}`,
     };
   }
-  reconcilePinRegistration(projectDir, version);
   if (version === AIDLC_VERSION) return { kind: "none" };
   return {
     kind: "execute",
@@ -620,6 +491,7 @@ function retainedVersions(): {
     rollback: boolean;
     distributions: string[];
     complete: boolean;
+    reserved: boolean;
     pinPaths: string[];
     stalePinPaths: string[];
   }>;
@@ -628,6 +500,7 @@ function retainedVersions(): {
   const { pins, warnings } = registeredPins();
   if (!existsSync(versionsRoot())) return { versions: [], pinWarnings: warnings };
   const active = activeVersion();
+  const reservations = reservedVersions();
   const rollback = existsSync(rollbackVersionPath())
     ? readFileSync(rollbackVersionPath(), "utf-8").trim()
     : null;
@@ -638,6 +511,7 @@ function retainedVersions(): {
       rollback: version === rollback,
       distributions: installedDistributions(version),
       complete: completeVersion(version),
+      reserved: reservations.has("*") || reservations.has(version),
       pinPaths: Object.entries(pins)
         .filter(([project, pinnedVersion]) => pinnedVersion === version && existsSync(project))
         .map(([project]) => project)
@@ -664,6 +538,7 @@ function assertVersionsRemainPrunable(versions: readonly string[]): void {
     return !item ||
       item.active ||
       item.rollback ||
+      item.reserved ||
       item.pinPaths.length > 0 ||
       item.stalePinPaths.length > 0;
   });
@@ -681,7 +556,7 @@ function projectDistribution(projectDir: string): string | null {
     .find((candidate) => candidate.harnessDir === harnessDir)?.distribution ?? null;
 }
 
-export function activate(version: string, options: { failAfter?: number } = {}): void {
+function activateReserved(version: string, options: { failAfter?: number } = {}): void {
   if (!completeVersion(version)) {
     commandError(`retained version ${version} is incomplete`, EXIT.unavailable);
   }
@@ -771,6 +646,17 @@ export function activate(version: string, options: { failAfter?: number } = {}):
     operations,
   }, {
     ...options,
+    validateLocked: () => {
+      const inspection = inspectInstalledVersion(version);
+      if (!inspection.complete) {
+        commandError(
+          `retained version ${version} became incomplete before activation: ${
+            inspection.reason ?? "integrity validation failed"
+          }`,
+          EXIT.integrity,
+        );
+      }
+    },
     validateCommitted: () => {
       if (
         readActiveExecutable() !== resolve(target) ||
@@ -797,6 +683,15 @@ export function activate(version: string, options: { failAfter?: number } = {}):
   });
 }
 
+export function activate(version: string, options: { failAfter?: number } = {}): void {
+  const releaseReservation = reserveVersion(version);
+  try {
+    activateReserved(version, options);
+  } finally {
+    releaseReservation();
+  }
+}
+
 function shellSingleQuote(value: string): string {
   return `'${value.replaceAll("'", "'\"'\"'")}'`;
 }
@@ -805,19 +700,12 @@ function unixShim(): string {
   const pointer = shellSingleQuote(activeExecutablePath());
   const versionPointer = shellSingleQuote(activeVersionPath());
   const versions = shellSingleQuote(versionsRoot());
-  const topRoutes = PINNED_TOP_LEVEL_ROUTES.join("|");
-  const systemGroups = PINNED_SYSTEM_GROUPS.join("|");
   return [
     "#!/bin/sh",
-    "# aidlc-native-launcher-v1",
+    "# aidlc-native-launcher-v2",
     `active_pointer=${pointer}`,
     `active_version_pointer=${versionPointer}`,
     `versions_root=${versions}`,
-    "fail_pin() {",
-    "  printf 'aidlc: %s\\n' \"$1\" >&2",
-    "  printf 'Run: %s\\n' \"$2\" >&2",
-    "  exit 1",
-    "}",
     "read_one_line() {",
     "  line=",
     "  extra=",
@@ -840,55 +728,6 @@ function unixShim(): string {
     "  IFS=$old_ifs",
     "  [ \"$#\" -eq 3 ] && valid_number \"$1\" && valid_number \"$2\" && valid_number \"$3\"",
     "}",
-    "route_one=",
-    "route_two=",
-    "project_arg=",
-    "expect_project=0",
-    "for argument in \"$@\"; do",
-    "  if [ \"$expect_project\" -eq 1 ]; then project_arg=$argument; expect_project=0; continue; fi",
-    "  case \"$argument\" in",
-    "    --project-dir) expect_project=1; continue ;;",
-    "    --json|--quiet|--no-color|--yes|--offline|--verbose) continue ;;",
-    "  esac",
-    "  if [ -z \"$route_one\" ]; then route_one=$argument; continue; fi",
-    "  if [ -z \"$route_two\" ]; then route_two=$argument; break; fi",
-    "done",
-    "use_pin=0",
-    "if [ \"$route_one\" = engine ] && [ -n \"$route_two\" ] && [ \"$route_two\" != --help ] && [ \"$route_two\" != -h ]; then",
-    "  use_pin=1",
-    "else",
-    "  case \"$route_one\" in",
-    `    ${topRoutes}) use_pin=1 ;;`,
-    "    system)",
-    "      case \"$route_two\" in",
-    `        ${systemGroups}) use_pin=1 ;;`,
-    "      esac",
-    "      ;;",
-    "  esac",
-    "fi",
-    "if [ \"$use_pin\" -eq 1 ]; then",
-    `  project=\${project_arg:-\${AIDLC_PROJECT_DIR:-\${CLAUDE_PROJECT_DIR:-\${KIRO_PROJECT_DIR:-$PWD}}}}`,
-    "  case \"$project\" in /*) ;; *) project=$PWD/$project ;; esac",
-    "  pin_path=$project/.aidlc-version",
-    "  target_path=$project/aidlc/.aidlc-sessions/pin-target",
-    "  if [ -e \"$pin_path\" ] || [ -L \"$pin_path\" ]; then",
-    "    if [ ! -f \"$pin_path\" ] || ! read_one_line \"$pin_path\" || ! valid_version \"$line\"; then",
-    "      fail_pin \"$pin_path must contain one strict semver\" 'aidlc config --unpin'",
-    "    fi",
-    "    pin=$line",
-    "    if ! read_one_line \"$target_path\"; then",
-    "      fail_pin \"resolved target for project pin $pin is missing or malformed\" \"aidlc config --pin $pin\"",
-    "    fi",
-    "    target=$line",
-    "    expected=$versions_root/$pin/aidlc",
-    "    if [ \"$target\" != \"$expected\" ] || [ ! -f \"$target\" ] || [ ! -x \"$target\" ]; then",
-    "      fail_pin \"resolved target for project pin $pin is unavailable\" \"aidlc config --pin $pin\"",
-    "    fi",
-    "    AIDLC_PIN_DISPATCHED=$pin",
-    "    export AIDLC_PIN_DISPATCHED",
-    "    exec \"$target\" \"$@\"",
-    "  fi",
-    "fi",
     "if ! read_one_line \"$active_version_pointer\" || ! valid_version \"$line\"; then",
     "  printf 'aidlc: active version marker is missing or malformed\\n' >&2",
     "  printf 'Run: aidlc update --version <version> --from <release-directory>\\n' >&2",
@@ -924,73 +763,22 @@ function windowsShimPath(): string {
 
 function windowsShimHelper(): string {
   const pointer = activeExecutablePath().replaceAll("'", "''");
+  const versionPointer = activeVersionPath().replaceAll("'", "''");
   const root = versionsRoot().replaceAll("'", "''");
   return [
     "$ErrorActionPreference = 'Stop'",
     `$pointer = '${pointer}'`,
+    `$versionPointer = '${versionPointer}'`,
     `$versions = [IO.Path]::GetFullPath('${root}')`,
     "try {",
-    "  $route = [Collections.Generic.List[string]]::new()",
-    "  $projectArg = $null",
-    "  $expectProject = $false",
-    "  foreach ($argument in $args) {",
-    "    if ($expectProject) { $projectArg = $argument; $expectProject = $false; continue }",
-    "    if ($argument -eq '--project-dir') { $expectProject = $true; continue }",
-    "    if ($argument -in @('--json', '--quiet', '--no-color', '--yes', '--offline', '--verbose')) { continue }",
-    "    if ($route.Count -lt 2) { $route.Add($argument) }",
-    "  }",
-    "  $usePin = ($route.Count -ge 2 -and $route[0] -eq 'engine' -and $route[1] -notin @('--help', '-h')) -or",
-    `    ($route.Count -ge 1 -and $route[0] -in @(${PINNED_TOP_LEVEL_ROUTES.map((value) => `'${value}'`).join(", ")})) -or`,
-    `    ($route.Count -ge 2 -and $route[0] -eq 'system' -and $route[1] -in @(${PINNED_SYSTEM_GROUPS.map((value) => `'${value}'`).join(", ")}))`,
-    "  if ($usePin) {",
-    "    $project = if ($projectArg) { $projectArg } elseif ($env:AIDLC_PROJECT_DIR) { $env:AIDLC_PROJECT_DIR } elseif ($env:CLAUDE_PROJECT_DIR) { $env:CLAUDE_PROJECT_DIR } elseif ($env:KIRO_PROJECT_DIR) { $env:KIRO_PROJECT_DIR } else { [Environment]::CurrentDirectory }",
-    "    $project = [IO.Path]::GetFullPath($project)",
-    "    $pinPath = [IO.Path]::Combine($project, '.aidlc-version')",
-    "    $targetPath = [IO.Path]::Combine($project, 'aidlc', '.aidlc-sessions', 'pin-target')",
-    "    if ([IO.File]::Exists($pinPath) -or [IO.Directory]::Exists($pinPath)) {",
-    "      if (-not [IO.File]::Exists($pinPath)) {",
-    "        [Console]::Error.WriteLine(\"aidlc: $pinPath must contain one strict semver\")",
-    "        [Console]::Error.WriteLine('Run: aidlc config --unpin')",
-    "        exit 1",
-    "      }",
-    "      $pinRaw = [IO.File]::ReadAllText($pinPath)",
-    "      if ($pinRaw -notmatch '^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\r?\\n?$') {",
-    "        [Console]::Error.WriteLine(\"aidlc: $pinPath must contain one strict semver\")",
-    "        [Console]::Error.WriteLine('Run: aidlc config --unpin')",
-    "        exit 1",
-    "      }",
-    "      $pin = $pinRaw.TrimEnd(\"`r\", \"`n\")",
-    "      if (-not [IO.File]::Exists($targetPath)) {",
-    "        [Console]::Error.WriteLine(\"aidlc: resolved target for project pin $pin is missing or malformed\")",
-    "        [Console]::Error.WriteLine(\"Run: aidlc config --pin $pin\")",
-    "        exit 1",
-    "      }",
-    "      $targetRaw = [IO.File]::ReadAllText($targetPath)",
-    "      if ($targetRaw -notmatch '^[^\\r\\n]+\\r?\\n?$') {",
-    "        [Console]::Error.WriteLine(\"aidlc: resolved target for project pin $pin is missing or malformed\")",
-    "        [Console]::Error.WriteLine(\"Run: aidlc config --pin $pin\")",
-    "        exit 1",
-    "      }",
-    "      $target = [IO.Path]::GetFullPath($targetRaw.TrimEnd(\"`r\", \"`n\"))",
-    "      $expected = [IO.Path]::Combine($versions, $pin, 'aidlc.exe')",
-    "      if (-not $target.Equals($expected, [StringComparison]::OrdinalIgnoreCase) -or -not [IO.File]::Exists($target)) {",
-    "        [Console]::Error.WriteLine(\"aidlc: resolved target for project pin $pin is unavailable\")",
-    "        [Console]::Error.WriteLine(\"Run: aidlc config --pin $pin\")",
-    "        exit 1",
-    "      }",
-    "      $env:AIDLC_PIN_DISPATCHED = $pin",
-    "      $env:AIDLC_SHIM_PID = [string]$PID",
-    "      & $target @args",
-    "      exit $LASTEXITCODE",
-    "    }",
-    "  }",
+    "  $versionRaw = [IO.File]::ReadAllText($versionPointer)",
+    "  if ($versionRaw -notmatch '^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\r?\\n?$') { exit 4 }",
+    "  $activeVersion = $versionRaw.TrimEnd(\"`r\", \"`n\")",
     "  $raw = [IO.File]::ReadAllText($pointer)",
     "  if ($raw -notmatch '^[^\\r\\n]+\\r?\\n?$') { exit 4 }",
     "  $executable = [IO.Path]::GetFullPath($raw.TrimEnd(\"`r\", \"`n\"))",
-    "  $prefix = $versions.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar",
-    "  if (-not $executable.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { exit 4 }",
-    "  $relative = $executable.Substring($prefix.Length)",
-    "  if ($relative -notmatch '^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\\\aidlc\\.exe$') { exit 4 }",
+    "  $expected = [IO.Path]::Combine($versions, $activeVersion, 'aidlc.exe')",
+    "  if (-not $executable.Equals($expected, [StringComparison]::OrdinalIgnoreCase)) { exit 4 }",
     "  if (-not [IO.File]::Exists($executable)) { exit 4 }",
     "  $env:AIDLC_SHIM_PID = [string]$PID",
     "  & $executable @args",
@@ -1049,6 +837,7 @@ async function installVersion(options: {
     caBundle: options.caBundle,
   });
   const version = release.manifest.version;
+  const releaseReservation = options.dryRun ? null : reserveVersion(version);
   const temporary = mkdtempSync(join(tmpdir(), `aidlc-version-${version}-`));
   try {
     const candidate = join(temporary, version);
@@ -1129,6 +918,7 @@ async function installVersion(options: {
     }
     return { version, distributions };
   } finally {
+    releaseReservation?.();
     rmSync(temporary, { recursive: true, force: true });
     if (release.cleanup) rmSync(release.cleanup, { recursive: true, force: true });
   }
@@ -1164,6 +954,7 @@ async function versionsCommand(argv: string[]): Promise<ReturnType<typeof succes
     const protectedVersions = versions.filter((item) =>
       item.active ||
       item.rollback ||
+      item.reserved ||
       item.pinPaths.length > 0 ||
       item.stalePinPaths.length > 0
     );
@@ -1172,6 +963,7 @@ async function versionsCommand(argv: string[]): Promise<ReturnType<typeof succes
       const reasons = [
         ...(item.active ? ["active"] : []),
         ...(item.rollback ? ["rollback"] : []),
+        ...(item.reserved ? ["in use"] : []),
         ...item.pinPaths.map((path) => `pinned by ${path}`),
         ...item.stalePinPaths.map((path) => `stale pin ${path}`),
       ];
@@ -1204,6 +996,7 @@ async function versionsCommand(argv: string[]): Promise<ReturnType<typeof succes
       return !current ||
         current.active ||
         current.rollback ||
+        current.reserved ||
         current.pinPaths.length > 0 ||
         current.stalePinPaths.length > 0;
     });
@@ -1265,6 +1058,7 @@ function pruneUnprotectedVersions(): string[] {
   const removable = versions.filter((item) =>
     !item.active &&
     !item.rollback &&
+    !item.reserved &&
     item.pinPaths.length === 0 &&
     item.stalePinPaths.length === 0
   );
@@ -1437,14 +1231,22 @@ async function updateCommand(argv: string[]): Promise<CommandResult> {
     baseUrl: valueAfter(argv, "--release-base-url"),
     caBundle: valueAfter(argv, "--ca-bundle"),
   });
-  const pruned = dryRun ? [] : pruneUnprotectedVersions();
+  let pruned: string[] = [];
+  let pruneWarning: string | undefined;
+  if (!dryRun) {
+    try {
+      pruned = pruneUnprotectedVersions();
+    } catch (error) {
+      pruneWarning = error instanceof Error ? error.message : String(error);
+    }
+  }
   return success(
     dryRun
       ? `update plan: ${current ?? "none"} -> ${result.version} [${result.distributions.join(",")}]`
       : `updated ${current ?? "new install"} -> ${result.version}${
         pruned.length > 0 ? `; pruned ${pruned.join(", ")}` : ""
       }`,
-    { ...result, pruned },
+    { ...result, pruned, ...(pruneWarning ? { pruneWarning } : {}) },
   );
 }
 
@@ -1507,30 +1309,35 @@ export async function configureProjectPin(argv: string[]): Promise<CommandResult
     const requested = valueAfter(argv, "--pin");
     if (!requested) return usage("--pin requires a strict version");
     const version = requestedVersion(requested);
-    if (existsSync(versionRoot(version)) && !completeVersion(version)) {
-      const reason = inspectInstalledVersion(version).reason ?? "integrity validation failed";
-      commandError(`retained version ${version} is incomplete: ${reason}`, EXIT.integrity);
+    const releaseReservation = reserveVersion(version);
+    try {
+      if (existsSync(versionRoot(version)) && !completeVersion(version)) {
+        const reason = inspectInstalledVersion(version).reason ?? "integrity validation failed";
+        commandError(`retained version ${version} is incomplete: ${reason}`, EXIT.integrity);
+      }
+      if (!completeVersion(version)) {
+        await installVersion({
+          version,
+          from: valueAfter(argv, "--from"),
+          offline: offline(argv),
+          activate: false,
+          dryRun: false,
+          baseUrl: valueAfter(argv, "--release-base-url"),
+          caBundle: valueAfter(argv, "--ca-bundle"),
+        });
+      }
+      const distribution = projectDistribution(projectDir);
+      if (distribution && !inspectInstalledVersion(version, distribution).complete) {
+        commandError(`${version} does not contain this project's ${distribution} runtime`, EXIT.usage);
+      }
+      commitProjectPin(projectDir, version);
+      return success(
+        `Pinned this project to aidlc ${version}. Commit .aidlc-version to share the pin.`,
+        { projectDir, version, pinned: true },
+      );
+    } finally {
+      releaseReservation();
     }
-    if (!completeVersion(version)) {
-      await installVersion({
-        version,
-        from: valueAfter(argv, "--from"),
-        offline: offline(argv),
-        activate: false,
-        dryRun: false,
-        baseUrl: valueAfter(argv, "--release-base-url"),
-        caBundle: valueAfter(argv, "--ca-bundle"),
-      });
-    }
-    const distribution = projectDistribution(projectDir);
-    if (distribution && !inspectInstalledVersion(version, distribution).complete) {
-      commandError(`${version} does not contain this project's ${distribution} runtime`, EXIT.usage);
-    }
-    commitProjectPin(projectDir, version);
-    return success(
-      `Pinned this project to aidlc ${version}. Commit .aidlc-version to share the pin.`,
-      { projectDir, version, pinned: true },
-    );
   } catch (error) {
     return lifecycleFailureResult(error, argv);
   }
@@ -1655,12 +1462,15 @@ function humanLifecycleNarration(
     const data = result.data as {
       version?: string;
       pruned?: string[];
+      pruneWarning?: string;
     } | undefined;
     const target = data?.version;
     if (!target) return null;
     const pruned = data?.pruned ?? [];
     const pruneLine = pruned.length > 0
       ? `\nPruned unprotected releases: ${pruned.join(", ")}.`
+      : data?.pruneWarning
+      ? `\nWarning: update succeeded, but old-release cleanup was skipped: ${data.pruneWarning}`
       : "";
     if (argv.includes("--dry-run")) {
       return warnVerdict(
@@ -1681,6 +1491,9 @@ function humanLifecycleNarration(
         before ? `${before} retained` : "no prior version retained"
       })`,
       ...(pruned.length > 0 ? [`Pruned unprotected releases: ${pruned.join(", ")}.`] : []),
+      ...(data?.pruneWarning
+        ? [`Warning: old-release cleanup was skipped: ${data.pruneWarning}`]
+        : []),
       "",
       successText(
         `Updated aidlc from ${before ?? "not installed"} to ${target}.`,

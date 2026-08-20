@@ -319,7 +319,7 @@ export const ROUTES: readonly Route[] = [
     projectRequirement: "none",
     pinPolicy: "active",
     networkPolicy: "explicit-only",
-    mutationScope: "project",
+    mutationScope: "project-and-machine",
     outputModes: ["human", "quiet", "json"],
     human: [{ command: "config [args]", summary: "configure, pin, or refresh this project" }],
     all: [
@@ -1600,6 +1600,13 @@ export function resolveAction(argv: string[]): Action {
         message: "aidlc: --project-dir requires a path value\n",
       };
     }
+    if (projectDir !== undefined) {
+      return {
+        type: "error",
+        code: 2,
+        message: "aidlc: --project-dir may be specified only once\n",
+      };
+    }
     projectDir = value;
   }
 
@@ -2082,13 +2089,31 @@ function routePinPolicy(argv: readonly string[]): PinPolicy {
 }
 
 function dispatcherProjectDirFrom(argv: readonly string[]): string {
-  const index = argv.indexOf("--project-dir");
-  const explicit = index >= 0 ? argv[index + 1] : undefined;
+  const explicit = projectDirFlag(argv).value;
   const value = explicit || process.env.AIDLC_PROJECT_DIR ||
     process.env.CLAUDE_PROJECT_DIR || process.env.KIRO_PROJECT_DIR;
   return value
     ? (isAbsolute(value) ? value : resolve(process.cwd(), value))
     : process.cwd();
+}
+
+function projectDirFlag(argv: readonly string[]): {
+  value?: string;
+  error?: string;
+} {
+  let value: string | undefined;
+  for (let index = 0; index < argv.length; index++) {
+    if (argv[index] !== "--project-dir") continue;
+    const candidate = argv[++index];
+    if (!candidate || candidate.startsWith("--")) {
+      return { error: "--project-dir requires a path value" };
+    }
+    if (value !== undefined) {
+      return { error: "--project-dir may be specified only once" };
+    }
+    value = candidate;
+  }
+  return { value };
 }
 
 async function dispatchPinnedVersion(
@@ -2100,7 +2125,7 @@ async function dispatchPinnedVersion(
   const pinPath = join(projectDir, ".aidlc-version");
   if (!existsSync(pinPath)) return null;
   const { resolvePinnedDispatch } = await import("./aidlc-lifecycle.ts");
-  const result = resolvePinnedDispatch(argv, input);
+  const result = resolvePinnedDispatch(argv);
   if (result.kind === "none") return null;
   if (result.kind === "failure") {
     return renderDispatcherFailure(
@@ -2234,6 +2259,11 @@ export async function main(argv: string[]): Promise<void> {
   process.exitCode = 0;
   bufferedStdin = null;
   configureColor(argv);
+  const projectDirOption = projectDirFlag(argv);
+  if (projectDirOption.error) {
+    process.exitCode = renderDispatcherFailure(argv, 2, projectDirOption.error);
+    return;
+  }
   if (argv.length === 1 && argv[0] === "--internal-metrics-send") {
     const metrics = await import("./aidlc-metrics.ts");
     await metrics.sendMetricFromStdin();
