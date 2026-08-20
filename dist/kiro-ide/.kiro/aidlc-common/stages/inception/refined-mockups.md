@@ -10,6 +10,7 @@ mode: inline
 summary_confirmation: required
 reviewer: aidlc-product-lead-agent
 reviewer_max_iterations: 2
+review_class: advisory
 produces:
   - mockups
   - interaction-spec
@@ -36,6 +37,7 @@ scopes:
   - enterprise
   - feature
   - mvp
+  - classic
   - workshop
 inputs: Rough mockups from rough-mockups stage, user stories from user-stories stage, requirements from requirements-analysis stage
 outputs: mockups.md, interaction-spec.md, design-system-mapping.md, accessibility-checklist.md, refined-mockups-questions.md (under this stage's record dir, engine-resolved)
@@ -57,7 +59,7 @@ Load aidlc-design-agent persona from `agents/aidlc-design-agent.md` and knowledg
 - Read user stories from `<record>/inception/user-stories/`
 - Read requirements from `<record>/inception/requirements-analysis/`
 
-The workshop scope skips rough-mockups by design (no Ideation phase); when the wireframes and user-flow inputs are absent, design the refined mockups directly from the user stories and requirements — never invent the content of a missing artifact.
+The classic scope skips rough-mockups by design (no Ideation phase); when the wireframes and user-flow inputs are absent, design the refined mockups directly from the user stories and requirements — never invent the content of a missing artifact.
 
 ### Step 3: Generate Clarifying Questions
 
@@ -86,7 +88,7 @@ For non-UI: create API developer experience specification.
 
 Hand completion to `stage-protocol.md` via
 `bun .kiro/tools/aidlc.ts engine orchestrate report --stage refined-mockups --result <outcome>`.
-The engine owns all lifecycle transitions and advancement.
+That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 7: Present Completion & Request Approval
 

@@ -36,6 +36,7 @@ import {
   ensureActiveSpaceCursor,
   errorMessage,
   findIntentByUuid,
+  harnessDir,
   getField,
   hooksHealthDir,
   isClaudeCodeHookInput,

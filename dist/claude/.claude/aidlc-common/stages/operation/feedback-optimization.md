@@ -38,6 +38,7 @@ sensors:
 scopes:
   - enterprise
   - feature
+  - classic
   - workshop
 inputs: All Operation phase artifacts, production monitoring data
 outputs: slo-report.md, cost-analysis.md, drift-report.md, feedback-loop.md, feedback-optimization-questions.md (under this stage's record dir, engine-resolved)
@@ -79,7 +80,7 @@ Create SLO compliance report, AWS Cost Explorer analysis & optimization recommen
 
 Hand completion to `stage-protocol.md` via
 `bun .claude/tools/aidlc.ts engine orchestrate report --stage feedback-optimization --result <outcome>`.
-The engine owns all lifecycle transitions and advancement.
+That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 6: Present Completion & Request Approval
 

@@ -103,7 +103,7 @@ For an external boundary, name the outside consumer (e.g. `External: partner API
 ### Step 6: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
-`bun .codex/tools/aidlc-orchestrate.ts report --stage contract-design --result <outcome>`.
+`bun .codex/tools/aidlc.ts engine orchestrate report --stage contract-design --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 7: Present Completion & Request Approval

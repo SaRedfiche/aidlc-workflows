@@ -20,23 +20,23 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 553,
+    "total": 567,
     "enumeratedByClass": {
       "function": 306,
-      "audit": 82,
-      "scope": 9,
-      "stage": 33,
+      "audit": 85,
+      "scope": 11,
+      "stage": 34,
       "hook": 17,
-      "subcommand": 99,
+      "subcommand": 107,
       "render-surface": 7
     },
     "coveredByClass": {
       "function": 147,
-      "audit": 40,
-      "scope": 9,
+      "audit": 43,
+      "scope": 11,
       "stage": 11,
       "hook": 17,
-      "subcommand": 87,
+      "subcommand": 95,
       "render-surface": 7
     }
   },
@@ -122,6 +122,46 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "DOCUMENT_INDEXED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t298-knowledge-transaction.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "DOCUMENT_REMOVED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t284-knowledge-sync-rebind.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "DOCUMENT_UPDATED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t284-knowledge-sync-rebind.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t297-knowledge-intents.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "audit",
@@ -913,7 +953,7 @@
         },
         {
           "file": "tests/unit/t161-per-intent-lock-reaper.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1093,7 +1133,7 @@
         },
         {
           "file": "tests/unit/t161-per-intent-lock-reaper.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1762,6 +1802,10 @@
         {
           "file": "tests/unit/t264-review-freeze-hook.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t291-review-receipt-recovery.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1862,7 +1906,7 @@
         },
         {
           "file": "tests/unit/t161-per-intent-lock-reaper.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -3021,7 +3065,7 @@
         },
         {
           "file": "tests/unit/t161-per-intent-lock-reaper.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -3863,7 +3907,7 @@
         },
         {
           "file": "tests/unit/t161-per-intent-lock-reaper.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -4514,12 +4558,52 @@
     },
     {
       "unitClass": "scope",
+      "unitId": "classic",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/e2e/t-tui-t58-workshop-scope.serial.test.ts",
+          "mechanism": "tui"
+        },
+        {
+          "file": "tests/e2e/t301-express-scope-routing.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t30-scope-stage-mapping.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "scope",
       "unitId": "enterprise",
       "minMechanism": "none",
       "coveredBy": [
         {
           "file": "tests/integration/t141-enterprise-scope-routing.test.ts",
           "mechanism": "sdk"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "scope",
+      "unitId": "express",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/e2e/t301-express-scope-routing.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t130-scope-runners.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/smoke/t130-scope-runners.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -4622,12 +4706,8 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/e2e/t-tui-t58-workshop-scope.serial.test.ts",
-          "mechanism": "tui"
-        },
-        {
-          "file": "tests/integration/t30-scope-stage-mapping.test.ts",
-          "mechanism": "none"
+          "file": "tests/unit/t125-scope-files.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -4754,6 +4834,13 @@
     {
       "unitClass": "stage",
       "unitId": "ideation/team-formation",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "inception/application-design",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -5356,6 +5443,130 @@
     },
     {
       "unitClass": "subcommand",
+      "unitId": "aidlc-knowledge associate",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t285-knowledge-skill.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t293-knowledge-journey.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-knowledge dissociate",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t285-knowledge-skill.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t293-knowledge-journey.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-knowledge help",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t285-knowledge-skill.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-knowledge list",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t292-knowledge-list-show.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t293-knowledge-journey.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-knowledge onboard",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t293-knowledge-journey.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t298-knowledge-transaction.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-knowledge rebind",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t285-knowledge-skill.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t293-knowledge-journey.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-knowledge show",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t285-knowledge-skill.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t293-knowledge-journey.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-knowledge sync",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t285-knowledge-skill.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t293-knowledge-journey.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
       "unitId": "aidlc-learnings persist",
       "minMechanism": "cli",
       "coveredBy": [
@@ -5425,6 +5636,10 @@
       "coveredBy": [
         {
           "file": "tests/unit/t115.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t291-review-receipt-recovery.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -5631,6 +5846,10 @@
         },
         {
           "file": "tests/unit/t263-reviewer-terminal-ordering.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t291-review-receipt-recovery.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -6022,6 +6241,10 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/e2e/t301-express-scope-routing.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t27.test.ts",
           "mechanism": "cli"
         },
@@ -6207,6 +6430,10 @@
         },
         {
           "file": "tests/e2e/t-exec-codex-journey-workspace.serial.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/e2e/t301-express-scope-routing.test.ts",
           "mechanism": "cli"
         },
         {

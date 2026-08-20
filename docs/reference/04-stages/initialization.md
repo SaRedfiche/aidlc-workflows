@@ -2,20 +2,13 @@
 
 ## Phase Overview
 
-The Initialization phase is the first of five phases in the AI-DLC workflow. It
-runs stages 0.1 through 0.3, **birthing the intent** — minting its record dir at
-`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (written `<record>/` below)
-with state files, directory scaffolding, workspace classification, and routing
-configuration. Project-level `aidlc config` installs or refreshes the generated
-harness projection; it does not run these workflow stages. Once the project is
-installed, the engine auto-births the first intent on the first `/aidlc` (or
-when you describe what to build).
+The Initialization phase is the first of five phases in the AI-DLC workflow. It runs stages 0.1 through 0.3, **birthing the intent**, minting its record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (written `<record>/` below) with state files, one directory per in-scope phase, workspace classification, and routing configuration. There is no separate scaffold command: the workspace shell ships pre-built in `dist/<harness>/`, and the engine auto-births the first intent on the first `/aidlc` (or when you describe what to build).
 
 All 3 stages in this phase execute for EVERY scope — there are no conditional stages. All stages auto-proceed with no approval gates.
 
 The welcome message is rendered at session start via the `companyAnnouncements` entry in `settings.json`. It is not a stage — no stage file, no audit event, no checkbox.
 
-All three stages run inside a single deterministic `aidlc engine intent birth --scope <scope>` call that completes in well under a second. The conductor creates 3 tasks in the sidebar (Workspace Scaffold, Workspace Detection, State Init) for observability, then marks them all completed once the tool returns.
+All three stages run inside a single deterministic `bun .claude/tools/aidlc-utility.ts intent-create --scope <scope>` call that completes in well under a second. The conductor creates 3 tasks in the sidebar (Workspace Scaffold, Workspace Detection, State Init) for observability, then marks them all completed once the tool returns.
 
 ## Scope-Driven Stage Inclusion
 
@@ -29,7 +22,9 @@ All three stages run inside a single deterministic `aidlc engine intent birth --
 | refactor | All 0.1-0.3 |
 | infra | All 0.1-0.3 |
 | security-patch | All 0.1-0.3 |
+| classic | All 0.1-0.3 |
 | workshop | All 0.1-0.3 |
+| express | All 0.1-0.3 |
 
 ## Stage Summary
 
@@ -55,7 +50,7 @@ All three stages run inside a single deterministic `aidlc engine intent birth --
 
 ### Steps
 1. Create `<record>/` directory if needed
-2. Create stage artifact directories for all 5 phases + `<record>/verification/`
+2. Create an artifact directory for each phase the scope runs, plus `<record>/verification/`
 3. Create the empty space-level `aidlc/knowledge/` directory (free-form; no per-agent subdirs, no READMEs)
 4. Create the intent's `audit/` shard dir header + emit `WORKFLOW_STARTED`
 5. Append `STAGE_STARTED` + `WORKSPACE_SCAFFOLDED` + `STAGE_COMPLETED` events
@@ -64,14 +59,14 @@ All three stages run inside a single deterministic `aidlc engine intent birth --
 - None (entry point)
 
 ### Outputs
-- `<record>/initialization/`, `ideation/`, `inception/`, `construction/`, `operation/` with stage subdirectories
-- `<record>/verification/`
+- one artifact directory per phase the scope runs: `<record>/initialization/`, plus each of `ideation/`, `inception/`, `construction/`, `operation/` holding at least one EXECUTE stage. A phase the scope excludes gets no directory (a bugfix record has no `ideation/` or `operation/`), and per-stage subdirectories are not created here: a stage's directory appears when it first writes an artifact
+- `<record>/verification/` (created for every scope)
 - the empty space-level `aidlc/knowledge/` directory (a sibling of the space's `intents/`)
 - the intent's `audit/` shard dir (header + session + scaffold events)
 
 ### Notes
 - Idempotent — skips directories and files that already exist
-- Runs inside `aidlc-utility intent-birth`, not via LLM
+- Runs inside `aidlc-utility intent-create`, not via LLM
 
 ---
 
@@ -105,7 +100,7 @@ All three stages run inside a single deterministic `aidlc engine intent birth --
 - `WORKSPACE_SCANNED` audit event capturing the scan result
 
 ### Notes
-- Runs as a deterministic scanner inside `aidlc-utility intent-birth`. No LLM subagent dispatch.
+- Runs as a deterministic scanner inside `aidlc-utility intent-create`. No LLM subagent dispatch.
 - Symbolic links are not followed (cycle protection via `lstatSync`)
 - Excludes `.claude/`, `<record>/`, `node_modules/`, `.git/`, `dist/`, `build/`, `.next/`, `target/`, `vendor/`
 - `package.json` with only `devDependencies` is treated as tooling/scaffolding and does not alone cause brownfield classification
@@ -134,7 +129,7 @@ All three stages run inside a single deterministic `aidlc engine intent birth --
 
 ### Inputs
 - Workspace classification from workspace-detection (same tool call)
-- Scope configuration (from `--scope` flag or `poc` default)
+- Scope configuration (from `--scope` flag, `AWS_AIDLC_DEFAULT_SCOPE`, or the `classic` default)
 - Depth / test-strategy overrides if passed
 - State contract from `.claude/knowledge/aidlc-shared/state-template.md`
 - Compiled `tools/data/stage-graph.json` and `tools/data/scope-grid.json`
@@ -145,7 +140,7 @@ All three stages run inside a single deterministic `aidlc engine intent birth --
 
 ### Notes
 - Brownfield projects route to reverse-engineering (Stage 2.1)
-- Greenfield projects route to the first non-initialization stage (intent-capture for feature/poc; requirements-analysis for bugfix/refactor; practices-discovery for workshop, since workshop skips all of Ideation and reverse-engineering is downgraded to SKIP on greenfield)
+- Greenfield projects route to the first non-initialization stage (intent-capture for feature/poc; requirements-analysis for bugfix/refactor/express; practices-discovery for classic/workshop, since both skip all of Ideation and reverse-engineering is downgraded to SKIP on greenfield)
 - When invoked from `/aidlc-init` (the explicit birth packaging), the orchestrator stops after this stage
 - When invoked from workflow start (`/aidlc <scope>` or describing what to build), the orchestrator continues into the first post-init stage
 

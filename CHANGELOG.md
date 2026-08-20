@@ -1,6 +1,16 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.19] - 2026-08-20
+
+AI-DLC now ships a native, transactional install and lifecycle channel alongside the existing Bun copy channel, with a six-command public CLI, guided configuration, retained-version update/use flows, and release provenance controls. **Upgrade:** finish or park active workflows, install the native release or refresh your generated `dist/<harness>/` projection, then run `aidlc config` in each project.
+
+* Added native installers and retained-version lifecycle commands for Linux, macOS, and Windows: `aidlc config`, `doctor`, `update`, `use`, `uninstall`, and `version`, with machine/project settings, model presets, provider/runtime/trust checks, plugin selection, and an interactive first-run setup.
+* Reshaped internal framework operations behind the `engine` and `system` namespaces, with route-declared project, network, pin, mutation, and output policies shared by the dispatcher and stable launchers.
+* Added transactional project refresh, machine registry and pin coordination, rollback/recovery diagnostics, release packaging, checksums, attestations, and generated-projection verification across all seven harnesses.
+* Added side-effect-free command help, contextual usage errors, non-TTY-safe output, restrained terminal color, and end-to-end copy/native channel acceptance coverage on Linux and Windows.
+* Hardened release publication, projection descriptor handling, dispatcher project routing, mutation-root enforcement, first-run atomicity, retained-runtime validation, and lifecycle/global-settings rollback after focused security review.
+
 ## [2.6.18] - 2026-08-19
 
 Classic and Express are new scope options, and the implicit default scope is now Classic — a **declared behavior change**: invocations that name no scope and match no keyword now run the v1-style lifecycle without Ideation instead of the full-lifecycle Feature scope. Exactly two things control the implicit default: the `AWS_AIDLC_DEFAULT_SCOPE` env var (which overrides) and the framework's hard-coded `classic` fallback. Express has a deterministic requirements-to-conditional-deploy path, and conditional protocol modules reduce fixed context without dropping reviewer recovery behavior. **Upgrade:** refresh your `dist/<harness>/` shell; in-flight workflows keep their persisted scope and need no migration; set `AWS_AIDLC_DEFAULT_SCOPE=feature` (Claude: the `.claude/settings.json` `env` block, which now ships `classic`) to keep the previous full-lifecycle default.

@@ -726,9 +726,6 @@ export async function run(input: string): Promise<number> {
     // Heartbeat failure is non-fatal - never let it affect the decision.
   }
 
-  // A TTY means no harness JSON is coming (test / debug contexts) - allow.
-  if (process.stdin.isTTY) return 0;
-
   let parsed: ClaudeCodeHookInput;
   try {
     const raw: unknown = JSON.parse(input);
@@ -871,5 +868,7 @@ export async function run(input: string): Promise<number> {
 }
 
 if (import.meta.main) {
+  // A TTY means no harness JSON is coming (test / debug contexts) - allow.
+  if (process.stdin.isTTY) process.exit(0);
   process.exit(await run(await Bun.stdin.text()));
 }

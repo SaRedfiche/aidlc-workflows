@@ -30,9 +30,14 @@ import {
 } from "../../core/tools/aidlc-model-policy.ts";
 
 // Rewrite a core persona .md into its opencode-native subagent twin. The
-// frontmatter tier becomes model/variant plus mode, and the core Task denial
-// becomes opencode's native permission map. Unknown disallowed tools fail the
-// build instead of silently landing in opencode's inert options bag.
+// frontmatter tier becomes model/variant plus mode, the core Task denial
+// becomes opencode's native permission map, and a core `maxTurns:` cap is
+// renamed to opencode's native `steps:` key (per-agent step cap, opencode
+// >= 1.0.134; at the cap opencode forces a final TEXT-ONLY turn - the agent
+// can return a summary but cannot make tool calls, so the persona's Turn
+// Budget prose still carries the write-early instruction). Unknown disallowed
+// tools fail the build instead of silently landing in opencode's inert
+// options bag.
 function emitSubagentMd(raw: string, srcPath: string, tierCap: EmitContext["tierCap"]): string {
   if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
   const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
@@ -53,14 +58,21 @@ function emitSubagentMd(raw: string, srcPath: string, tierCap: EmitContext["tier
     "opencode",
     tierCap,
   );
+  // Core's harness-neutral turn cap -> opencode's native per-agent key.
+  const maxTurns = raw.match(/^maxTurns:\s*(\d+)\s*$/m);
   return writeMarkdownAgentSurface(raw, effective, {
     effortKey: "variant",
-    removeKeys: ["disallowedTools"],
+    removeKeys: ["disallowedTools", "maxTurns"],
     afterProjectionLines: [
       "mode: subagent",
+      ...(maxTurns ? [`steps: ${maxTurns[1]}`] : []),
       ...(disallowedMatch ? ["permission:", "  task: deny"] : []),
     ],
-  });
+  })
+    // Keep persona prose consistent with the renamed frontmatter key: the
+    // harness-neutral body cites its own cap as `maxTurns: <n>`; on this
+    // roster that key is `steps: <n>`.
+    .replace(/`maxTurns: (\d+)`/g, "`steps: $1`");
 }
 
 function projectActiveMemoryReferences(raw: string): string {

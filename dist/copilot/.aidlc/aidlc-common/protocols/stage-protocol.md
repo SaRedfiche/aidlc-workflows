@@ -93,7 +93,7 @@ question MUST use unordered bullets, never numbered items.
 ### Critical Compliance Checklist (most commonly missed steps)
 Before and during EVERY stage, verify:
 1. [ ] **Use the engine for every lifecycle transition** — before the prompt, `aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval`; after the response, report `approved` or `rejected`; after revision work, report `revised`. When the active stage's own condition proves it does not apply, report `skipped --reason "<reason>"`. Never call lifecycle verbs on `aidlc-state.ts` directly. The engine emits the correct audit events and routes only on approval, completion, or a justified skip. Do NOT call `aidlc-audit.ts append` separately. (§2)
-2. [ ] **Log non-gate questions via `aidlc-log.ts`** — before presenting a structured question that is not an approval gate: `bun .aidlc/tools/aidlc-log.ts decision --stage <slug> --decision "<summary>" --options "<csv>"`. After response: `bun .aidlc/tools/aidlc-log.ts answer --stage <slug> --details "<exact choice>"`. Approval choices go only through `aidlc-orchestrate.ts report`. (§2, §3)
+2. [ ] **Log non-gate questions via `aidlc-log.ts`** — before presenting a structured question that is not an approval gate: `bun .aidlc/tools/aidlc.ts engine log decision --stage <slug> --decision "<summary>" --options "<csv>"`. After response: `bun .aidlc/tools/aidlc.ts engine log answer --stage <slug> --details "<exact choice>"`. Approval choices go only through `aidlc-orchestrate.ts report`. (§2, §3)
 3. [ ] **Never summarize User Input** — use exact option labels. (§2, §3)
 4. [ ] **Task transitions + state sync** — Mark previous task `completed`, then `TaskUpdate({ ..., status: "in_progress", activeForm: "Running [Stage] [slug]" })`. The `[slug]` suffix triggers the PostToolUse hook that syncs the state file. `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` auto-advances to the next in-scope stage (or completes the workflow on the final stage) — do NOT call `advance` separately after approval. (§4)
 5. [ ] **Stage ritual is ATOMIC** — once a stage starts, EVERY step in its protocol fires: questions → artifact → reviewer (if declared) → learnings → gate. No step is skippable based on inferred user intent. "Skip to stage X" means skip INTERMEDIATE stages, NOT shortcut the TARGET stage's ritual. If a user jumps forward from a stage at its gate, the current stage's learnings ritual (§13) MUST fire before the jump executes.
@@ -184,11 +184,11 @@ Every stage ends with this 5-part structure:
 ### Part 0: Enter the approval gate (mandatory: the held gate is recorded before the human answers it)
 Entering the gate:
 1. Render Parts 1-2 (announcement, summary), then run the §13 learnings ritual as its own human turn — END YOUR TURN at its question. Its logged `QUESTION_ANSWERED` row must precede the gate's `STAGE_AWAITING_APPROVAL` (§13 step 3 is the contract; the gate is never opened in the same message as the learnings question).
-2. After the learnings answer is logged: `bun .aidlc/tools/aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval` marks `[-]` -> `[?]` and emits `STAGE_AWAITING_APPROVAL`. `/aidlc --status` now truthfully shows the held gate. These are internal bookkeeping steps: run them, never narrate them. This step is bookkeeping the user has no stake in: **SAY:** nothing for it, not that a gate is being opened, not that anything is being recorded. Go from the learnings answer straight into the question below.
+2. After the learnings answer is logged: `bun .aidlc/tools/aidlc.ts engine orchestrate report --stage <slug> --result awaiting-approval` marks `[-]` -> `[?]` and emits `STAGE_AWAITING_APPROVAL`. `/aidlc --status` now truthfully shows the held gate. These are internal bookkeeping steps: run them, never narrate them. This step is bookkeeping the user has no stake in: **SAY:** nothing for it, not that a gate is being opened, not that anything is being recorded. Go from the learnings answer straight into the question below.
 3. Present Part 3 (the approval question). This is a lifecycle gate, not an interview question: do not call `aidlc-log.ts decision` or `aidlc-log.ts answer` for it. Word it per the voice contract at the top of this file: what you produced, what to look at, what happens next.
 4. Based on the user response:
-   - **Approve** → `bun .aidlc/tools/aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"`. That call emits any missing `STAGE_AWAITING_APPROVAL`, then `GATE_APPROVED` + `STAGE_COMPLETED`, and auto-advances to the next in-scope stage (or completes the workflow on the final stage). No separate `advance` call required.
-   - **Request Changes** → `bun .aidlc/tools/aidlc-orchestrate.ts report --stage <slug> --result rejected --user-input "<feedback>"`. That call emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count. When the feedback already names what to change, revise immediately; ask a clarifying question first ONLY when the feedback is genuinely ambiguous, and ask it as a structured question with concrete options drawn from the artifact (never an open-ended freeform prompt — a driver or scripted session that answers only structured questions must be able to progress the revision loop). When the revision changed a `produces[]` artifact and the directive carries a reviewer, re-run the `stage-protocol-reviewer.md` §12a reviewer step before reporting revised — fresh dispatch record, fresh `## Review` verdict replacing the stale one; the NOT-READY lead-alone loop and its iteration budget apply as at first entry. (The §13 learnings ritual runs once per stage and is not re-run.) Then call `bun .aidlc/tools/aidlc-orchestrate.ts report --stage <slug> --result revised` to emit a fresh `STAGE_AWAITING_APPROVAL` and mark `[R]` → `[?]` — always re-present the gate after the revision; never leave the stage parked in `[R]` waiting on further conversation.
+   - **Approve** → `bun .aidlc/tools/aidlc.ts engine orchestrate report --stage <slug> --result approved --user-input "<exact choice>"`. That call emits any missing `STAGE_AWAITING_APPROVAL`, then `GATE_APPROVED` + `STAGE_COMPLETED`, and auto-advances to the next in-scope stage (or completes the workflow on the final stage). No separate `advance` call required.
+   - **Request Changes** → `bun .aidlc/tools/aidlc.ts engine orchestrate report --stage <slug> --result rejected --user-input "<feedback>"`. That call emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count. When the feedback already names what to change, revise immediately; ask a clarifying question first ONLY when the feedback is genuinely ambiguous, and ask it as a structured question with concrete options drawn from the artifact (never an open-ended freeform prompt — a driver or scripted session that answers only structured questions must be able to progress the revision loop). When the revision changed a `produces[]` artifact and the directive carries a reviewer, re-run the `stage-protocol-reviewer.md` §12a reviewer step before reporting revised — fresh dispatch record, fresh `## Review` verdict replacing the stale one; the NOT-READY lead-alone loop and its iteration budget apply as at first entry. (The §13 learnings ritual runs once per stage and is not re-run.) Then call `bun .aidlc/tools/aidlc.ts engine orchestrate report --stage <slug> --result revised` to emit a fresh `STAGE_AWAITING_APPROVAL` and mark `[R]` → `[?]` — always re-present the gate after the revision; never leave the stage parked in `[R]` waiting on further conversation.
    - **Accept as-is** (after 3 rejection cycles) → same as Approve; include `--user-input "Accept as-is after N cycles"`.
 
 ### Part 1: Announcement (mandatory)
@@ -232,8 +232,8 @@ in-scope progress with overall shown parenthetically:
 Progress: [X]/[S] in-scope stages complete ([N]/33 overall) | [phase-N]/[phase-total] [Phase]. Next: [Next Stage Name]
 ```
 Keep this format exactly as shown. `S` = the number of stages this workflow
-actually runs, read from the current scope's compiled totals. Use `bun
-.aidlc/tools/aidlc-utility.ts scope-table` when you need those
+actually runs, read from the current scope's compiled totals. Use
+`bun .aidlc/tools/aidlc.ts engine gen scope-table` when you need those
 totals; never carry a hand-maintained per-scope count table in this protocol,
 and never narrate where the number came from.
 
@@ -338,7 +338,7 @@ Log the user's mode choice to `<record>/audit/<host>-<clone>.md` using the Quest
   letter, chat number, punctuation, or option description before writing;
   `[Answer]: A. Looks correct` and `[Answer]: 1. Looks correct` are invalid.
   Before presenting it, record the checkpoint prompt:
-  `bun .aidlc/tools/aidlc-log.ts decision --stage <slug>
+  `bun .aidlc/tools/aidlc.ts engine log decision --stage <slug>
   --checkpoint summary-confirmation --questions-file "<questions-path>"
   --decision "Does this all look correct before I generate the artifact?"
   --options "Looks correct,Request changes"`; add `--unit "<directive.unit>"`
@@ -347,7 +347,7 @@ Log the user's mode choice to `<record>/audit/<host>-<clone>.md` using the Quest
 
   After the human responds, first write the exact choice to the confirmation
   `[Answer]:` tag, then record the human-backed receipt with
-  `bun .aidlc/tools/aidlc-log.ts answer --stage <slug>
+  `bun .aidlc/tools/aidlc.ts engine log answer --stage <slug>
   --checkpoint summary-confirmation --questions-file "<questions-path>"
   --details "<exact choice>"` using the same `--unit` / `--single` identity.
   The tool refuses a self-selected answer, a response without a matching prompt
@@ -490,14 +490,14 @@ Rules:
 The PostToolUse hook auto-logs file writes as `ARTIFACT_CREATED` / `ARTIFACT_UPDATED`. Conversation events (questions, approvals, user responses) are NOT hook-logged and MUST be recorded via the thin `aidlc-log` / `aidlc-state` tools. Those tools own audit emission — do NOT call `aidlc-audit.ts append` by hand for these events.
 
 At each approval gate — see §2 Part 0 for the full flow. Summary:
-1. BEFORE presenting the approval question: `bun .aidlc/tools/aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval`.
+1. BEFORE presenting the approval question: `bun .aidlc/tools/aidlc.ts engine orchestrate report --stage <slug> --result awaiting-approval`.
 2. AFTER user response: report `approved --user-input "<choice>"` or `rejected --user-input "<feedback>"`. After revision work, report `revised` before re-presenting. Never call lifecycle verbs on `aidlc-state.ts` directly.
 
 These `report` calls are the approval gate's only logging path. Never call `aidlc-log.ts decision` or `aidlc-log.ts answer` for an approval choice.
 
 At each non-gate question interaction:
-1. BEFORE presenting the question: `bun .aidlc/tools/aidlc-log.ts decision --stage <slug> --decision "<summary>" --options "<A,B,C>"` (emits `DECISION_RECORDED`).
-2. AFTER response: `bun .aidlc/tools/aidlc-log.ts answer --stage <slug> --details "<summary of answers>"` (emits `QUESTION_ANSWERED`).
+1. BEFORE presenting the question: `bun .aidlc/tools/aidlc.ts engine log decision --stage <slug> --decision "<summary>" --options "<A,B,C>"` (emits `DECISION_RECORDED`).
+2. AFTER response: `bun .aidlc/tools/aidlc.ts engine log answer --stage <slug> --details "<summary of answers>"` (emits `QUESTION_ANSWERED`).
 
 This pair is also a deterministic human-wait signal for the forwarding-loop Stop
 hook, including learning prompts that do not add a blank tag to the stage
@@ -511,7 +511,7 @@ answer; only the human's next interaction may be followed by `answer`.
 - `[x]` — Completed (approved by user)
 - `[S]` — Skipped via `--stage` or `--phase` jump (not executed, excluded from progress counts)
 
-**Enforcement:** State file updates happen automatically via the PostToolUse hook when `TaskUpdate` sets a stage task to `in_progress` with a `[slug]` suffix in `activeForm`. At stage END, `bun .aidlc/tools/aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` marks the completed stage `[x]`, auto-advances to the next in-scope stage, and handles completion bookkeeping. Do not skip the intermediate `[-]` state by going directly from `[ ]` to `[x]`.
+**Enforcement:** State file updates happen automatically via the PostToolUse hook when `TaskUpdate` sets a stage task to `in_progress` with a `[slug]` suffix in `activeForm`. At stage END, `bun .aidlc/tools/aidlc.ts engine orchestrate report --stage <slug> --result approved --user-input "<exact choice>"` marks the completed stage `[x]`, auto-advances to the next in-scope stage, and handles completion bookkeeping. Do not skip the intermediate `[-]` state by going directly from `[ ]` to `[x]`.
 
 **`[S]` behavior:**
 - Set by the Stage/Phase Jump handler (`aidlc-jump.ts execute`) for in-scope stages before the jump target, or by `aidlc-orchestrate.ts report --result skipped` when the active stage's own applicability check justifies a skip
@@ -559,7 +559,7 @@ Fields managed by the tools (matching state template format `- **Field**: value`
 own applicability check proves that it cannot run, call:
 
 ```bash
-bun .aidlc/tools/aidlc-orchestrate.ts report \
+bun .aidlc/tools/aidlc.ts engine orchestrate report \
   --stage "<current-slug>" --result skipped --reason "<specific reason>"
 ```
 
@@ -572,10 +572,10 @@ cannot use this routing outcome.
 
 **Stage graph lookups** (no state file needed):
 ```bash
-bun .aidlc/tools/aidlc-state.ts lookup phase-of SLUG          # → phase name
-bun .aidlc/tools/aidlc-state.ts lookup next-stage SLUG SCOPE   # → next in-scope slug
-bun .aidlc/tools/aidlc-state.ts lookup agent-for SLUG          # → lead agent name
-bun .aidlc/tools/aidlc-state.ts lookup validate-stage SLUG     # → JSON with slug, phase, number, valid
+bun .aidlc/tools/aidlc.ts engine state lookup phase-of SLUG          # → phase name
+bun .aidlc/tools/aidlc.ts engine state lookup next-stage SLUG SCOPE   # → next in-scope slug
+bun .aidlc/tools/aidlc.ts engine state lookup agent-for SLUG          # → lead agent name
+bun .aidlc/tools/aidlc.ts engine state lookup validate-stage SLUG     # → JSON with slug, phase, number, valid
 ```
 
 ### MANDATORY: Plan-Level Checkbox Enforcement
@@ -740,8 +740,8 @@ Create exactly the detail needed — no more, no less. Depth adapts to scope and
 ### Scope-to-depth mapping
 The active scope file declares the default `depth` (the rows below mirror the
 shipped scope files' `depth:` frontmatter - name and depth only, no stage
-counts), and the compiled scope grid declares which stages execute. Use `bun
-.aidlc/tools/aidlc-utility.ts scope-table` for the current
+counts), and the compiled scope grid declares which stages execute. Use
+`bun .aidlc/tools/aidlc.ts engine gen scope-table` for the current
 scope/depth/count table - never copy stage counts into this protocol.
 
 | Scope | Default Depth |
@@ -979,7 +979,7 @@ Trigger after Step N-1 (completion message rendered) and before Step N (approval
 
 2. **Surface candidates (the tool reads memory.md).** Run:
    ```bash
-   bun .aidlc/tools/aidlc-learnings.ts surface --slug <stage-slug>
+   bun .aidlc/tools/aidlc.ts engine learnings surface --slug <stage-slug>
    ```
    The tool parses memory.md and emits structured JSON: one candidate per non-blank entry under **Interpretations / Deviations / Tradeoffs** (surfaced verbatim — no paraphrase, no "interesting" filtering), plus a read-only `parked_open_questions[]` list. Open questions are research items, not learnings to install — they never become candidates. Most runs surface nothing worth keeping; that's the most common outcome.
 
@@ -989,7 +989,7 @@ Trigger after Step N-1 (completion message rendered) and before Step N (approval
 
 5. **Persist (the tool writes + emits audit).** Build the selections file and call:
    ```bash
-   bun .aidlc/tools/aidlc-learnings.ts persist --slug <stage-slug> --selections-json <path>
+   bun .aidlc/tools/aidlc.ts engine learnings persist --slug <stage-slug> --selections-json <path>
    ```
    The tool, inside one `withAuditLock` transaction (decide-inside-lock, content-presence idempotency via a `<!-- cid:<slug>:<id> -->` marker so a crashed run recovers without double-appending):
    - **Learning** → appends a practice line under the orchestrator-routed heading in `<scope>.md` (scope ∈ {project, team}): `- <text> (learned YYYY-MM-DD) <!-- cid:... -->`. Ensure-exists the heading first, so a routed heading the file doesn't yet carry is created rather than throwing. Emits `RULE_LEARNED` (with `Source: orchestrator | user_addition`, `Heading: <routed>`).
@@ -1049,7 +1049,7 @@ When a stage detects existing output artifacts in its artifact directory:
 **Audit logging**: After the user's choice, call the state tool (maps the "Redo from scratch" option to `--decision redo`):
 
 ```bash
-bun .aidlc/tools/aidlc-state.ts reuse-artifact <stage-slug> \
+bun .aidlc/tools/aidlc.ts engine state reuse-artifact <stage-slug> \
   --decision <keep|modify|redo> \
   --artifacts "<comma-separated list of existing artifacts found>"
 ```

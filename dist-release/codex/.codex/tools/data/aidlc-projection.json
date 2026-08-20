@@ -17,7 +17,7 @@
       "legacySignatures": {
         "wholeFileHashes": [
           "sha256:f919e4bac1790bd1a371d371af473ccbc644f3bb80e4569d190c9364fad771b3",
-          "sha256:0c7b65e6639cbe3c907ce12b8c07a1afaf5d687838c359e820ba1a64c6fded65"
+          "sha256:a4e02e861ff57199f88ae79ec3ed964ecd2630a2f203351d3ee0a6125982de7f"
         ]
       }
     },
@@ -40,132 +40,138 @@
           "sha256:9be9c5cc4a25e5b4c71b3ae35188e1a543504f19cbd5d0a20892777b0904800e",
           "sha256:bc41aca84970977673af3c0b8212a1f7a4d995a4b47fc7894b1c5b342e4a3601",
           "sha256:b3d4d0d178a01591629dbf79083b00e7a3ad42f59f79cbfc88d05b7615704a70",
-          "sha256:92441f1b9f546249f5d0966a57cf958d00a0440106d046f6b83f7ff588aaed5d",
-          "sha256:4461cd1d2ae40498501d336a23198ab8ad5241ce792e42b8f5f15b6ca73a4741"
+          "sha256:d9be36630b49183203ae4d97946c243e3b8840202ee6f080c738e0f01343e33a",
+          "sha256:2b592058aa4ba7212795d3149e01c170a2e51127ddfcb0a307b0ecd37f28e05b"
         ]
       }
     }
   ],
   "legacyManagedFileHashes": {
     ".agents/skills/aidlc/SKILL.md": [
-      "sha256:3302b25b252b850ff8745ecd0ed316aa5b5f84671ef2053a04eb642d6e8c3189"
+      "sha256:c6f32d646ebc348575daf2fa5a92a9bf4abf3f2cefdd3178b6476c4be8cd3750"
     ],
     ".agents/skills/aidlc-approval-handoff/SKILL.md": [
-      "sha256:acc330d7955a8b58d04a1728f27b93fd8a583e9586ffb9252913f98977812b00"
+      "sha256:f110cad63ec1297a8d983ba5d294c75b6cefa4cc0d5ac1ad842f8f5a1abd97e2"
     ],
     ".agents/skills/aidlc-bugfix/SKILL.md": [
-      "sha256:e9fa796f2d59e78bec0f0491bf73678fdb080fdf1f83cb8588e72d6aa1374a7f"
+      "sha256:af459f0bb0be3df06ce4998859ca433b162fedce2bdbe6b2de6914cc091e1e2b"
     ],
     ".agents/skills/aidlc-build-and-test/SKILL.md": [
-      "sha256:e3c96bcf1adc997283beb1f866f30341994a13c509169dee1852652c63303e01"
+      "sha256:041cfc8683f40667d067ac3f5b8d1029a04f1c67764ca6a99eaff6c076f197aa"
     ],
     ".agents/skills/aidlc-ci-pipeline/SKILL.md": [
-      "sha256:7fa16113a66ea66346a07e185669417ad58ce90b042f6f950e1d2436049eebdd"
+      "sha256:1ffed675e745f27ce105b8e030426f031713687796f5aad26cc5604aa45d2e53"
     ],
     ".agents/skills/aidlc-code-generation/SKILL.md": [
-      "sha256:a9951002f0d3c5d40269ddb7a68f7af0c782389a027aba9279b5bb25a3df2b06"
+      "sha256:98dfb9a21724f341a560f0a5f42ad3f1191ef1717df5e0c4c3da04958905ff96"
     ],
     ".agents/skills/aidlc-compose/SKILL.md": [
       "sha256:c0a365a24ff1d728fcb2e4b8da55c8745e07f18c8faec13bafa0bef963ca1394"
     ],
     ".agents/skills/aidlc-contract-design/SKILL.md": [
-      "sha256:3425213621874c3abe744d410cc360b8b94459f8a3875b20f9d39fa23f83297a"
+      "sha256:eef4f32290d9493a16459197bdbf1e578981c39aa1b20a4d255fb7f95cf117cd"
     ],
     ".agents/skills/aidlc-delivery-planning/SKILL.md": [
-      "sha256:dd7fd1b66e2648d2c10c2f00ec988893828ccf2c7defb059f92e8ce0c6dcbad2"
+      "sha256:39fe264b89c3e935cd526c5340f0d756067dd4c75497e8830d94dbc26e1b38b9"
     ],
     ".agents/skills/aidlc-deployment-execution/SKILL.md": [
-      "sha256:77a311d1ba7a58f7fd7570d7e2e17b24f48e234362aca7a6ff121b25aa68da66"
+      "sha256:4f3a86f8ccc2c25fe3d3fb79e7edba5e00cff46e9c6350da1db58283be9da35c"
     ],
     ".agents/skills/aidlc-deployment-pipeline/SKILL.md": [
-      "sha256:2f6cf9285ebf5b6528c81218fa92bcf7252ed10c57126d04b6805e3b311423df"
+      "sha256:7466154cef0e649ae7659fda999ecdeb695ac7c869dd14c0055feb6468c3bf15"
     ],
     ".agents/skills/aidlc-domain-design/SKILL.md": [
-      "sha256:262b01c4cb1ba825dd6d5c1c4d3cf3231ce41b94a32923de4dacb8d8061312cd"
+      "sha256:7822319fd19a6d4d699f7c5e48cb287f5c377499f6c29f6eb76dd79b219edb72"
     ],
     ".agents/skills/aidlc-environment-provisioning/SKILL.md": [
-      "sha256:adbab4a608c9ec8dce86c983c7820f8248387470810ce1a38efc3c34616121ce"
+      "sha256:6be19e244918c640b4106747189072bb5edfa6b8f818c66c1c8ffb93ec6f1bf8"
+    ],
+    ".agents/skills/aidlc-express/SKILL.md": [
+      "sha256:9291f2f808cdf40c3298bc9dcdfbed92627653aa61b24b144ac080d5045491c2"
     ],
     ".agents/skills/aidlc-feasibility/SKILL.md": [
-      "sha256:14c3bdb3ffcc340128001c2c3652bd2a7ca9082e892d399fa275d2e6c459cbc7"
+      "sha256:df5b53a1ac075f8e0258de034cd50c459a51b1c5ad50a328a397972e5a906243"
     ],
     ".agents/skills/aidlc-feature/SKILL.md": [
-      "sha256:20092bf0ff63b57bbee1309cdc2ee86b9d9491578e4bdab8857b61ea6a416e3b"
+      "sha256:2e31c31ffe025297202013ebb9b2408f33bb59507da9599a68b5413276585846"
     ],
     ".agents/skills/aidlc-feedback-optimization/SKILL.md": [
-      "sha256:26fd492542df23ac4decaaa32ff5fefa92858a3287b940e8d9a3054f958bf3bc"
+      "sha256:f6dd546c4e138503c029195d9306e77d511207ac5a31463aef8834793079d794"
     ],
     ".agents/skills/aidlc-functional-design/SKILL.md": [
-      "sha256:3795c308f20b3c7aa77ecf3d3c170fd6e050364faeeac4fe18dccfcfbad528f3"
+      "sha256:14ef33c635e8cca028cee95c796f64d590f818b2bb69d27e95fca828968e0cc7"
     ],
     ".agents/skills/aidlc-incident-response/SKILL.md": [
-      "sha256:52647b153a3035eccbac43c891176abd03974ad9fcdba3c65bc05216876dfafd"
+      "sha256:c5a613e2ca0e22a6b848569fa85082703c67e9a73f62c01298e249402bcd3350"
     ],
     ".agents/skills/aidlc-infrastructure-design/SKILL.md": [
-      "sha256:bc54c0d8cc9635a9f73900d09826353beb2b681749b95c523c2bbe4adae744d4"
+      "sha256:88150195a48da75bace80ebeb4331989b303883f8f80ac6bebbdf7bccf1d032e"
     ],
     ".agents/skills/aidlc-init/SKILL.md": [
-      "sha256:f4ab108cf5c9bb0641401df865028ddc70acf4c203406a915908cdd5c5e20bcd"
+      "sha256:f3f56c2cd1cdf98a011abfa28db73d6a3dd43ef3119467e1d36f19d22e87f88a"
     ],
     ".agents/skills/aidlc-intent-capture/SKILL.md": [
-      "sha256:2dc52da77d6dbf6896beb77720a0b048fa0ebd3ecc426443600ba82c55d2a7a6"
+      "sha256:26cbdbdd1baba7e90a4b1940368fbab4c89db4391a942d802e71e7b8190aaf44"
+    ],
+    ".agents/skills/aidlc-knowledge/SKILL.md": [
+      "sha256:7d83d23bd264554539eb34935b499884d4fd545dc0f51fb767eee48de7be181b"
     ],
     ".agents/skills/aidlc-market-research/SKILL.md": [
-      "sha256:6d3f2c159a441a1063ef6234d4333bb8a79873e819ec6ab45fd0f56f0204c587"
+      "sha256:df0a92dcbdebcddbd338a5ad96f675351030e5d082b9f04d3b704c86d696a46d"
     ],
     ".agents/skills/aidlc-mvp/SKILL.md": [
-      "sha256:60daf6639920ef204b87010c44e4f9713320373f35973abc610378746b02083f"
+      "sha256:c9d8eb893c7938e038205ddbd3d42e6026b998ef8f2df76b212180d4ddcf7161"
     ],
     ".agents/skills/aidlc-nfr-design/SKILL.md": [
-      "sha256:91edd57773d4606777231fd47db833e43ec67d13066d319a4a32f090a053a346"
+      "sha256:45c819660168847895fff004c4c7f08a293fb8c68549565e8cc7ed5acbf0f701"
     ],
     ".agents/skills/aidlc-nfr-requirements/SKILL.md": [
-      "sha256:d240e9177f3246fca34d717273cf57831cc3862e65f4f576662bca4803d0b0d2"
+      "sha256:8011618ca7ab93f9fb4794822409384100c02ef1e1b669ee7ac840fa9ddcdcef"
     ],
     ".agents/skills/aidlc-observability-setup/SKILL.md": [
-      "sha256:712a46ebc3fbf55efd4d4cb330ab82ff639a1cb4d3ec4d8ef3cbb20095d37709"
+      "sha256:55f544a554a7d4cc3fdbc4c0ef5e95a37ddd4651fe328cc603aabca72f7a8ecc"
     ],
     ".agents/skills/aidlc-outcomes-pack/SKILL.md": [
       "sha256:808613508a48ba02e24d0489624f293d423025f5b53a5104583ba143e30ddda4"
     ],
     ".agents/skills/aidlc-performance-validation/SKILL.md": [
-      "sha256:cdf49f748dfc71d22f81e16e3503700a1d11d660debd599639cfcc78ad8a8249"
+      "sha256:852f813b9beedcae9361596fadd66b5e254d5fc8c4b986400e3a857878133bc8"
     ],
     ".agents/skills/aidlc-practices-discovery/SKILL.md": [
-      "sha256:d010af40519ea7b99f56281cbaa6b065dadb764ae1dab4ab391a99ce2575fbb3"
+      "sha256:be4459f1dcaa582aa68ad70b1185d0fff94abb03cb2c940ffea12de5f4c27a0e"
     ],
     ".agents/skills/aidlc-refined-mockups/SKILL.md": [
-      "sha256:a5f9ab571c74a9e1110f4b4b0ede829d4dc72eb9989ec756176394be1558d9af"
+      "sha256:3f07798457817573749d2bf3854a48571c2ae861e9dfd5f182a40add6bdcbad3"
     ],
     ".agents/skills/aidlc-replay/SKILL.md": [
       "sha256:52647cf3bb647c6ab1bb7dc4c5244bc85db2bb7ef01e9172f19331eb3c54a9c4"
     ],
     ".agents/skills/aidlc-requirements-analysis/SKILL.md": [
-      "sha256:7a3b0d4d24d49ffc47d0456c36fab0707de0eb328ae17d60a3f48241afa29e77"
+      "sha256:664e9dee51bef5e8084d7c8b63bb223c56c9685ca83969e85e69d85d0eb1c904"
     ],
     ".agents/skills/aidlc-reverse-engineering/SKILL.md": [
-      "sha256:a1eb5825eb4ffc2fa75b2a2f606f0126140c484e5d21d9d8eb648e94e02c89b5"
+      "sha256:2088246e58e972cd896d2ef777000096f8de486854564efbc820e57d47a908d7"
     ],
     ".agents/skills/aidlc-rough-mockups/SKILL.md": [
-      "sha256:1318dfcf583a4cb68745df5c1a8b30d6fcf520e99e2cadb1c90142de097f6a83"
+      "sha256:3571b078c2231be03e1538cea7072756e13ff7131a303fbb7b9a09ff2f849d27"
     ],
     ".agents/skills/aidlc-scope-definition/SKILL.md": [
-      "sha256:a19f490bae8a2f5dfd3b7f1ce42929fbddc517df21fcdd54796aebe478dfc9ce"
+      "sha256:94960e7f1128ee85318c28192b03901b413d50ac709b72e6aa43221ba55a5204"
     ],
     ".agents/skills/aidlc-security-patch/SKILL.md": [
-      "sha256:c4abef543e9bb36bb0218b8ca8610365b989a1aaf08aefab4492d02847ee36f9"
+      "sha256:6d8dca13d17937079af440f376e640649889594f28b1400e271582802dd4bb0c"
     ],
     ".agents/skills/aidlc-session-cost/SKILL.md": [
       "sha256:b79bdfa4350da88c492077a0b213443ee6c40a9858eebfda595f62d69f7c2e27"
     ],
     ".agents/skills/aidlc-team-formation/SKILL.md": [
-      "sha256:fe23e4846208177d4b406b64c60b65b4b63f27e8eb2e0f106b5ff01aac512c80"
+      "sha256:ca4afb29a8f648ea037b749eb948b023d5f4017001990c60f5482bdf753b87d0"
     ],
     ".agents/skills/aidlc-units-generation/SKILL.md": [
-      "sha256:73ccfe7d24bd674e604b5941011564c0b7beb1245ae4ca64d4b8bd2ca41445df"
+      "sha256:cf6eb33ace0df4ae63790ea1e0c98fb46f4323f77ea70f8a32d6ff34fcba94c2"
     ],
     ".agents/skills/aidlc-user-stories/SKILL.md": [
-      "sha256:9d514b4e56bc4f3b25b0a8efa0f4ad0934988b473f5401a37a5150ec9f971c37"
+      "sha256:6af71c768ce282d2b3fe1222734c8d0f2ab1d6229caad6522337abfdb6cb62d7"
     ],
     ".codex/agents/aidlc-composer-agent.md": [
       "sha256:a653873a865cf6ab8a0f1506bbd97453386910e360922b4aa58f1800329a5d9e"
@@ -180,34 +186,43 @@
       "sha256:b9a93b6b3564c436cbc4da319630454c417443070672378f340d2df3315c9917"
     ],
     ".codex/aidlc-common/conductor.md": [
-      "sha256:5c0fbdb9cb3c5579e6171573cc200ac782e69ab1339291dae6a20bc3605a15b6"
+      "sha256:7eac7f17c14e652afb89c3f151f2a62df5b72a0078bc8a33c6e5c24471bed92e"
     ],
     ".codex/aidlc-common/protocols/stage-definition.md": [
-      "sha256:b142d5e4a8d40b37b0b44fdc46c02e9992582d09df6c49e3d312f5660be9930e"
+      "sha256:10d8710ddfb1c50eb2759e69feb37d73689f1309bdcf66dfbed546f3ecab13c9"
+    ],
+    ".codex/aidlc-common/protocols/stage-protocol-construction.md": [
+      "sha256:bd136cc8720dc8aa8e55d90516d88d19ca7994fbf21dd8ca963d09a8aeac2025"
+    ],
+    ".codex/aidlc-common/protocols/stage-protocol-reviewer.md": [
+      "sha256:012047005d6c3c1b0f79404661d3a0b03cdbafaad29746e8fa38f6e842f5fc7c"
+    ],
+    ".codex/aidlc-common/protocols/stage-protocol-swarm.md": [
+      "sha256:65a844b2b1745abfffee47ee4f9083418557ebbb63942604b89698baac6e9e74"
     ],
     ".codex/aidlc-common/protocols/stage-protocol.md": [
-      "sha256:0f9343876e7ff124bf525b40443337b573df3fd3eedd239ff6d8212791a85300"
+      "sha256:9129ca57a60774d02e59a061a4601fc330a5049ba785a4108c18e9fcedca424f"
     ],
     ".codex/aidlc-common/stages/construction/build-and-test.md": [
-      "sha256:73c517b5ac8514e6d30032598e277b4d60a78b0bf28fdcf2a75bfbf41419260a"
+      "sha256:74f905f9da37a629e8ebf002c227d93b0e056a5b885f54390081b0b4996802cc"
     ],
     ".codex/aidlc-common/stages/construction/ci-pipeline.md": [
-      "sha256:0c48f15df7c76363a75154293a6786a699bb9374cb7c84d5ed107c900547490e"
+      "sha256:e9529d4aff077b7cf280f183eda38ed58194ca32b75525c4a89d3944ffa79489"
     ],
     ".codex/aidlc-common/stages/construction/code-generation.md": [
-      "sha256:f4a227aff9bcc72381d9c4bfe7d8401f1fc43099215a69237ee59fc011d12fd5"
+      "sha256:3d91973d5c471f76458100c540726e3ef30150ac88835b44b3c91988fbe683ba"
     ],
     ".codex/aidlc-common/stages/construction/functional-design.md": [
-      "sha256:b827f2e0da775e11a8c70ecbd438cdbb97ec1ddac069535770df17a3b27d1e29"
+      "sha256:7271322ac66c07d4f3a6989106fd9889b29c513e33912938a82a4d8223ef1f88"
     ],
     ".codex/aidlc-common/stages/construction/infrastructure-design.md": [
-      "sha256:00a39409f2d8bf832c87e201e5bda2b4efeb54f8bdc68a91ac59a1a57b9de30a"
+      "sha256:97eb994ac42c1bc150e6f552b9a74b0d1af41805103124cc0f5c786c576a0d2c"
     ],
     ".codex/aidlc-common/stages/construction/nfr-design.md": [
-      "sha256:c2683f4f2aa6255ed772056a527ab5f041a593ac58e7392364cbcfaeeb01d553"
+      "sha256:9aafbb9ca48019780c587ba2176c6e5c2686fe0c46a50e3eccca104f42a9d0f9"
     ],
     ".codex/aidlc-common/stages/construction/nfr-requirements.md": [
-      "sha256:147a989e5f1f0811aaedde24d1d5511d978842b07b1d9a58a71db0c6cecfd081"
+      "sha256:9487e7b1630d7c926443a88d9b5e96afa137f410b2bbe358497d13ab0e1a7f09"
     ],
     ".codex/aidlc-common/stages/ideation/approval-handoff.md": [
       "sha256:f685c2960a6b55cb90f32d7149640649205288aab7d613470afe5a480d071e94"
@@ -231,55 +246,55 @@
       "sha256:3be017115be3846ab5e610f894d518ffc82fb83b2d03098efb3169f1df061517"
     ],
     ".codex/aidlc-common/stages/inception/contract-design.md": [
-      "sha256:c2db582cfba4bce448333cc2a3887313f5237c4467bb20326018ba773d1d6b2f"
+      "sha256:e5b5e29813d6e7ba4a9626ea45ff94adc848570dcf31ddcb433b5dea5c9fd07f"
     ],
     ".codex/aidlc-common/stages/inception/delivery-planning.md": [
-      "sha256:f7e7bd4790c33af1e24a9555c654b44ec8214ec368988c7a46201b055625ddc6"
+      "sha256:52f3bda8f87c76e7748e0289e24882588891dd46ff8d1acea2973158c4f35aa2"
     ],
     ".codex/aidlc-common/stages/inception/domain-design.md": [
-      "sha256:b570d3fafffbd83df57ab34082db3e4d90ebd620e2f50eb31cd3ba49dc290a68"
+      "sha256:d4b6bb91bbf7c7f185a01c5c02b89b3df0310cbaf24c63d1414b3e0ce5210e2e"
     ],
     ".codex/aidlc-common/stages/inception/practices-discovery.md": [
-      "sha256:1174984958cfd252f62df68929e88296a175db19cc2311de4e7e29e16c06da73"
+      "sha256:278bc8ab355147beb974cda560bb2e216fdba960cd6a9c5900fc9929de973831"
     ],
     ".codex/aidlc-common/stages/inception/refined-mockups.md": [
-      "sha256:d48345ad87ebab535c589694724a11d212c979035c29d2699f1ddd0cff4085de"
+      "sha256:5e4e21b2cce3b1923473f55a1821c7553f13172285a128e6ebe4bcf422c1fab1"
     ],
     ".codex/aidlc-common/stages/inception/requirements-analysis.md": [
-      "sha256:291e3dfc42206d70a79fbf5ff2ce52665ba4b02c6dbdbf9e96bdaa94bc1be879"
+      "sha256:a24810f88f6f7017fef57a5e359bddef86bee3715facc5f1e313e7c5496ed074"
     ],
     ".codex/aidlc-common/stages/inception/reverse-engineering.md": [
-      "sha256:0b90eac15dd84f936a0e1f911ac2ad11f239d50884770d39228b1e6acf132e43"
+      "sha256:6d8fa3ecea1701c48c104ac9c4ae811fbb0e9b1a7cf8b707524154fc2650341f"
     ],
     ".codex/aidlc-common/stages/inception/units-generation.md": [
-      "sha256:3ec03b3f0e7506c062ded137c0326d8a9d7d3045192fc70a4468da7e58013f4c"
+      "sha256:e62620a06b01cb168138a28c0b9728985db7b1396ab134d6e9891af9afb6e9a5"
     ],
     ".codex/aidlc-common/stages/inception/user-stories.md": [
-      "sha256:02c1c4a7fa448813313c64644f6a8350d51f7a28776ce938e1e7fa9ca4abff61"
+      "sha256:ec68e10560549e8445dbd16469ff6e0337b953d27cb286066560b338b443586d"
     ],
     ".codex/aidlc-common/stages/initialization/state-init.md": [
-      "sha256:1701708cc531484c9512b56bd23ecc59ed01480ee6361bb9c33feedfae72b5a8"
+      "sha256:ca040ac99fcbe105f612d06947b4d8c46d7872df24a1f64c19fb94d3bd9b75fb"
     ],
     ".codex/aidlc-common/stages/operation/deployment-execution.md": [
-      "sha256:7622482b9447b038edb2f2abff6f8320515536c41b5f86bc4636bad9debf0b55"
+      "sha256:64116852169fd347caf8e522833a005329e1579c815549a5428eb74a3ab3dc63"
     ],
     ".codex/aidlc-common/stages/operation/deployment-pipeline.md": [
-      "sha256:b29d999a4c7df39e263f6bc7317d14f18f2effd1c33b28c5f270fea197477e54"
+      "sha256:5841e8013410f3b6651fde550019a84cfe7b72d320995557c44bfd4655f8eed7"
     ],
     ".codex/aidlc-common/stages/operation/environment-provisioning.md": [
-      "sha256:555e0e219e2e73711a83c538fb62c522019ba31c6b3afcb735525be80a62fb64"
+      "sha256:f50ff61ed004906307b09a6331e81af113c37371e312c2d08d857701787aac29"
     ],
     ".codex/aidlc-common/stages/operation/feedback-optimization.md": [
-      "sha256:ef9989ea0d521a91470d8f185fa532770362f4f732320643646ac9f2bac7213e"
+      "sha256:2b9215a2a2e5f702c92a5fc379632cc6adc3779fc371892dfd87ed3e20c82255"
     ],
     ".codex/aidlc-common/stages/operation/incident-response.md": [
-      "sha256:23e3ce9b6f03156f1df5c217f979a3088d9fa1303a2793c6e139d5a7fbaf9b6e"
+      "sha256:494b334fa2993702c41ffd1521bc9a407408687f16928e94934fb479f9e0e1ad"
     ],
     ".codex/aidlc-common/stages/operation/observability-setup.md": [
-      "sha256:37d963e9392ea897c03e9aa3878a50394d03b81438b749fdb95325270ea84bdc"
+      "sha256:502ae7eb67b4390f825969278164adea1d7e9d32106b0bb8f2f1f5a8b15a60f1"
     ],
     ".codex/aidlc-common/stages/operation/performance-validation.md": [
-      "sha256:6783b2835955dbff3c4da631e84acc229101e807ddb0d563ed6b7ebd1b237bad"
+      "sha256:ca5c2687cffc182429527af133a70187b854c70fa0b00b057670aa4ceb9b6236"
     ],
     ".codex/hooks/aidlc-codex-adapter.ts": [
       "sha256:44888387ee534b412df8be7613dfff00174dd0d8a9589b20e8fb3a73afc1ce05"
@@ -294,7 +309,7 @@
       "sha256:0a1e3826a17c32d27ed5c381b0bd0f310cbbfb3a6795227ae2cea39173fc29e2"
     ],
     ".codex/knowledge/aidlc-pipeline-deploy-agent/branching-strategies.md": [
-      "sha256:f9d3d1727a82b06d924823341a50fd433407c20b5892cfbdccfbd257d43acecc"
+      "sha256:2b3ba6018f950063876f48fa6f9cb4a8d2be4b81f85732e3ccf35518bb29c380"
     ],
     ".codex/knowledge/aidlc-shared/state-template.md": [
       "sha256:7938e8035042d45c39364a53f395bceb69199032b6d72151e514700713b7fec5"
@@ -330,7 +345,7 @@
       "sha256:484f654d18116a76aa5b057d20552726009dd7c12f7f6c8cdf968a196afaf1c5"
     ],
     ".codex/tools/data/aidlc-projection.json": [
-      "sha256:eba58021636d257b60f6780efcfcfbb63570ecd56f969d2db09a8f03af902924"
+      "sha256:e9477831c24e70aaa238bfd9a5f6334ef24bcd7caa3a8e1e92eadd55e0af404e"
     ],
     ".codex/trust-seed.toml": [
       "sha256:afe5b9b1575ac941286d2bcf4b8b11bc8608981067cd9915fe5481ea6aa0c565"

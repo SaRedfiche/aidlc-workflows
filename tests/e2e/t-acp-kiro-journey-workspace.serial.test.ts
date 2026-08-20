@@ -273,7 +273,7 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
           keepAlive: true,
         });
         const out1 = r1.toolCalls
-          .filter((t) => t.title.includes("aidlc-utility.ts intent-create"))
+          .filter((t) => t.title.includes("aidlc.ts engine intent create"))
           .map((t) => t.output.join(""))
           .join("");
         expect(out1).toContain("State initialized:");

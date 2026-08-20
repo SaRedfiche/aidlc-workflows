@@ -116,6 +116,8 @@ export const TOOLS = {
   doctor: "aidlc-doctor.ts",
   init: "aidlc-init.ts",
   jump: "aidlc-jump.ts",
+  knowledge: "aidlc-knowledge.ts",
+  testingPosture: "aidlc-testing-posture.ts",
   learnings: "aidlc-learnings.ts",
   log: "aidlc-log.ts",
   lifecycle: "aidlc-lifecycle.ts",
@@ -683,6 +685,15 @@ export const ROUTES: readonly Route[] = [
     ...HIDDEN_ENGINE,
   },
   {
+    id: "testing-posture",
+    group: "testing-posture",
+    kind: "noun-passthrough",
+    classification: "passthrough",
+    verbs: ["resolve", "render", "fingerprint", "verify"],
+    tool: TOOLS.testingPosture,
+    ...HIDDEN_ENGINE,
+  },
+  {
     id: "validate",
     group: "validate",
     kind: "noun-passthrough",
@@ -782,6 +793,41 @@ export const ROUTES: readonly Route[] = [
       { command: "plugin sync [--prune-missing]", summary: "transactionally compose installed plugins" },
     ],
     all: ["select [names]", "sync [--prune-missing] [--yes]", "list [--verbose] [--json]"],
+  },
+  {
+    // The DocumentKB noun. Unlike `plugin`, the verb IS the subcommand -- these
+    // verbs live in their own tool -- so there is no `targets` translation table
+    // to keep in step. Only the verbs the tool actually implements are listed:
+    // registering a verb the tool would reject turns a clean "unknown verb"
+    // error into a confusing one from a layer down.
+    id: "knowledge",
+    group: "knowledge",
+    // `noun-passthrough`, NOT `top-passthrough`: this route's group is
+    // "knowledge", and the two resolvers split on group. `resolveTop` only
+    // iterates `group === "top"` routes, so it never saw this one; `resolveNoun`
+    // did see it but handles only `noun-passthrough`/`noun-map`/`custom`/
+    // `routing-only`, so it fell through to "unknown verb". The result was that
+    // NO knowledge verb ran through the compiled dispatcher while the tool
+    // itself worked perfectly when invoked directly -- which is why the defect
+    // survived a review round in which it was reported, claimed fixed, and never
+    // executed. The dispatcher test below runs every verb rather than asserting
+    // this literal, because reading the route is exactly what missed it.
+    kind: "noun-passthrough",
+    classification: "passthrough",
+    verbs: ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind"],
+    tool: TOOLS.knowledge,
+    ...PUBLIC_ENGINE,
+    // ONE line in the human help, which is capped at 20 lines: it is a summary
+    // for a person deciding what to type, not the surface. Every verb still
+    // appears in `help --all` via `all` below.
+    human: [
+      { command: "knowledge <verb>", summary: "index and read customer documents" },
+    ],
+    all: [
+      "onboard [path]", "sync", "list", "show <id>",
+      "associate <id> --intent [slug]", "dissociate <id> --intent [slug]",
+      "rebind <id> --to <path>",
+    ],
   },
   {
     id: "gen",
@@ -1690,6 +1736,10 @@ async function loadDelegate(tool: string): Promise<DelegateModule | null> {
       return import("./aidlc-init.ts");
     case TOOLS.jump:
       return import("./aidlc-jump.ts");
+    case TOOLS.knowledge:
+      return import("./aidlc-knowledge.ts");
+    case TOOLS.testingPosture:
+      return import("./aidlc-testing-posture.ts");
     case TOOLS.learnings:
       return import("./aidlc-learnings.ts");
     case TOOLS.log:

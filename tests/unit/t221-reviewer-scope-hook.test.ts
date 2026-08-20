@@ -567,7 +567,7 @@ describe("t221 (c) harness registration and protocol prose", () => {
         ) as { hooks?: { preToolUse?: Array<{ matcher?: string; command?: string }> } };
         const entries = a.hooks?.preToolUse ?? [];
         const reviewerEntries = entries.filter((entry) =>
-          entry.command?.includes("aidlc-kiro-adapter.ts reviewer-scope")
+          entry.command?.includes("aidlc.ts engine adapter kiro reviewer-scope")
         );
         expect(reviewerEntries.length, `${harness.name}/${agent}`).toBe(3);
         const matchers = reviewerEntries.map((e) => e.matcher).sort();
@@ -581,7 +581,7 @@ describe("t221 (c) harness registration and protocol prose", () => {
         }
         expect(
           entries.some((entry) =>
-            entry.command?.includes(`aidlc-kiro-adapter.ts state-transition-guard ${agent}`)
+            entry.command?.includes(`aidlc.ts engine adapter kiro state-transition-guard ${agent}`)
           ),
           `${harness.name}/${agent}`,
         ).toBe(true);

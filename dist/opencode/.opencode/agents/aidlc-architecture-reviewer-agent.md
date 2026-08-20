@@ -6,9 +6,9 @@ description: >
 model: amazon-bedrock/global.anthropic.claude-sonnet-4-6
 variant: medium
 mode: subagent
+steps: 60
 permission:
   task: deny
-steps: 60
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated reviewer and must not spawn sub-agents.**

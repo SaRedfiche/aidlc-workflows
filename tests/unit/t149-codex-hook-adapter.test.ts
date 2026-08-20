@@ -548,7 +548,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
               session_id: "prior-session-0000",
               tool_input: {
                 command:
-                  "bun .codex/tools/aidlc-utility.ts intent-create --scope poc",
+                  "bun .codex/tools/aidlc.ts engine intent create --scope poc",
               },
               tool_response: firstCreate.stdout,
             },

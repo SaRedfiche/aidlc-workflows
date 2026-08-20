@@ -72,6 +72,7 @@ import {
   stateFilePath,
   stopHookDir,
 } from "./aidlc-lib.ts";
+import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
 // The bundle format version — bumped when the report/manifest/evidence SHAPE
@@ -697,8 +698,9 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
         authoredInputsNewestMtime: new Date(authoredInputsNewestMtimeMs).toISOString(),
       },
       remedy:
-        "The compiled runtime graph is out of date. Re-run `bun " +
-        "<harness>/tools/aidlc-graph.ts compile`; if this recurs, the " +
+        `The compiled runtime graph is out of date. Re-run \`${
+          aidlcToolInvocation("graph")
+        } compile\`; if this recurs, the ` +
         "rebuild-stage-graph hook may not be firing on this harness (check hook heartbeats).",
       safeToAutomate: true,
     });
@@ -717,7 +719,7 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
       summary: "runtime-graph.json is missing for the active workflow.",
       evidence: { runtimeGraphExists: false },
       remedy:
-        "No compiled runtime graph. Re-run `bun <harness>/tools/aidlc-graph.ts compile`. " +
+        `No compiled runtime graph. Re-run \`${aidlcToolInvocation("graph")} compile\`. ` +
         "If it never appears, the rebuild-stage-graph hook is not firing on this harness.",
       safeToAutomate: true,
     });

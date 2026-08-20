@@ -22,7 +22,6 @@
 
 import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { compileRuntime } from "../tools/aidlc-runtime.ts";
 import {
   activeIntent,
   activeSpace,
@@ -40,14 +39,9 @@ import {
   recordHookDrop,
   resolveProjectDirFromHook,
   runtimeGraphPath,
-<<<<<<< HEAD:dist/kiro/.kiro/hooks/aidlc-rebuild-stage-graph.ts
   harnessDir,
   writeSessionIntentHandoff,
   writeSessionIntentUuid,
-||||||| parent of a7ee3db2a (fix: close native install integration gaps):dist/kiro-ide/.kiro/hooks/aidlc-runtime-compile.ts
-  harnessDir,
-=======
->>>>>>> a7ee3db2a (fix: close native install integration gaps):dist/kiro-ide/.kiro/hooks/aidlc-runtime-compile.ts
 } from "../tools/aidlc-lib.ts";
 
 // intent-create runs before a workflow exists, so SessionStart cannot stamp that
@@ -129,7 +123,7 @@ bindCreatedIntentToInvokingSession(projectDir, parsed);
 //    legacy tool-file commands and the new `aidlc ...` grammar.
 //    aidlc-runtime.ts / aidlc runtime is rejected explicitly (recursion guard
 //    at the command level - a positive-only allowlist would let composites like
-//    `aidlc __delegate runtime compile && aidlc __delegate state approve` through and
+//    `bun .kiro/tools/aidlc.ts engine runtime compile && bun .kiro/tools/aidlc.ts engine state approve` through and
 //    loop). aidlc-log.ts emits only chatty in-stage events
 //    (DECISION_RECORDED / QUESTION_ANSWERED / ERROR_LOGGED), none
 //    transition-class. aidlc-worktree.ts emits only WORKTREE_* events.
@@ -236,22 +230,11 @@ if (ideAuditMode) {
   }
 }
 
-<<<<<<< HEAD:dist/kiro/.kiro/hooks/aidlc-rebuild-stage-graph.ts
 // 8. Dispatch — sync subprocess. Hook waits for completion. On non-zero
 //    exit, record the drop for `--doctor` to surface; never block the
 //    parent Bash call (mirrors aidlc-write-audit-log.ts:95-101).
 const runtimeTs = join(projectDir, harnessDir(), "tools", "aidlc-runtime.ts");
-||||||| parent of a7ee3db2a (fix: close native install integration gaps):dist/kiro-ide/.kiro/hooks/aidlc-runtime-compile.ts
-// 8. Dispatch — sync subprocess. Hook waits for completion. On non-zero
-//    exit, record the drop for `--doctor` to surface; never block the
-//    parent Bash call (mirrors aidlc-audit-logger.ts:95-101).
-const runtimeTs = join(projectDir, harnessDir(), "tools", "aidlc-runtime.ts");
-=======
-// 8. Dispatch in-process. On failure, record the drop for `--doctor` to
-//    surface; never block the parent Bash call.
->>>>>>> a7ee3db2a (fix: close native install integration gaps):dist/kiro-ide/.kiro/hooks/aidlc-runtime-compile.ts
 try {
-<<<<<<< HEAD:dist/kiro/.kiro/hooks/aidlc-rebuild-stage-graph.ts
   const args = ["run", runtimeTs, "compile"];
   const result = spawnSync("bun", args, {
     cwd: projectDir,
@@ -265,23 +248,6 @@ try {
       `exit ${result.status}: ${result.stderr?.toString() ?? ""}`
     );
   }
-||||||| parent of a7ee3db2a (fix: close native install integration gaps):dist/kiro-ide/.kiro/hooks/aidlc-runtime-compile.ts
-  const args = ["run", runtimeTs, "compile"];
-  const result = spawnSync("bun", args, {
-    cwd: projectDir,
-    timeout: 30_000,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  if (result.status !== 0) {
-    recordHookDrop(
-      projectDir,
-      "runtime-compile",
-      `exit ${result.status}: ${result.stderr?.toString() ?? ""}`
-    );
-  }
-=======
-  compileRuntime(projectDir);
->>>>>>> a7ee3db2a (fix: close native install integration gaps):dist/kiro-ide/.kiro/hooks/aidlc-runtime-compile.ts
 } catch (e) {
   recordHookDrop(projectDir, "rebuild-stage-graph", errorMessage(e));
 }
@@ -291,3 +257,4 @@ return 0;
 if (import.meta.main) {
   process.exit(await run(await Bun.stdin.text()));
 }
+import { spawnSync } from "node:child_process";

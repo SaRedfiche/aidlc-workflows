@@ -40,7 +40,6 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
-  readFileSync,
   readSync,
   readdirSync,
   realpathSync,
@@ -53,6 +52,7 @@ import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, join, sep } from "node:path";
 import {
+  activeSpace,
   auditBlockField,
   auditShardDir,
   docsRoot,
@@ -64,6 +64,7 @@ import {
   parseCheckboxes,
   planFilePath,
   readAllAuditShards,
+  readRegularFileNoFollowOrThrow,
   recordDir,
   recoveryFilePath,
   relativeRecordDir,
@@ -556,7 +557,7 @@ export interface MarkerSnapshot {
 
 // Freshness window past which a heartbeat is "frozen" relative to the newest
 // recorded audit activity. A hook that has not fired since well before the last
-// stage transition is the cold-hook signal (#571's runtime-compile case).
+// stage transition is the cold-hook signal (#571's rebuild-stage-graph case).
 export const FROZEN_HEARTBEAT_MS = 24 * 60 * 60 * 1000;
 
 // Run every diagnosis rule. Order is severity-stable (errors first) only after
@@ -700,7 +701,7 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
         `The compiled runtime graph is out of date. Re-run \`${
           aidlcToolInvocation("graph")
         } compile\`; if this recurs, the ` +
-        "runtime-compile hook may not be firing on this harness (check hook heartbeats).",
+        "rebuild-stage-graph hook may not be firing on this harness (check hook heartbeats).",
       safeToAutomate: true,
     });
   } else if (
@@ -719,7 +720,7 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
       evidence: { runtimeGraphExists: false },
       remedy:
         `No compiled runtime graph. Re-run \`${aidlcToolInvocation("graph")} compile\`. ` +
-        "If it never appears, the runtime-compile hook is not firing on this harness.",
+        "If it never appears, the rebuild-stage-graph hook is not firing on this harness.",
       safeToAutomate: true,
     });
   }
@@ -863,6 +864,10 @@ const STATE_ALLOWLIST = [
   "Revision Count",
   "Parked",
   "Parked At Stage",
+  "Active Unit",
+  "Unit State",
+  "Unit Pause Reason",
+  "Unit Next Action",
 ] as const;
 
 // Audit event types that carry routing/gate signal. Other event types (and all
@@ -886,11 +891,28 @@ const AUDIT_EVENT_ALLOWLIST = new Set([
   "SCOPE_DETECTED",
   "SCOPE_CHANGED",
   "RECOMPOSED",
+  "DOCUMENT_INDEXED",
+  "DOCUMENT_UPDATED",
+  "DOCUMENT_REMOVED",
 ]);
 
 // Audit block fields kept per event (structural only — no Details/Request/
 // Reason free text, which can carry paths or decisions).
-const AUDIT_FIELD_ALLOWLIST = ["Event", "Timestamp", "Stage", "Slug", "Phase"];
+// Document identity and digest fields are safe structural evidence. `Source`
+// and `Last Path` are deliberately excluded: they carry customer-chosen
+// filenames, while the diagnostic bundle is redacted by design.
+const AUDIT_FIELD_ALLOWLIST = [
+  "Event",
+  "Timestamp",
+  "Stage",
+  "Slug",
+  "Phase",
+  "Space",
+  "Document",
+  "Change",
+  "Digest",
+  "Last Digest",
+];
 
 export interface NormalizedEvidence {
   state: Record<string, string>;
@@ -1526,8 +1548,11 @@ function withinProjectRoot(path: string): boolean {
 function safeRead(path: string): string {
   try {
     if (lstatSync(path).isSymbolicLink()) return "";
-    if (!withinProjectRoot(path)) return "";
-    return readFileSync(path, "utf-8");
+    const real = realpathSync(path);
+    if (!withinProjectRoot(real)) return "";
+    const content = readRegularFileNoFollowOrThrow(real, "doctor input").toString("utf-8");
+    if (!withinProjectRoot(real)) return "";
+    return content;
   } catch {
     return "";
   }
@@ -1549,8 +1574,10 @@ function isSymlink(path: string): boolean {
   }
 }
 
-// Read the audit trail, refusing symlinked shard files. readAllAuditShards uses
-// readFileSync and would follow a symlinked shard, so we gate on the shard dir:
+// Read the audit trail, refusing symlinked intent-shard files. The shared audit
+// reader also validates every space/intent directory component and opens each
+// shard no-follow. Doctor explicitly selects the active space so its export also
+// includes the space-level DocumentKB provenance shard.
 // if ANY entry under it is a symlink, we refuse the whole trail rather than
 // leak a redirected file's normalized fields into the report. Audit content is
 // otherwise only surfaced through the allowlisted extractAuditEvents.
@@ -1569,7 +1596,7 @@ function readAuditSafely(projectDir: string): string {
       return "";
     }
   }
-  return readAllAuditShards(projectDir);
+  return readAllAuditShards(projectDir, undefined, activeSpace(projectDir));
 }
 
 function tryChmod(path: string, mode: number): void {

@@ -17,7 +17,11 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { runOrchestrateNext } from "../harness/fixtures.ts";
+import {
+  AIDLC_MEMORY_SRC,
+  AIDLC_SRC,
+  runOrchestrateNext,
+} from "../harness/fixtures.ts";
 import {
   buildPluginProjection,
   composePluginFixture,
@@ -31,6 +35,29 @@ const PLUGIN = "test-pro";
 const STAGE_TABLE_BEGIN =
   "<!-- BEGIN: compiled stage graph via `bun .claude/tools/aidlc.ts engine gen stage-table` - do NOT hand-edit -->";
 const STAGE_TABLE_END = "<!-- END: compiled stage graph -->";
+
+function copyClaudeInstall(project: string): void {
+  mkdirSync(project, { recursive: true });
+  cpSync(AIDLC_SRC, join(project, ".claude"), { recursive: true });
+  if (existsSync(AIDLC_MEMORY_SRC)) {
+    cpSync(AIDLC_MEMORY_SRC, join(project, "aidlc"), { recursive: true });
+  }
+}
+
+function composeTestPro(project: string, pluginBuilt: string): void {
+  const compose = spawnSync(BUN, [join(pluginBuilt, "hooks", "compose.ts")], {
+    cwd: project,
+    encoding: "utf-8",
+    timeout: TIMEOUT_MS - 5_000,
+    env: {
+      ...process.env,
+      CLAUDE_PLUGIN_ROOT: pluginBuilt,
+      CLAUDE_PROJECT_DIR: project,
+      AIDLC_HARNESS_DIR: ".claude",
+    },
+  });
+  if (compose.status !== 0) throw new Error(`compose.ts failed: ${compose.stderr}`);
+}
 
 function graphPath(project: string): string {
   return join(project, ".claude", "tools", "data", "stage-graph.json");

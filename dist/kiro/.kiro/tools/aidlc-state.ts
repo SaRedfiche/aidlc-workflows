@@ -1081,7 +1081,7 @@ function requireEngineRoutedUnit(pd: string, stage: string, unit: string): void 
   let directive: unknown = null;
   for (let attempts = 0; attempts < 1_000; attempts++) {
     const command = executable
-      ? [executable, ...subargs]
+      ? [executable, "engine", "orchestrate", ...subargs]
       : [
           process.execPath,
           fileURLToPath(new URL("./aidlc-orchestrate.ts", import.meta.url)),
@@ -1155,7 +1155,7 @@ function requireEngineRoutedWaveUnit(
   let directive: unknown = null;
   for (let attempts = 0; attempts < 1_000; attempts++) {
     const command = executable
-      ? [executable, ...subargs]
+      ? [executable, "engine", "orchestrate", ...subargs]
       : [
           process.execPath,
           fileURLToPath(new URL("./aidlc-orchestrate.ts", import.meta.url)),

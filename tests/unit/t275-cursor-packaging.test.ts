@@ -72,7 +72,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     expect(r.stdout).toContain("in sync");
   });
 
-  test("2: every packaged .ts file is byte-identical to its dist/claude source (code is never transformed)", () => {
+  test("2: packaged .ts files differ only at declared projection tokens", () => {
     const divergent: string[] = [];
     for (const sub of ["tools", "hooks"]) {
       const dstDir = join(ENGINE, sub);
@@ -82,7 +82,11 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
         // The adapter is AUTHORED for this harness - no Claude twin exists.
         if (rel === "aidlc-cursor-adapter.ts") continue;
         const src = join(CLAUDE_SRC, sub, rel);
-        if (!readFileSync(file).equals(readFileSync(src))) divergent.push(`${sub}/${rel}`);
+        const cursor = readFileSync(file, "utf-8").replaceAll(
+          "bun .cursor/tools/aidlc.ts",
+          "bun .claude/tools/aidlc.ts",
+        );
+        if (cursor !== readFileSync(src, "utf-8")) divergent.push(`${sub}/${rel}`);
       }
     }
     expect(divergent).toEqual([]);

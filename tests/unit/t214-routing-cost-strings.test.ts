@@ -9,8 +9,8 @@
 // Surfaces:
 //   - the keyword-hit confirm (Branch 8) carries "N of T stages, G approval
 //     gates" for the MATCHED scope,
-//   - the compose offer carries the "bugfix = N of T stages" example fragment
-//     and still avoids the t198 `"feature" workflow` trap,
+//   - the compose offer carries the express/classic/feature example trio,
+//     computed from the grid, and still avoids the t198 `"feature" workflow` trap,
 //   - the explicit-scope birth print carries the cost parenthetical, and
 //   - scope-change stdout carries the "Approval gates:" line (greenfield
 //     reverse-engineering adjustment applied, matching the handler).
@@ -118,7 +118,7 @@ describe("t214 keyword-hit confirm carries the cost clause", () => {
 });
 
 describe("t214 compose offer carries the example counts (no feature-workflow trap)", () => {
-  test('offer names "bugfix = N of T stages" and avoids the t198 pinned substring', () => {
+  test("offer names express/classic/feature counts and avoids the t198 pinned substring", () => {
     proj = createTestProject();
     const d = directiveOf(
       runNext(proj, ["build a distributed cache layer with consistency guarantees"]).out,
@@ -126,22 +126,28 @@ describe("t214 compose offer carries the example counts (no feature-workflow tra
     expect(d.kind).toBe("ask");
     const q = String(d.question);
     expect(q).toContain("compose");
-    const bf = counts(GRID.bugfix.stages);
-    expect(q).toContain(`bugfix = ${bf.execute} of ${bf.total} stages`);
+    const express = counts(GRID.express.stages);
+    const classic = counts(GRID.classic.stages);
+    const feature = counts(GRID.feature.stages);
+    expect(q).toContain(
+      `express = ${express.execute} of ${express.total} stages`,
+    );
+    expect(q).toContain(`classic = ${classic.execute}`);
+    expect(q).toContain(`feature = all ${feature.execute}`);
     // t198:200 pins this substring's absence on the compose-offer arm.
     expect(q).not.toContain('"feature" workflow');
   });
 });
 
 describe("t214 birth print carries the cost parenthetical", () => {
-  test("next bugfix prints intent-birth AND the computed cost", () => {
+  test("next bugfix prints intent-create AND the computed cost", () => {
     proj = createTestProject();
     // A genuinely empty workspace births instead of prompting to pick (t198:208).
     removeWorkspaceRecord(proj);
     const d = directiveOf(runNext(proj, ["bugfix"]).out);
     expect(d.kind).toBe("print");
     const m = String(d.message);
-    expect(m).toContain("intent birth --scope bugfix");
+    expect(m).toContain("intent create --scope bugfix");
     const bf = counts(GRID.bugfix.stages);
     expect(m).toContain(`(${bf.execute} of ${bf.total} stages, ${bf.gates} approval gates`);
   });

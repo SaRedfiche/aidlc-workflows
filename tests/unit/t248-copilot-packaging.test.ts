@@ -68,7 +68,7 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
     expect(r.status).toBe(0);
   });
 
-  test("2: engine .ts files are byte-identical to the dist/claude sources", () => {
+  test("2: engine .ts files differ only at declared projection tokens", () => {
     expect(existsSync(ENGINE)).toBe(true);
     let compared = 0;
     for (const sub of ["tools", "hooks"]) {
@@ -81,7 +81,11 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
         if (rel.split(sep).includes("data")) continue;
         const claudeTwin = join(CLAUDE_SRC, rel);
         expect(existsSync(claudeTwin)).toBe(true);
-        expect(readFileSync(file, "utf-8")).toBe(readFileSync(claudeTwin, "utf-8"));
+        const copilot = readFileSync(file, "utf-8").replaceAll(
+          "bun .aidlc/tools/aidlc.ts",
+          "bun .claude/tools/aidlc.ts",
+        );
+        expect(copilot).toBe(readFileSync(claudeTwin, "utf-8"));
         compared++;
       }
     }
@@ -152,7 +156,9 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
     expect(skills.length).toBeGreaterThan(30);
     const orchestrator = readFileSync(join(SHELL, "skills", "aidlc", "SKILL.md"), "utf-8");
     expect(orchestrator).toContain("Copilot harness");
-    expect(orchestrator).toContain("bun .aidlc/tools/aidlc-orchestrate.ts next");
+    expect(orchestrator).toContain(
+      "bun .aidlc/tools/aidlc.ts engine orchestrate next",
+    );
     expect(orchestrator).not.toContain("{{HARNESS_DIR}}");
     expect(orchestrator).toContain("numbered prose");
     expect(orchestrator).toContain("picker results do not fire");

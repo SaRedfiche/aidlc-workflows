@@ -86,11 +86,11 @@
 //     `init --scope <scope>`) rather than relaying the old circular no-state
 //     error; the trio's cases:
 //       (1) `next bugfix` — bare KNOWN-SCOPE positional, NOT freeform: kind ===
-//           "print" AND message names `intent birth --scope bugfix` (the engine
+//           "print" AND message names `intent create --scope bugfix` (the engine
 //           recognises bugfix as the scope, finding 2, and emits the SAME
 //           workflow-birth print `next --scope bugfix` emits; pre-finding-2 it
 //           mis-read the literal scope as prose and emitted an `ask` defaulting
-//           to "feature"). P4: the named birth move is `intent-birth`, not the
+//           to "feature"). P4: the named birth move is `intent-create`, not the
 //           retired `init`. One test() bundles both observables.
 //       (2) `next add dark mode toggle` — genuine freeform (<=5-word) intent,
 //           NOT a scope name: kind === "ask" (the control proving the finding-2
@@ -117,7 +117,7 @@
 //     state-initialization-done.md, and swaps ONLY the Scope field. The
 //     init-done checkboxes are scope-agnostic for the jump path (resolve
 //     validates SKIP against scope-mapping.json, not the checkbox suffixes), so
-//     one fixture serves all 9 scopes — same single-fixture rationale as the
+//     one fixture serves all 11 scopes — same single-fixture rationale as the
 //     .sh. All temp dirs cleaned in afterAll.
 //   - resetAidlcEnv() runs first (mirrors the .sh's reset_aidlc_env): scope is
 //     partly resolved from AWS_AIDLC_DEFAULT_SCOPE, so a developer's exported
@@ -371,7 +371,9 @@ const GOLDEN: GoldenRow[] = [
   { scope: "refactor", fingerprint: "reverse-engineering", phase: "inception", skip: "market-research" },
   { scope: "infra", fingerprint: "practices-discovery", phase: "inception", skip: "reverse-engineering" },
   { scope: "security-patch", fingerprint: "reverse-engineering", phase: "inception", skip: "user-stories" },
+  { scope: "classic", fingerprint: "reverse-engineering", phase: "inception", skip: "intent-capture" },
   { scope: "workshop", fingerprint: "reverse-engineering", phase: "inception", skip: "intent-capture" },
+  { scope: "express", fingerprint: "reverse-engineering", phase: "inception", skip: "intent-capture" },
 ];
 
 describe("t118 engine differential corpus — aidlc-orchestrate next (migrated from t118-engine-differential.sh, plan 24)", () => {
@@ -494,12 +496,12 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
     // pre-hardening engine relayed a circular no-state error here that told the
     // user to do exactly what they had just done). Pre-finding-2 this mis-read
     // the scope as prose and emitted an `ask` defaulting to "feature".
-    test("no-state bare known-scope 'bugfix' -> birth print naming intent-birth (recognised as scope, not freeform) [finding 2]", () => {
+    test("no-state bare known-scope 'bugfix' -> birth print naming intent-create (recognised as scope, not freeform) [finding 2]", () => {
       const r = emitNextNoState("bugfix");
       expect(r.directive.kind).toBe("print");
-      // The print names the intent-birth move for the EXPLICITLY NAMED scope
+      // The print names the intent-create move for the EXPLICITLY NAMED scope
       // (P4: --init retired; the engine NAMES the deterministic birth handler).
-      expect(r.directive.message ?? "").toContain("intent birth --scope bugfix");
+      expect(r.directive.message ?? "").toContain("intent create --scope bugfix");
       // Run-then-continue shape: the conductor births, then re-enters the loop.
       expect(r.directive.message ?? "").toContain("re-run `next` to continue");
       // STRONGER: a regression that mis-read bugfix as freeform would emit an
@@ -517,7 +519,7 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
       );
       expect(r.directive.kind).toBe("print");
       expect(r.directive.message ?? "").toContain(
-        "intent birth --scope bugfix",
+        "intent create --scope bugfix",
       );
       expect(r.directive.message ?? "").toContain(
         '--arguments "Fix duplicate todo persistence"',
@@ -575,8 +577,8 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
         "mvp",
       );
       expect(r.directive.kind).toBe("print");
-      expect(r.directive.message ?? "").toContain("intent birth --scope mvp");
-      expect(r.directive.message ?? "").not.toContain("intent birth --scope bugfix");
+      expect(r.directive.message ?? "").toContain("intent create --scope mvp");
+      expect(r.directive.message ?? "").not.toContain("intent create --scope bugfix");
       expect(r.directive.message ?? "").toContain(
         '--arguments "bugfix Fix duplicate todo"',
       );
@@ -596,7 +598,7 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
         "billing",
       );
       expect(r.directive.kind).toBe("print");
-      expect(r.directive.message ?? "").toContain("intent birth --scope feature");
+      expect(r.directive.message ?? "").toContain("intent create --scope feature");
       expect(r.directive.message ?? "").toContain(
         '--arguments "feature flags for billing"',
       );

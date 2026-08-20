@@ -13,7 +13,6 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   type ClaudeCodeHookInput,
-  errorMessage,
   getField,
   hookDebug,
   hooksHealthDir,
@@ -23,7 +22,6 @@ import {
   parseCheckboxes,
   readAllAuditShards,
   readStateFile,
-  recordHookDrop,
   resolveProjectDirFromHook,
   stateFilePath,
 } from "../tools/aidlc-lib.ts";
@@ -107,39 +105,15 @@ const healthDir = hooksHealthDir(projectDir);
 mkdirSync(healthDir, { recursive: true });
 writeFileSync(join(healthDir, "sync-workflow-state.last"), isoTimestamp(), "utf-8");
 
-<<<<<<< HEAD:dist/claude/.claude/hooks/aidlc-sync-workflow-state.ts
-// Update state file via set-status (call the utility tool directly)
-const toolPath = join(projectDir, harnessDir(), "tools", "aidlc-utility.ts");
+// Update state through the shared implementation; the hook owns this mutation.
 hookDebug(projectDir, "sync-workflow-state", "set-status", { slug });
-Bun.spawnSync(["bun", toolPath, "set-status", "--stage", slug, "--project-dir", projectDir], {
-  env: {
-    ...process.env,
-    AIDLC_STATUSLINE_OWNER: `statusline:${process.pid}`,
-  },
-  stdout: "ignore",
-  stderr: "ignore",
-});
-||||||| parent of a7ee3db2a (fix: close native install integration gaps):core/hooks/aidlc-sync-statusline.ts
-// Update state file via set-status (call the utility tool directly)
-const toolPath = join(projectDir, harnessDir(), "tools", "aidlc-utility.ts");
-hookDebug(projectDir, "sync-statusline", "set-status", { slug });
-Bun.spawnSync(["bun", toolPath, "set-status", "--stage", slug, "--project-dir", projectDir], {
-  env: {
-    ...process.env,
-    AIDLC_STATUSLINE_OWNER: `statusline:${process.pid}`,
-  },
-  stdout: "ignore",
-  stderr: "ignore",
-});
-=======
-// Update state through the same utility implementation as the CLI route.
-hookDebug(projectDir, "sync-statusline", "set-status", { slug });
 try {
   setStatus(projectDir, { stage: slug });
 } catch (error) {
-  recordHookDrop(projectDir, "sync-statusline", errorMessage(error));
+  hookDebug(projectDir, "sync-workflow-state", "set-status failed", {
+    error: error instanceof Error ? error.message : String(error),
+  });
 }
->>>>>>> a7ee3db2a (fix: close native install integration gaps):core/hooks/aidlc-sync-statusline.ts
 return 0;
 }
 

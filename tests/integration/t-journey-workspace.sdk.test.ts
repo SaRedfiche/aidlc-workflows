@@ -113,7 +113,7 @@ const TEAM_B_SLUG = "teamb";
  * active, the engine then advances/scope-changes A (Branch 10) instead of
  * birthing — a verified live failure: the conductor ran `scope-change --scope poc`
  * on A, rewriting A's state Scope feature→poc. The journey wants the
- * mints-unconditionally handler (aidlc-utility.ts intent-create, :1995), so we
+ * mints-unconditionally handler (aidlc.ts engine intent create, :1995), so we
  * instruct the conductor to invoke that tool verbatim and NOT touch the active
  * intent. (This is the SKILL.md run-then-continue shape, named explicitly.)
  */
@@ -121,7 +121,7 @@ function birthToolPrompt(scope: string, args: string): string {
   return (
     `Run this exact command with the Bash tool and then stop — do NOT run \`next\`, ` +
     `do NOT advance or scope-change the currently active intent: ` +
-    `bun .claude/tools/aidlc-utility.ts intent-create --scope ${scope} --arguments ${JSON.stringify(args)}`
+    `bun .claude/tools/aidlc.ts engine intent create --scope ${scope} --arguments ${JSON.stringify(args)}`
   );
 }
 

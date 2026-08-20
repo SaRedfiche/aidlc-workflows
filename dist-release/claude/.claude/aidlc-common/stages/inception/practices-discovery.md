@@ -45,6 +45,7 @@ scopes:
   - feature
   - mvp
   - infra
+  - classic
   - workshop
 inputs: <record>/aidlc-state.md + (brownfield) reverse-engineering evidence
 outputs: "team-practices.md, discovered-rules.md, evidence.md, practices-discovery-timestamp.md, plus one contribution file per support agent. On affirmation, content is promoted to aidlc/spaces/<active-space>/memory/team.md and project.md."
@@ -119,8 +120,8 @@ Each support agent writes:
 `<record>/inception/practices-discovery/contributions/<agent-slug>.md`
 
 The first line must be `**Collaborator:** <agent-slug>`, followed by
-`## Contribution` and `## Positions` as defined by `stage-protocol.md` section
-11. Collect all three files before the interview. Their presence and identity
+`## Contribution` and `## Positions` as defined by
+`stage-protocol-ensemble.md` §11. Collect all three files before the interview. Their presence and identity
 markers are deterministic completion evidence checked by the engine.
 
 ### Step 4: Interview (Always)
@@ -137,6 +138,24 @@ Working, Walking Skeleton, Testing Posture, Deployment, and Code Style.
   sections as suggested answers.
 - **Re-run:** show the matching `memory/team.md` content as the default.
 
+The `memory/*.md` sections you draw the suggested answers from are written for
+this framework's own resolution rules, so they carry vocabulary the person
+answering has no reason to know. Two obligations follow, and they apply to the
+question text as much as to the options:
+
+- **Ask in their words, not the section's.** A section's phrasing is an input to
+  your question, never the question itself. "Walking Skeleton" is the name of a
+  practice; "Should we build a thin end-to-end slice first?" is a question
+  someone can answer. Drop the framework's process nouns from what you present.
+- **Gloss a term of art the first time it appears, in the question itself.** A
+  practice with a name the user may not share gets a single clause defining it,
+  in the question line rather than tucked inside one option, so the definition is
+  read before the choice is made. For the Walking Skeleton area, ask it as
+  **"Build a thin end-to-end slice first? A walking skeleton is a minimal
+  version that runs the whole way through, built first to prove the pieces
+  connect before the real features go in."** and offer the yes/no choice
+  beneath it. Later mentions need no gloss.
+
 Log every interview question with `aidlc-log.ts decision` before presenting it
 and every interview answer with `aidlc-log.ts answer` after the response,
 following the standard non-gate question flow.
@@ -149,7 +168,15 @@ file. The lead alone updates the four declared artifacts:
 
 1. **team-practices.md** - five sections matching `memory/team.md`
    (`## Way of Working`, `## Walking Skeleton`, `## Testing Posture`,
-   `## Deployment`, `## Code Style`), in team voice.
+   `## Deployment`, `## Code Style`), in team voice. `## Testing Posture`
+   MUST include:
+   - `- **Methodology**: tdd | bdd | atdd | test-after | custom`
+   - `- **Ordering**: <the affirmed ordering in one explicit sentence>`
+
+   Use `custom` whenever the answer mixes cadences (for example, BDD scenarios
+   before implementation with lower-level unit tests after implementation).
+   Keep coverage, tooling, test-type, and scope notes as additional bullets;
+   they do not replace the two structured fields.
 2. **discovered-rules.md** - `## Mandated` rules in `ALWAYS ...` form and
    `## Forbidden` rules in `NEVER ...` form, only for human-stated hard
    constraints.
@@ -177,8 +204,10 @@ Run the section 13 learnings ritual, then:
 2. Do not log the affirmation gate with `aidlc-log.ts decision` or
    `aidlc-log.ts answer`; the lifecycle `report` calls own its audit events.
 3. Present `team-practices.md` and `discovered-rules.md` with two options:
-   **Approve** (promote, then continue to `directive.next_stage`) and
-   **Request Changes**.
+   **Approve** (promote, then continue to the next stage) and
+   **Request Changes**. Write the actual next stage name into the Approve
+   option's description, read from the run-stage directive's `next_stage` field
+   (`Complete workflow` when it is null); never show the field name to the user.
 4. STOP and wait for the human response.
 5. Carry the exact answer only into the matching `report` or promotion path
    below; never call `aidlc-log.ts answer` for this gate.

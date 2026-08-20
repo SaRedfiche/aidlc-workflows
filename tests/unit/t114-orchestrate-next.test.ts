@@ -387,7 +387,7 @@ describe("t114 plugin terminal routing", () => {
     seedStateFile(proj, MID_IDEATION);
     const out = runNext(proj, ["plugin", "list", "--json"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("aidlc-utility.ts plugin-list --json");
+    expect(out).toContain("bun .claude/tools/aidlc.ts engine plugin list --json");
     expect(out).not.toContain('"kind":"run-stage"');
   });
 
@@ -395,21 +395,21 @@ describe("t114 plugin terminal routing", () => {
     proj = createOrchestrationTestProject();
     const out = runNext(proj, ["plugin", "sync"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("aidlc-utility.ts plugin-sync");
+    expect(out).toContain("bun .claude/tools/aidlc.ts engine plugin sync");
   });
 
   test("plugin select preserves the selected names", () => {
     proj = createOrchestrationTestProject();
     const out = runNext(proj, ["plugin", "select", "aidlc,test-pro"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("aidlc-utility.ts select-plugins aidlc,test-pro");
+    expect(out).toContain("bun .claude/tools/aidlc.ts engine plugin select aidlc,test-pro");
   });
 
   test("plugin help routes to global help", () => {
     proj = createOrchestrationTestProject();
     const out = runNext(proj, ["plugin", "help"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("aidlc-utility.ts help");
+    expect(out).toContain("bun .claude/tools/aidlc.ts engine plugin help");
     expect(out).not.toContain('"kind":"ask"');
   });
 
@@ -648,7 +648,7 @@ describe("t114 parked branch (#367)", () => {
       "fix the unrelated login bug",
     ]).out;
     expect(valid).toContain('"kind":"print"');
-    expect(valid).toContain("intent-create --scope bugfix");
+    expect(valid).toContain("intent create --scope bugfix");
     expect(valid).not.toContain('"kind":"parked"');
 
     const missing = runNext(proj, ["--new-intent", "--scope", "bugfix"]).out;
@@ -747,7 +747,7 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
     seedStateFile(proj, MID_IDEATION); // state scope differs from bugfix
     const out = runNext(proj, ["--scope", "bugfix", "fix the login flow"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("scope-change --scope bugfix");
+    expect(out).toContain("scope change --scope bugfix");
   });
 
   test("--new-intent with prose still births (Branch 4a precedes the ask)", () => {
@@ -755,6 +755,6 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
     seedStateFile(proj, MID_IDEATION);
     const out = runNext(proj, ["--new-intent", "--scope", "poc", "a standalone dashboard"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("intent-create");
+    expect(out).toContain("intent create");
   });
 });

@@ -5,10 +5,12 @@
 // covers: function:harnessDir
 //
 // WHY THIS GUARD EXISTS. The deterministic engine emits `print` directives whose
-// `message` tells the conductor to run a tool. aidlcToolInvocation() selects the
-// projected command: a harness-local Bun tool in copy installs, or an `aidlc
-// engine` route in native release installs. A directive that hardcodes a
-// harness path would fail in other harnesses and bypass the release channel.
+// `message` tells the conductor to run a tool, e.g.
+//   `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts init --scope ...\` ...`
+// The .ts tools are BYTE-COPIED into every harness dist; harnessDir() resolves
+// the right tree at RUN time. A directive that hardcodes one harness directory
+// ships verbatim into the others and tells their conductors to run a tool at a
+// path that does not exist there.
 //
 // This is the exact CRIT-class seam bug the dist-unified review found for the
 // rules dir (rulesSubdir). The merge-endgame re-homed v0.6.8's createPrintDirective

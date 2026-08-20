@@ -47,7 +47,7 @@
     "preToolUse": [
       {
         "matcher": "execute_bash",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts state-transition-guard aidlc-composer-agent",
+        "command": "{{INVOKE}} engine adapter kiro state-transition-guard aidlc-composer-agent",
         "timeout_ms": 15000
       },
       {

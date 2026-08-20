@@ -46,7 +46,7 @@
     "preToolUse": [
       {
         "matcher": "execute_bash",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts state-transition-guard aidlc-pipeline-deploy-agent",
+        "command": "{{INVOKE}} engine adapter kiro state-transition-guard aidlc-pipeline-deploy-agent",
         "timeout_ms": 15000
       },
       {

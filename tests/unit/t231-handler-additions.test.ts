@@ -354,9 +354,7 @@ describe("t231 emitted plugin hook command", () => {
     expect(aidlcIdx).toBeGreaterThanOrEqual(0);
     expect(bunIdx).toBeGreaterThan(aidlcIdx);
     expect(command).toContain("\"$AIDLC\" engine plugin sync; exit $?");
-    expect(command).toContain("\"$PLUGIN_TOOL\" sync; exit $?");
     expect(command).toContain("AIDLC_HARNESS_NAME=claude");
-    expect(command).toContain("tools/aidlc-plugin.ts");
     expect(command).toContain(`"$BUN" "\${CLAUDE_PLUGIN_ROOT}/hooks/compose.ts"`);
     expect(command).toContain("aidlc and bun not found, skipping");
 

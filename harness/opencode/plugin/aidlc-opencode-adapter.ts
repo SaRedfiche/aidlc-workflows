@@ -48,9 +48,12 @@ import { isAbsolute, join } from "node:path";
 const NUDGE_SENTINEL = "[aidlc-forwarding-nudge]";
 const PROJECTED_INVOKE = "{{INVOKE}}";
 const TRUSTED_NAMESPACE = "{{TRUSTED_NAMESPACE}}";
+const PROJECTED_TRUSTED_NAMESPACE = TRUSTED_NAMESPACE.startsWith("{{")
+  ? "engine"
+  : TRUSTED_NAMESPACE;
 const DEFAULT_AIDLC_COMMAND = PROJECTED_INVOKE.startsWith("{{")
-  ? ["aidlc", TRUSTED_NAMESPACE]
-  : [...PROJECTED_INVOKE.trim().split(/\s+/), TRUSTED_NAMESPACE];
+  ? ["bun", ".aidlc/tools/aidlc.ts", PROJECTED_TRUSTED_NAMESPACE]
+  : [...PROJECTED_INVOKE.trim().split(/\s+/), PROJECTED_TRUSTED_NAMESPACE];
 
 function runCoreHook(
   hookFile: string,
@@ -194,14 +197,16 @@ function aidlcBashBoundaryViolation(
   command: string,
   allowedEntrypoints: ReadonlySet<string> = shippedAidlcEntrypoints,
 ): string | null {
-  if (PROJECTED_BUN_TOOLS === null) {
-    if (!/^aidlc(?:[ \t]|$)/.test(command)) return null;
+  if (/^aidlc(?:[ \t]|$)/.test(command)) {
     const words = directShellWords(command);
     if (words?.[0] === "aidlc") return null;
     return (
       "AIDLC bash permission allows one direct invocation of a framework tool only. " +
       "Do not use chaining, redirection, expansion, or command substitution."
     );
+  }
+  if (PROJECTED_BUN_TOOLS === null) {
+    return null;
   }
   if (!AIDLC_BUN_PREFIX.test(command)) return null;
   const words = directShellWords(command);

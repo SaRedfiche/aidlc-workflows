@@ -97,7 +97,9 @@ describe("t245 Kiro IDE hook registrations (v2 schema contract)", () => {
             expect(hook.matcher).toBeUndefined();
           }
           expect(hook.action.type).toBe("command");
-          expect(hook.action.command).toContain(`aidlc-kiro-adapter.ts ${reg.adapterTarget}`);
+          expect(hook.action.command).toContain(
+            `engine adapter kiro-ide ${reg.adapterTarget}`,
+          );
         });
       }
 
