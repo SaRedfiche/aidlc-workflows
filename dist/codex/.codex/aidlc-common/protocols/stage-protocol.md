@@ -1057,3 +1057,26 @@ bun .codex/tools/aidlc-state.ts reuse-artifact <stage-slug> \
 The tool emits `ARTIFACT_REUSED` with the `Stage` / `Decision` / `Artifacts` fields — never hand-write `**Event**:` markdown blocks. See `docs/reference/12-state-machine.md` for the canonical emitter registry.
 
 This applies to ALL stages, not just jump targets — when the workflow replays forward after a backward jump, each subsequent stage will also encounter existing artifacts and offer the same choice.
+
+## 14. Sensor Imports
+
+A stage's `sensors:` frontmatter list is its complete set of imported checks.
+Each named sensor runs deterministic, advisory validation against matching
+stage outputs. A failed check does not fail the underlying write or stop stage
+progress. It emits a `SENSOR_FAILED` audit row and writes findings to
+`<record>/.aidlc-sensors/<stage-slug>/<sensor>-<iso>.md`; use that detail file
+to correct the output and run the check again. Sensor manifests define their
+file match, command, and time budget, but only sensors imported by the stage
+are eligible to run.
+
+`required-sections` applies to markdown outputs. Unless a stage declares a
+more specific contract, it enforces the registry default of at least two H2
+headings. A stage's `## Sensors` compartment may retain extra requirements for
+particular files.
+
+`upstream-coverage` compares output prose with the stage's `consumes:`
+frontmatter. Every declared artefact must be referenced so the output shows
+which upstream inputs informed it. Stages with an empty `consumes:` list pass
+this check trivially. The compact `Imports:` and `Upstream targets:` lines in
+each stage file are the local summary; frontmatter remains authoritative when
+checks are resolved.
