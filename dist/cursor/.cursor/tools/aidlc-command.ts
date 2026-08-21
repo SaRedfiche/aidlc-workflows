@@ -46,6 +46,8 @@ export const PINNED_TOP_LEVEL_ROUTES = [
   "park",
   "compose",
   "--status",
+  "--resume",
+  "--scope",
 ] as const;
 
 export const PINNED_SYSTEM_GROUPS = ["workspace-sync"] as const;

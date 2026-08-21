@@ -20,18 +20,18 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 567,
+    "total": 598,
     "enumeratedByClass": {
-      "function": 306,
+      "function": 338,
       "audit": 85,
       "scope": 11,
-      "stage": 34,
+      "stage": 33,
       "hook": 17,
       "subcommand": 107,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 147,
+      "function": 167,
       "audit": 43,
       "scope": 11,
       "stage": 11,
@@ -974,6 +974,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:ActiveDirectiveLockContendedError",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:activeIntent",
       "minMechanism": "none",
       "coveredBy": [
@@ -1019,6 +1026,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:advanceCopilotContinuation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t283-copilot-engine-cursor.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1098,6 +1117,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:assertNoSymlinkInChainOrThrow",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t286-read-write-boundary.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -1277,6 +1308,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:claimCopilotCommand",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t249-copilot-adapter.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1466,11 +1509,42 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:consumeCopilotConversation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:consumersOf",
       "minMechanism": "none",
       "coveredBy": [
         {
           "file": "tests/integration/t66.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:copilotDirectiveCommitRequired",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:copilotStopEvidence",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t249-copilot-adapter.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1536,6 +1610,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:DEFAULT_SCOPE",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:DEFAULT_SPACE",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1587,6 +1668,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:documentExtractors",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t294-document-extractors-seam.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -1652,6 +1745,20 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:ensureDirSync",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:envDefaultScope",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:errorMessage",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1698,6 +1805,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:FILE_CHANGED_DURING_READ",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -1993,6 +2107,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:inspectCopilotContinuation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t283-copilot-engine-cursor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:INTENT_VERBS",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2030,6 +2156,30 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:invalidateActiveDirectiveContext",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isAutonomousConstructionDecision",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t261-audit-authority-floor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -2118,6 +2268,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:isPidAlive",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:isPlainObject",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2152,6 +2309,13 @@
     {
       "unitClass": "function",
       "unitId": "function:keywordCollisions",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:KNOWLEDGE_VERBS",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -2440,6 +2604,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:markActiveDirectiveResumeWaiting",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:markEngineTouch",
       "minMechanism": "none",
       "coveredBy": [
@@ -2648,6 +2824,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseKnowledgeCommand",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t178-classify-terminal-command.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -2913,6 +3101,20 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readAppendOnlyFileNoFollowOrThrow",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readAtomicReplacedFileNoFollowOrThrow",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readAuditShardEvents",
       "minMechanism": "none",
       "coveredBy": [
@@ -2939,6 +3141,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readRegularFileNoFollowOrThrow",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t286-read-write-boundary.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readSessionIntentHandoff",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2962,6 +3176,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:recordCopilotHumanSequence",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3080,6 +3306,20 @@
     {
       "unitClass": "function",
       "unitId": "function:removeSlug",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:removeTreeSync",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:renameIntoPlace",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -3410,6 +3650,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:selfAttributedDecisionMarker",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t261-audit-authority-floor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:sensorsDir",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3514,6 +3766,30 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:settleCopilotCommand",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:settleCopilotIntentBoundary",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:SLUG_TAG_REGEX",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3530,6 +3806,18 @@
         },
         {
           "file": "tests/unit/t160-workspace-record-resolution.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:SPACE_NAME_REGEX",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t286-read-write-boundary.test.ts",
           "mechanism": "none"
         }
       ],
@@ -3804,6 +4092,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:updateCopilotStopCount",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:updateIntentStatus",
       "minMechanism": "none",
       "coveredBy": [
@@ -3888,6 +4188,18 @@
         {
           "file": "tests/unit/t60.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:validSpaceFlag",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t286-read-write-boundary.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -3991,6 +4303,18 @@
         {
           "file": "tests/unit/t272-unit-major-code-gen.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeBufferAtomic",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t286-read-write-boundary.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -4834,13 +5158,6 @@
     {
       "unitClass": "stage",
       "unitId": "ideation/team-formation",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "stage",
-      "unitId": "inception/application-design",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"

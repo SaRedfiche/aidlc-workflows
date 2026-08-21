@@ -261,7 +261,7 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
         );
         expect(r.code, command).toBe(0);
         const relayed = r.stdout.match(/--- OUTPUT ---\n([\s\S]*?)\n--- END OUTPUT ---/)?.[1].trim();
-        expect(relayed, command).toBe(command);
+        expect(relayed, command).toBe(`engine ${command}`);
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });

@@ -46,7 +46,7 @@ const REPO = join(import.meta.dir, "..", "..");
 // only things read from REPO are `dist/claude/.claude/tools/aidlc-lib.ts`
 // (import, read-only) and the fixture-copy source list below (read-only cp).
 // No path under REPO is ever opened for writing by this file.
-const SCRATCH_SOURCES = ["dist", "core", "harness", "scripts", "plugins"] as const;
+const SCRATCH_SOURCES = ["dist", "dist-release", "core", "harness", "scripts", "plugins"] as const;
 const SCRATCH_FILES = ["package.json", "bun.lock", "tsconfig.json"] as const;
 
 let scratch = "";
@@ -106,8 +106,16 @@ const HARNESSES = readdirSync(join(REPO, "harness"), { withFileTypes: true })
 // new packager-owned field is a one-line update here rather than four scattered
 // literals -- `name` arrived from upstream and had to be added in exactly this
 // many places.
-const BASE_KEYS = ["harnessDir", "name", "rulesSubdir"] as const;
-const BASE_KEYS_WITH_EXTRACTORS = ["documentExtractors", ...BASE_KEYS] as const;
+const BASE_KEYS = [
+  "configNextStep",
+  "distribution",
+  "harnessDir",
+  "name",
+  "productName",
+  "rulesSubdir",
+  "schemaVersion",
+] as const;
+const BASE_KEYS_WITH_EXTRACTORS = [...BASE_KEYS, "documentExtractors"].sort();
 
 // Fields the packager emits CONDITIONALLY, so they are present for some
 // harnesses and absent for others (`scripts/package.ts` guards each on a
@@ -158,10 +166,11 @@ describe("t294 absent by default — no harness is perturbed", () => {
     }
   });
 
+  // The scratch --check sweeps dist AND dist-release; well past bun's 5s default.
   test("--check is green with the field absent", () => {
     const r = pkg(["--check"]);
     expect(r.status, r.out).toBe(0);
-  });
+  }, 60_000);
 
   test("the runtime accessor returns null when nothing is configured", () => {
     // Absent is the NORMAL case, not an error: the tool then probes pdftotext on

@@ -1040,7 +1040,6 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // t-ide-kiro constructs its approval-gate fixture by spawning the real
     // shipped tools (runSetupTool), so its body is a deterministic spawner
     // even though its filename segment carries no mechanism.
-    "e2e/t-ide-kiro-checkpoint.serial.test.ts",
   ];
 
   test("the none->cli reclassification set is exactly the deterministic spawners", () => {

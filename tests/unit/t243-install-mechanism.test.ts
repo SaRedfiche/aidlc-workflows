@@ -804,6 +804,21 @@ describe("t243 project initialization", () => {
     const scopeGrid = JSON.parse(readFileSync(scopeData, "utf-8")) as Record<string, unknown>;
     scopeGrid["custom-composed"] = scopeGrid.bugfix;
     writeFileSync(scopeData, `${JSON.stringify(scopeGrid, null, 2)}\n`);
+    // A composed scope survives recompiles only when its registry file exists
+    // alongside the appended grid entry (the composer writes both on approval).
+    writeFileSync(
+      join(project, ".claude", "scopes", "aidlc-custom-composed.md"),
+      [
+        "---",
+        "name: custom-composed",
+        "depth: Minimal",
+        "description: composed fixture scope",
+        "---",
+        "",
+        "# custom-composed scope",
+        "",
+      ].join("\n"),
+    );
     writeFileSync(framework, `${readFileSync(framework, "utf-8")}\n// local edit\n`);
     const conflict = run(INIT, [
       "config",
@@ -2676,7 +2691,7 @@ describe("t243 projection channel", () => {
           "sha256:3da36b2d01551aeae2e366caa08be8cce0dbc9110e252445dcaa4e758e24a0b6",
           "sha256:4f1cd2e930bd37d2f5d715a06ea3fa1e2d39479fc662f0f0562116376132114b",
           "sha256:f2affb8b34499f057284852456cb8a24ae586b8e816595bf98346141f3516281",
-          "sha256:fc31b2b92c357c58d4d4f7916101ddeb410759d2ab03f2b7bc6f84e6d0ec7320",
+          "sha256:d397e69ac701a663158ccb43fda3f0a23c86365f29419a8c9a5e3287a490370d",
         ],
       },
       codex: {
@@ -2694,7 +2709,7 @@ describe("t243 projection channel", () => {
           "sha256:9be9c5cc4a25e5b4c71b3ae35188e1a543504f19cbd5d0a20892777b0904800e",
           "sha256:bc41aca84970977673af3c0b8212a1f7a4d995a4b47fc7894b1c5b342e4a3601",
           "sha256:b3d4d0d178a01591629dbf79083b00e7a3ad42f59f79cbfc88d05b7615704a70",
-          "sha256:92441f1b9f546249f5d0966a57cf958d00a0440106d046f6b83f7ff588aaed5d",
+          "sha256:d9be36630b49183203ae4d97946c243e3b8840202ee6f080c738e0f01343e33a",
         ],
       },
       kiro: {
@@ -2707,7 +2722,7 @@ describe("t243 projection channel", () => {
           "sha256:e01ac1caf52a59d25faf859a03cfb65b803853c99298bbcbc80ef565e7628de6",
           "sha256:e3de4a295f9b9404b40678c28c0773ae432ac8d4aeacc07613ecfcdfbb4c866b",
           "sha256:e85a5d7ce13b676282dc99572f89c81256f2dada50b1881f4c9641e61339f5a4",
-          "sha256:d6e5a6e359e56af104dea70c842f860aafcdd2b7a37900e1eb9c9004a42078d3",
+          "sha256:67a57eddd94d613590d34ec2d0181398123d9e2d9f6382eb36c62233ce02b6f9",
         ],
       },
       "kiro-ide": {
@@ -2720,7 +2735,7 @@ describe("t243 projection channel", () => {
           "sha256:c5d2188b046cd75d8cb7214f32faa85cbc1539cddda4a0fae9bfe8fad90c237c",
           "sha256:dead4d5ea47849f489e05baeae418d5d26efc6cd14dd2201351a474376f8efde",
           "sha256:e01ac1caf52a59d25faf859a03cfb65b803853c99298bbcbc80ef565e7628de6",
-          "sha256:9a9f1f71ad9e3bcbac8a5b36778af2af4cc532bca613f9b3de987997554f5cfe",
+          "sha256:990d80744904bfa3f9923b8a04bbb2e69b454154346915edca1e1a4ef7e31c07",
         ],
       },
     };

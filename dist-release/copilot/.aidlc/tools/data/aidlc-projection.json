@@ -151,7 +151,7 @@
       "sha256:a0245a828cf2fd3bf4db7878ccbe1a48e845977a42043afb703268ab5ede36ec"
     ],
     ".aidlc/hooks/aidlc-copilot-adapter.ts": [
-      "sha256:c1b917395a97389ccbf765a2d294523902cace2fff3c0c840e40401cd3fbb580"
+      "sha256:32a452968c9f9aeeeb46405e487959d0aa75236c7856bd8f3e8160ac0c731f62"
     ],
     ".aidlc/hooks/aidlc-rebuild-stage-graph.ts": [
       "sha256:4cc101ee2dc7b04e3b2cb904bc071ef38f1f11dd0737f2932e65a6ec2246f437"
@@ -187,7 +187,7 @@
       "sha256:33d5ae72c2de479ccfb792e2fc707fba846143caf3ed0a585d734ba1d8a73578"
     ],
     ".aidlc/tools/aidlc-command.ts": [
-      "sha256:d6838d188999a5c394c1349e3cbc473b2843449aa85626317f960d2db750ffdb"
+      "sha256:7425ed3d7d5990b04b568eb7a9f6fdb7efc2cbc2844c2e65989b0bd503a8b85a"
     ],
     ".aidlc/tools/aidlc-runtime-paths.ts": [
       "sha256:27f6e9c3623142cf0585fe9b46e49cf49d449c5a0aac8d94b4d3b97499b3752d"
