@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.19] - 2026-08-21
+
+Kiro CLI conductor writes now preserve the audit-backed artifact lifecycle when the native write tool reports a project-relative path, and sensor dispatch applies the same normalization before its recursion guard and glob matching. **Upgrade:** refresh your `dist/<harness>/` shell copies so the updated adapters and core hooks are installed.
+
+* Kiro CLI `write` / `fs_write` events now emit `ARTIFACT_CREATED` or `ARTIFACT_UPDATED` for relative paths under the active record, fixing the "no recorded native-tool write after the human's consolidated summary confirmation" gate refusal and resulting workflow deadlock.
+* The run-sensors hook now resolves relative write paths against the project before checking the `.aidlc-sensors/` recursion guard and applicable sensor globs.
+
 ## [2.6.18] - 2026-08-19
 
 Classic and Express are new scope options, and the implicit default scope is now Classic — a **declared behavior change**: invocations that name no scope and match no keyword now run the v1-style lifecycle without Ideation instead of the full-lifecycle Feature scope. Exactly two things control the implicit default: the `AWS_AIDLC_DEFAULT_SCOPE` env var (which overrides) and the framework's hard-coded `classic` fallback. Express has a deterministic requirements-to-conditional-deploy path, and conditional protocol modules reduce fixed context without dropping reviewer recovery behavior. **Upgrade:** refresh your `dist/<harness>/` shell; in-flight workflows keep their persisted scope and need no migration; set `AWS_AIDLC_DEFAULT_SCOPE=feature` (Claude: the `.claude/settings.json` `env` block, which now ships `classic`) to keep the previous full-lifecycle default.

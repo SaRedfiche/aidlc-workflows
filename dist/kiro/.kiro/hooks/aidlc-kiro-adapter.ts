@@ -781,8 +781,11 @@ function buildForward(): Forward {
     case "audit-and-sensors": {
       // postToolUse(write) → write-audit-log THEN run-sensors (both ship core).
       if (tool !== "Write") return null;
-      const filePath = (ti.path as string) ?? (ti.file_path as string) ?? "";
-      if (!filePath) return null;
+      const rawFilePath = (ti.path as string) ?? (ti.file_path as string) ?? "";
+      if (!rawFilePath) return null;
+      const filePath = isAbsolute(rawFilePath)
+        ? rawFilePath
+        : join(projectDir, rawFilePath);
       return {
         hook: "__audit_and_sensors__", // handled specially below (two hooks)
         input: {

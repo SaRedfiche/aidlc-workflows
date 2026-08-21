@@ -33,7 +33,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createIntent,
@@ -566,11 +566,37 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  test("7: write-event target normalizes path→file_path and exits 0 (advisory)", () => {
+  test("7: write-event target audits a project-relative path from the Kiro payload", () => {
     const dir = scratchProject(true);
     try {
-      const r = runAdapter(dir, "audit-and-sensors", FIXTURES.postToolUse_write);
+      const captured = FIXTURES.postToolUse_write as {
+        tool_input?: Record<string, unknown>;
+        [key: string]: unknown;
+      };
+      const absoluteFile = join(
+        seededRecordDir(dir),
+        "ideation",
+        "intent-capture",
+        "intent-statement.md",
+      );
+      mkdirSync(dirname(absoluteFile), { recursive: true });
+      writeFileSync(absoluteFile, "PROBE\n", "utf-8");
+      const relativePayload = {
+        ...captured,
+        cwd: dir,
+        tool_input: {
+          ...captured.tool_input,
+          path: relative(dir, absoluteFile),
+        },
+      };
+
+      const before = readAudit(dir);
+      const r = runAdapter(dir, "audit-and-sensors", relativePayload);
       expect(r.code).toBe(0);
+      const audit = readAudit(dir);
+      expect(audit).not.toBe(before);
+      expect(audit).toMatch(/\*\*Event\*\*: ARTIFACT_(CREATED|UPDATED)/);
+      expect(audit).toContain(`**File**: ${absoluteFile.replace(/\\/g, "/")}`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

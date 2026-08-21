@@ -90,7 +90,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -376,6 +376,18 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
     );
     const r = runHook(proj, filePath);
     expect(r.status).toBe(0);
+    expect(existsSync(spawnLogPath(proj))).toBe(false);
+  });
+
+  test("recursion guard catches project-relative writes under the active sensor detail dir", () => {
+    const proj = makeProjectActive();
+    const filePath = relative(
+      proj,
+      join(seededRecordDir(proj), ".aidlc-sensors", "requirements-analysis", "detail.md"),
+    );
+    const r = runHook(proj, filePath);
+    expect(r.status).toBe(0);
+    expect(existsSync(heartbeatPath(proj))).toBe(false);
     expect(existsSync(spawnLogPath(proj))).toBe(false);
   });
 
