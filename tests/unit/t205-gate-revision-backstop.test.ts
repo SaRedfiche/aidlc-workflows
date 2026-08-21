@@ -90,6 +90,23 @@ function guarded(proj: string, args: string[]): { rc: number; out: string } {
   return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
+// Same backstop posture with human-presence enforcement enabled. Summary
+// confirmation remains bypassed because these fixtures isolate revision and
+// reviewer ordering rather than the question checkpoint.
+function guardedWithPresence(proj: string, args: string[]): { rc: number; out: string } {
+  const env = { ...process.env };
+  env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
+  env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD = "1";
+  env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
+  delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+  delete env.AIDLC_SKIP_REVISION_BACKSTOP;
+  const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
+    encoding: "utf-8",
+    env,
+  });
+  return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+}
+
 // Drive the production report dispatcher with the same guard posture as
 // guarded(). report resolves the current gated stage and shells out to approve.
 function guardedReport(proj: string, args: string[]): { rc: number; out: string } {
@@ -356,6 +373,41 @@ describe("t205: approve-time gate-revision backstop", () => {
     const accepted = guarded(proj, ["approve", slug, "--user-input", "looks good now"]);
     expect(accepted.rc).toBe(0);
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+  });
+
+  test("3c: a failed approve backstop does not consume the turn needed to reject", () => {
+    seedStateFile(proj, "state-mid-inception.md");
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    recordReview(proj, slug, 1);
+    recordHumanTurn(proj);
+    fireArtifact(
+      proj,
+      join(
+        seededRecordDir(proj),
+        "inception",
+        "requirements-analysis",
+        "requirements.md",
+      ),
+    );
+
+    const refused = guardedWithPresence(
+      proj,
+      ["approve", slug, "--user-input", "looks good now"],
+    );
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain("fresh REVIEW_COMPLETED");
+    expect(eventCount(proj, "GATE_REJECTED")).toBe(1);
+
+    const rejected = guardedWithPresence(
+      proj,
+      ["reject", slug, "--feedback", "rerun the reviewer on the revised requirements"],
+    );
+    expect(rejected.rc, rejected.out).toBe(0);
+    expect(eventCount(proj, "GATE_REJECTED")).toBe(2);
+    expect(field(proj, "Revision Count")).toBe("2");
+    expect(stateContent(proj)).toContain(`- [R] ${slug}`);
   });
 
   // --- Scenario 4: a properly recorded reject cycle - the backstop must not pile

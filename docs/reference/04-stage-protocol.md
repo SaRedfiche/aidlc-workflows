@@ -1025,9 +1025,13 @@ a conductor that loses count cannot run unbounded review passes. The only
 exception is a terminal receipt invalidated by a later `produces[]` write: the
 first request after stale evidence is exactly one marked recovery request at
 the next ordinal, even when normal adversarial budget remained. Either
-recovery verdict is terminal; a second invalidation requires human reset
-instead of another request. Autonomous Units halt before `finalize` and
-restart their Bolt attempt only after a human decision. The reviewer
+recovery verdict is terminal. If a stage declares `summary_confirmation`, a
+fresh human-backed consolidated-summary confirmation recorded after the
+recovery was spent re-arms exactly one recovery pass for the matching stage or
+Unit; an earlier confirmation and a `--single` confirmation do not re-arm the
+main workflow. A human Request Changes decision resets the whole review
+attempt. Autonomous Units halt before `finalize` and restart their Bolt attempt
+only after a human decision. The reviewer
 never blocks — the human always has final say at the gate — and does not fire
 for stages without a `reviewer` field. See the `reviewer` /
 `reviewer_max_iterations` / `review_class` frontmatter fields in

@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.26] - 2026-08-21
+
+Reviewer recovery no longer dead-ends after post-review edits and a renewed consolidated-summary decision: declared summary-confirmation stages can re-arm one bounded stale-receipt recovery pass, and approve-time revision reconciliation no longer consumes the human turn needed to request changes. **Upgrade:** refresh your `dist/<harness>/` shell so the corrected review accounting, presence handling, and refusal guidance are installed.
+
+* A fresh human-backed consolidated-summary confirmation recorded after a spent recovery re-arms exactly one matching stale-receipt recovery pass; confirmations recorded before the spend, for another Unit, or under `--single` do not affect the main workflow.
+* `GATE_REJECTED` rows backfilled with `Recovered: true` by the approve-time revision backstop no longer count as human decisions, so a reviewer-precondition refusal can be followed by the human's same-turn Request Changes decision.
+* Recovery-spent and rejection-presence refusals now name the available reset paths and explain that rejection must be the first recorded decision in the human's next turn when another decision already consumed the current turn.
+
 ## [2.6.18] - 2026-08-19
 
 Classic and Express are new scope options, and the implicit default scope is now Classic — a **declared behavior change**: invocations that name no scope and match no keyword now run the v1-style lifecycle without Ideation instead of the full-lifecycle Feature scope. Exactly two things control the implicit default: the `AWS_AIDLC_DEFAULT_SCOPE` env var (which overrides) and the framework's hard-coded `classic` fallback. Express has a deterministic requirements-to-conditional-deploy path, and conditional protocol modules reduce fixed context without dropping reviewer recovery behavior. **Upgrade:** refresh your `dist/<harness>/` shell; in-flight workflows keep their persisted scope and need no migration; set `AWS_AIDLC_DEFAULT_SCOPE=feature` (Claude: the `.claude/settings.json` `env` block, which now ships `classic`) to keep the previous full-lifecycle default.

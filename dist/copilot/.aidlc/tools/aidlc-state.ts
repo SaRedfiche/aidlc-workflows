@@ -1780,6 +1780,7 @@ function verifyReviewerPrecondition(
     reviewer?: string;
     reviewer_max_iterations?: number;
     review_class?: "adversarial" | "advisory";
+    summary_confirmation?: "required" | "if-present";
     produces?: string[];
     optional_produces?: string[];
     produces_kinds?: Record<string, string[]>;
@@ -1827,6 +1828,7 @@ function verifyReviewerPrecondition(
           stage.slug,
           reviewer,
           receipts.stageStaleProgress?.recoverySpent === true,
+          stage.summary_confirmation !== undefined,
         );
       }
       reviewerPreconditionError(stage.slug, reviewer);
@@ -1882,6 +1884,15 @@ function verifyReviewerPrecondition(
       );
     }
     if (recoverySpent.length > 0) {
+      const interactiveRecoveryReset = stage.summary_confirmation !== undefined
+        ? `present the situation to the human at the approval gate. Re-present ` +
+          `the consolidated summary and record a fresh human-backed summary ` +
+          `confirmation for the Unit to re-arm one recovery pass, or a human ` +
+          `Request Changes decision resets the review attempt; do not record ` +
+          `either decision on the human's behalf.`
+        : `present the situation to the human at the approval gate. Only a human ` +
+          `Request Changes decision resets the review attempt; do not record it ` +
+          `on the human's behalf.`;
       guidance.push(
         autonomousSwarm
           ? `For autonomous units whose recovery was already spent (${recoverySpent.join(", ")}), ` +
@@ -1890,9 +1901,7 @@ function verifyReviewerPrecondition(
             `Bolt and rerun the current swarm prepare step so a fresh BOLT_STARTED ` +
             `boundary resets review accounting.`
           : `For units whose recovery was already spent (${recoverySpent.join(", ")}), ` +
-            `present the situation to the human at the approval gate. Only a human ` +
-            `Request Changes decision resets the review attempt; do not record it ` +
-            `on the human's behalf.`,
+            interactiveRecoveryReset,
       );
     }
     if (neverReviewed.length > 0) {
@@ -1917,14 +1926,21 @@ function staleReviewPreconditionError(
   slug: string,
   reviewer: string,
   recoverySpent: boolean,
+  summaryConfirmationDeclared: boolean,
 ): never {
   if (recoverySpent) {
+    const resetGuidance = summaryConfirmationDeclared
+      ? "Re-present the consolidated summary and record a fresh human-backed " +
+        "summary confirmation to re-arm one recovery pass, or a human Request " +
+        "Changes decision resets the review attempt. Do not record either " +
+        "decision on the human's behalf."
+      : "Only a human Request Changes decision resets the review attempt; do not " +
+        "record it on the human's behalf.";
     error(
       `Refusing to complete "${slug}": its stale-receipt recovery review from ` +
         `${reviewer} was invalidated by another later write to a declared ` +
         `produces[] artifact. Present the situation to the human at the approval ` +
-        `gate. Only a human Request Changes decision resets the review attempt; ` +
-        `do not record it on the human's behalf.`
+        `gate. ${resetGuidance}`
     );
   }
   error(
@@ -2823,17 +2839,19 @@ function handleReject(args: string[]): void {
     }
     error(
       `Refusing to reject "${slug}": a real human has not acted at this gate since it opened. ` +
-        "Requesting changes requires a typed human turn before it can commit.",
+        "Every recorded decision (answer, summary confirmation, or approval) consumes the " +
+        "human turn. Record the rejection first in the human's next turn.",
     );
   }
 
   // Authorship floor (issue 742). The presence check above proves a human is in
   // the session, not that this rejection is theirs — so a conductor blocked by
   // the review-budget/receipt ordering can satisfy it while writing its own
-  // change request, because GATE_REJECTED is the only event that restores an
-  // advisory review budget. That reopen is the single most attractive forgery in
-  // the protocol and the one seen in the field, so refuse the self-attributed
-  // rejection here rather than laundering it into the trail as the human's.
+  // change request, because GATE_REJECTED resets the whole review attempt and
+  // restores the advisory budget without another summary interaction. That
+  // reopen is the single most attractive forgery in the protocol and the one
+  // seen in the field, so refuse the self-attributed rejection here rather than
+  // laundering it into the trail as the human's.
   // Autonomous Construction is exempt (the conductor owns the decision there).
   const rejectionAuthorship =
     autonomousDecision || humanPresenceGuardDisabled()

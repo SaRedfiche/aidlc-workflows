@@ -3732,11 +3732,13 @@ function cloneId(projectDir: string): string {
 // harness).
 //
 // The resolution boundary is workflow-global (the most recent gate approval,
-// rejection, answered question, summary confirmation, or autonomous grant).
-// This makes a same-turn cascade across DIFFERENT stages refuse correctly;
-// there is no per-stage scoping. AUTONOMY_MODE_SET only counts when its Mode is
-// autonomous because that grant consumes the human turn that unlocks downstream
-// presence carve-outs.
+// organic rejection, answered question, summary confirmation, or autonomous
+// grant). A Recovered=true GATE_REJECTED is backfilled bookkeeping from the
+// approve-time revision backstop, not a human decision, so it does not consume
+// presence. This makes a same-turn cascade across DIFFERENT stages refuse
+// correctly; there is no per-stage scoping. AUTONOMY_MODE_SET only counts when
+// its Mode is autonomous because that grant consumes the human turn that unlocks
+// downstream presence carve-outs.
 const GATE_RESOLUTION_EVENTS = new Set([
   "GATE_APPROVED",
   "GATE_REJECTED",
@@ -3780,8 +3782,11 @@ export function humanActedSinceGate(projectDir: string): boolean {
       const ev = auditBlockField(blocks[i], "Event");
       if (!ev) continue;
       if (!DOCUMENT_AUDIT_EVENTS.has(ev)) sawPresenceTrackingEvent = true;
+      const recoveredRejection =
+        ev === "GATE_REJECTED" &&
+        auditBlockField(blocks[i], "Recovered") === "true";
       const isResolution =
-        GATE_RESOLUTION_EVENTS.has(ev) ||
+        (GATE_RESOLUTION_EVENTS.has(ev) && !recoveredRejection) ||
         (ev === "AUTONOMY_MODE_SET" &&
           auditBlockField(blocks[i], "Mode") === "autonomous");
       if (!isResolution && ev !== "HUMAN_TURN") continue;
@@ -5009,6 +5014,7 @@ export function freshReviewReceipts(
     "STAGE_STARTED",
     "STAGE_JUMPED",
     "GATE_REJECTED",
+    "SUMMARY_CONFIRMATION_RECORDED",
     "ARTIFACT_CREATED",
     "ARTIFACT_UPDATED",
     "REVIEW_REQUESTED",
@@ -5103,6 +5109,33 @@ export function freshReviewReceipts(
         }
         unitIterations.delete(targetUnit);
         unitReceiptRecovery.delete(targetUnit);
+      }
+      continue;
+    }
+    if (e.event === "SUMMARY_CONFIRMATION_RECORDED") {
+      // Re-arm only the bounded recovery allowance. Receipt freshness and
+      // staleness remain exactly as established by reviews and artifact writes.
+      if (auditBlockField(e.block, "Workflow")?.startsWith("single-stage:")) continue;
+      if (auditBlockField(e.block, "Stage") !== stage.slug) continue;
+      const unit = auditBlockField(e.block, "Unit") || undefined;
+      if (perUnit) {
+        if (!unit) continue;
+        unitReceiptRecovery.set(unit, false);
+        const progress = unitStaleProgress.get(unit);
+        if (progress) {
+          unitStaleProgress.set(unit, {
+            ...progress,
+            recoverySpent: false,
+          });
+        }
+      } else {
+        stageReceiptRecovery = false;
+        if (stageStaleProgress) {
+          stageStaleProgress = {
+            ...stageStaleProgress,
+            recoverySpent: false,
+          };
+        }
       }
       continue;
     }

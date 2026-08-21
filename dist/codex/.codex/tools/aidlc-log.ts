@@ -587,6 +587,7 @@ function reviewAttemptSummary(
     "BOLT_STARTED",
     "BOLT_COMPLETED",
     "BOLT_FAILED",
+    "SUMMARY_CONFIRMATION_RECORDED",
     "REVIEW_REQUESTED",
     "REVIEW_COMPLETED",
   ]);
@@ -681,13 +682,13 @@ function reviewAttemptSummary(
   for (let i = floor + 1; i < events.length; i++) {
     const entry = events[i];
     if (
+      entry.event !== "SUMMARY_CONFIRMATION_RECORDED" &&
       entry.event !== "REVIEW_REQUESTED" &&
       entry.event !== "REVIEW_COMPLETED"
     ) {
       continue;
     }
     if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
-    if (auditBlockField(entry.block, "Reviewer") !== reviewer) continue;
     const eventUnit = auditBlockField(entry.block, "Unit") || undefined;
     if (eventUnit !== unit) continue;
     const eventWorkflow = auditBlockField(entry.block, "Workflow") || undefined;
@@ -698,6 +699,14 @@ function reviewAttemptSummary(
     ) {
       continue;
     }
+    if (entry.event === "SUMMARY_CONFIRMATION_RECORDED") {
+      // Chronological reset: a later recovery request spends the allowance
+      // again, while a confirmation after the spend re-arms one request.
+      recoverySpent = false;
+      recoveryIteration = null;
+      continue;
+    }
+    if (auditBlockField(entry.block, "Reviewer") !== reviewer) continue;
     const rawIteration = auditBlockField(entry.block, "Iteration");
     if (!rawIteration || !/^[1-9][0-9]*$/.test(rawIteration)) continue;
     const iteration = Number(rawIteration);
@@ -739,6 +748,7 @@ function reviewBudgetMessage(stage: string, ordinal: number, budget: number): st
 
 function reviewRecoverySpentMessage(
   stage: string,
+  summaryConfirmationDeclared: boolean,
   autonomousBolt?: {
     unit: string;
     slug: string | null;
@@ -770,9 +780,14 @@ function reviewRecoverySpentMessage(
   }
   return (
     prefix +
-    "Present this refusal to the human at the approval gate. Only a human " +
-    "Request Changes decision (GATE_REJECTED) resets the review attempt; do not " +
-    "record that rejection on the human's behalf."
+    "Present this refusal to the human at the approval gate. " +
+    (summaryConfirmationDeclared
+      ? "Re-present the consolidated summary and record a fresh human-backed " +
+        "summary confirmation to re-arm one recovery pass, or a human Request " +
+        "Changes decision (GATE_REJECTED) resets the review attempt. Do not " +
+        "record either decision on the human's behalf."
+      : "Only a human Request Changes decision (GATE_REJECTED) resets the " +
+        "review attempt; do not record that rejection on the human's behalf.")
   );
 }
 
@@ -886,6 +901,7 @@ function handleReview(args: string[]): void {
     try {
       withAuditLock(pd, () => {
         const {
+          node,
           attempt,
           budget,
           receipts,
@@ -905,6 +921,7 @@ function handleReview(args: string[]): void {
                 refuseReview(
                   reviewRecoverySpentMessage(
                     flags.stage,
+                    node.summary_confirmation !== undefined,
                     autonomousCandidate && attempt.boltStarted && flags.unit
                       ? {
                           unit: flags.unit,
@@ -951,6 +968,7 @@ function handleReview(args: string[]): void {
           refuseReview(
             reviewRecoverySpentMessage(
               flags.stage,
+              node.summary_confirmation !== undefined,
               autonomousCandidate && attempt.boltStarted && flags.unit
                 ? {
                     unit: flags.unit,

@@ -14,7 +14,8 @@
 // The ledger contract (no marker file, no turn counter, no consumed flag):
 //   - a real human prompt appends a HUMAN_TURN event (the per-harness mint hook).
 //   - the gate allows iff a HUMAN_TURN appears AFTER the last gate resolution
-//     (GATE_APPROVED / GATE_REJECTED / QUESTION_ANSWERED) IN LEDGER APPEND ORDER.
+//     (GATE_APPROVED / organic GATE_REJECTED / QUESTION_ANSWERED /
+//     SUMMARY_CONFIRMATION_RECORDED) IN LEDGER APPEND ORDER.
 //   - cascade-safety + freshness both fall out of order: a second gate
 //     auto-cascaded in the same human turn opens AFTER the GATE_APPROVED that just
 //     committed (so no HUMAN_TURN follows it -> refused); a stale human turn
@@ -337,6 +338,18 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(r.out).toContain("Refusing to approve");
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
     expect(field(proj, "Current Stage")).toBe(slug2);
+  });
+
+  test("E2: a recovered GATE_REJECTED does not consume a HUMAN_TURN", async () => {
+    const { humanActedSinceGate } = await import(
+      "../../dist/claude/.claude/tools/aidlc-lib.ts"
+    );
+    recordHumanTurn(proj);
+    appendAuditEntry("GATE_REJECTED", {
+      Stage: "feasibility",
+      Recovered: "true",
+    }, proj);
+    expect(humanActedSinceGate(proj)).toBe(true);
   });
 
   // --- Scenario F: fail-open when the ledger has no events -------------------
