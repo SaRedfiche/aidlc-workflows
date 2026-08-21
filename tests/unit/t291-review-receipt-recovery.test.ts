@@ -42,7 +42,7 @@ function run(
     enforceSummaryConfirmation?: boolean;
   } = {},
 ) {
-  const env = { ...process.env, ...TEST_ENV };
+  const env: NodeJS.ProcessEnv = { ...process.env, ...TEST_ENV };
   if (options.enforceHumanPresence) {
     delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
   }

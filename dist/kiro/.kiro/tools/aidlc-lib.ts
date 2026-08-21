@@ -5130,9 +5130,11 @@ export function freshReviewReceipts(
         }
       } else {
         stageReceiptRecovery = false;
-        if (stageStaleProgress) {
+        const progress =
+          stageStaleProgress as StaleReviewProgress | null;
+        if (progress) {
           stageStaleProgress = {
-            ...stageStaleProgress,
+            nextIteration: progress.nextIteration,
             recoverySpent: false,
           };
         }
