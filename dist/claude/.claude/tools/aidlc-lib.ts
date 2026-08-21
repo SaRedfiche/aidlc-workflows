@@ -9018,11 +9018,12 @@ export function scalarField(fm: string, key: string): string {
   return raw;
 }
 
-// List field parser. Bounds list items strictly to indented `- ` lines so
-// a following `description: >` folded block cannot leak its continuation
-// lines into this list. Requires at least one space after the dash — YAML
-// syntax demands it, and accepting `-foo` silently as `foo` masks user
-// error when adding new agents.
+// List field parser. Accepts block sequences and single-line flow sequences.
+// Bounds block list items strictly to indented `- ` lines so a following
+// `description: >` folded block cannot leak its continuation lines into this
+// list. Requires at least one space after the dash — YAML syntax demands it,
+// and accepting `-foo` silently as `foo` masks user error when adding new
+// agents.
 //
 // Exported so aidlc-rule-schema.ts can reuse the zero-dep YAML primitive
 // (rule frontmatter's `paths:` is a YAML list of strings).
@@ -9032,14 +9033,22 @@ export function listField(fm: string, key: string): string[] {
     "m"
   );
   const m = fm.match(re);
-  if (!m) return [];
-  return m[1]
-    .split(/\r?\n/)
-    .map((l) => {
-      const match = l.match(/^\s*-[ \t]+(.+?)\s*$/);
-      return match ? match[1].replace(/^["']|["']$/g, "") : "";
-    })
-    .filter(Boolean);
+  if (m) {
+    return m[1]
+      .split(/\r?\n/)
+      .map((l) => {
+        const match = l.match(/^\s*-[ \t]+(.+?)\s*$/);
+        return match ? match[1].replace(/^["']|["']$/g, "") : "";
+      })
+      .filter(Boolean);
+  }
+
+  const flowRe = new RegExp(
+    `^${key}:[ \\t]*(\\[[^\\r\\n]*)$`,
+    "m"
+  );
+  const flow = fm.match(flowRe);
+  return flow ? parseInlineDepsList(flow[1]) : [];
 }
 
 // --- Stage frontmatter parse / emit ---
@@ -10229,12 +10238,49 @@ function unquoteScalar(s: string): string {
 function parseInlineDepsList(raw: string): string[] {
   const t = raw.trim();
   if (t === "" || t === "[]") return [];
-  if (t.startsWith("[") && t.endsWith("]")) {
-    return t
-      .slice(1, -1)
-      .split(",")
-      .map((s) => unquoteScalar(s))
-      .filter((s) => s !== "");
+  if (t.startsWith("[")) {
+    let close = -1;
+    let quote: "\"" | "'" | null = null;
+    for (let i = 1; i < t.length; i++) {
+      const char = t[i];
+      if (quote !== null) {
+        if (quote === "\"" && char === "\\") {
+          i++;
+        } else if (char === quote) {
+          quote = null;
+        }
+      } else if (char === "\"" || char === "'") {
+        quote = char;
+      } else if (char === "]") {
+        close = i;
+        break;
+      }
+    }
+    if (quote !== null || close === -1) return [];
+    if (!/^[ \t]*(?:#[^\r\n]*)?$/.test(t.slice(close + 1))) return [];
+
+    const body = t.slice(1, close);
+    const items: string[] = [];
+    let start = 0;
+    quote = null;
+    for (let i = 0; i < body.length; i++) {
+      const char = body[i];
+      if (quote !== null) {
+        if (quote === "\"" && char === "\\") {
+          i++;
+        } else if (char === quote) {
+          quote = null;
+        }
+      } else if (char === "\"" || char === "'") {
+        quote = char;
+      } else if (char === ",") {
+        items.push(body.slice(start, i));
+        start = i + 1;
+      }
+    }
+    if (quote !== null) return [];
+    items.push(body.slice(start));
+    return items.map((item) => unquoteScalar(item)).filter((item) => item !== "");
   }
   // Bare scalar (rare) — treat as a one-item list.
   return [unquoteScalar(t)];
