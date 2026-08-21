@@ -611,12 +611,12 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
         }
 
         // The human approval menu appeared only after all evidence existed;
-        // report then committed the gate and advanced to v2's Contract Design.
+        // report then committed the gate and completed this terminal fixture.
         expect(approvalMenuSeen).toBe(true);
         expect(evidenceCompleteAtApproval).toBe(true);
         expect(result.auditEvents).toContain("GATE_APPROVED");
         expect(result.auditEvents).toContain("STAGE_COMPLETED");
-        expect(result.auditEvents).not.toContain("WORKFLOW_COMPLETED");
+        expect(result.auditEvents).toContain("WORKFLOW_COMPLETED");
         expect(eventCount(projectDir, "GATE_APPROVED")).toBe(approvedBefore + 1);
         expect(
           result.toolResults.some((toolResult) =>
@@ -626,10 +626,7 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
         ).toBe(false);
 
         expect(result.stateFile).toBeDefined();
-        expect(readStateField(result.stateFile as string, "Status")).toBe("Running");
-        expect(readStateField(result.stateFile as string, "Current Stage")).toBe(
-          "contract-design",
-        );
+        expect(readStateField(result.stateFile as string, "Status")).toBe("Completed");
         expect(result.stateFile).toMatch(/- \[x\] user-stories — EXECUTE/);
       } finally {
         cleanupTestProject(projectDir);
