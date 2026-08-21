@@ -850,6 +850,8 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t185-stage-artifact-guard.test.ts",
     "integration/t188-plugin-compose.test.ts",
     "integration/t224-plugin-selection.test.ts",
+    "integration/t304-loopback-review-receipt-replay.test.ts",
+    "integration/t307-loopback-unitmajor-replay.test.ts",
     "integration/t21b.test.ts",
     "integration/t31-help.test.ts",
     "integration/t32-stage-graph-consistency.test.ts",

@@ -96,7 +96,7 @@ Before and during EVERY stage, verify:
 2. [ ] **Log non-gate questions via `aidlc-log.ts`** — before presenting a structured question that is not an approval gate: `bun .claude/tools/aidlc-log.ts decision --stage <slug> --decision "<summary>" --options "<csv>"`. After response: `bun .claude/tools/aidlc-log.ts answer --stage <slug> --details "<exact choice>"`. Approval choices go only through `aidlc-orchestrate.ts report`. (§2, §3)
 3. [ ] **Never summarize User Input** — use exact option labels. (§2, §3)
 4. [ ] **Task transitions + state sync** — Mark previous task `completed`, then `TaskUpdate({ ..., status: "in_progress", activeForm: "Running [Stage] [slug]" })`. The `[slug]` suffix triggers the PostToolUse hook that syncs the state file. `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` auto-advances to the next in-scope stage (or completes the workflow on the final stage) — do NOT call `advance` separately after approval. (§4)
-5. [ ] **Stage ritual is ATOMIC** — once a stage starts, EVERY step in its protocol fires: questions → artifact → reviewer (if declared) → learnings → gate. No step is skippable based on inferred user intent. "Skip to stage X" means skip INTERMEDIATE stages, NOT shortcut the TARGET stage's ritual. If a user jumps forward from a stage at its gate, the current stage's learnings ritual (§13) MUST fire before the jump executes.
+5. [ ] **Stage ritual is ATOMIC** — once a stage starts, EVERY step in its protocol fires: questions → artifact → reviewer (if declared) → learnings → gate. No step is skippable based on inferred user intent. "Skip to stage X" means skip INTERMEDIATE stages, NOT shortcut the TARGET stage's ritual. If a user jumps forward from a stage at its gate, the current stage's learnings ritual (§13) MUST fire before the jump executes. EXCEPTION: the Build-and-Test failure loop-back in the construction protocol module (`aidlc-common/protocols/stage-protocol-construction.md`) jumps back from a deliberately in-flight failed stage; its §13 learnings ritual defers to the eventual passing run.
 6. [ ] **Autonomy is NEVER inferred** — a user saying "go with recommended" or "pick the best answers" for one stage is a ONE-TIME instruction for THAT stage only. It does NOT create a standing rule. The next stage starts fresh with its declared autonomy mode. The ONLY way to get autonomous mode is: (a) the directive explicitly carries `autonomy: autonomous`, OR (b) the human explicitly says "run this autonomous" for the specific stage being proposed. NEVER carry forward an autonomy inference from a previous stage. NEVER self-answer questions without explicit permission for THIS stage.
 
 ---
@@ -110,7 +110,7 @@ Every stage (except the 3 stages in the Initialization phase: workspace-scaffold
 When you present an approval gate question, you MUST end your turn immediately and wait for the user's explicit response. Do NOT call any tool until the user has typed their choice in a new message. An approval gate is a mandatory human checkpoint that cannot be inferred, auto-approved, or skipped.
 
 ### NO EMERGENT BEHAVIOR RULE
-Construction and Operation stages MUST use standardized 2-option completion messages. DO NOT create 3-option menus or other emergent navigation patterns. Only IDEATION and INCEPTION stages may conditionally include a 3rd option (to add a previously skipped stage). Any deviation from these patterns is a protocol violation.
+Construction and Operation stages MUST use standardized 2-option completion messages. DO NOT create 3-option menus or other emergent navigation patterns. Only IDEATION and INCEPTION stages may conditionally include a 3rd option (to add a previously skipped stage). Any deviation from these patterns is a protocol violation. Two sanctioned carve-outs exist: the revision loop escape hatch (below) and the Build-and-Test failure loop-back in the construction protocol module (`aidlc-common/protocols/stage-protocol-construction.md`).
 
 ### For simple decisions (3 or fewer options):
 Present a structured question:
@@ -172,7 +172,8 @@ After the 2nd revision cycle (before the escape hatch activates), include a note
 
 ### Conditional construction protocol
 
-Walking-skeleton, ladder, Bolt-gate, and halt-and-ask behavior lives in
+Walking-skeleton, ladder, Bolt-gate, halt-and-ask, and Build-and-Test
+failure-loop-back behavior lives in
 `.claude/aidlc-common/protocols/stage-protocol-construction.md`.
 Load it on the first Construction-phase directive of the session and on every `invoke-swarm` (the engine lists it in `directive.protocol_modules`).
 ---
@@ -1057,3 +1058,37 @@ bun .claude/tools/aidlc-state.ts reuse-artifact <stage-slug> \
 The tool emits `ARTIFACT_REUSED` with the `Stage` / `Decision` / `Artifacts` fields — never hand-write `**Event**:` markdown blocks. See `docs/reference/12-state-machine.md` for the canonical emitter registry.
 
 This applies to ALL stages, not just jump targets — when the workflow replays forward after a backward jump, each subsequent stage will also encounter existing artifacts and offer the same choice.
+
+**Autonomous failure loop-back**: when the replay was initiated by the
+Build-and-Test failure loop-back in the construction protocol module
+(`aidlc-common/protocols/stage-protocol-construction.md`) under `Construction
+Autonomy Mode: autonomous`, the 3-option question is NOT presented (the loop is
+meant to run without the human). The conductor decides deterministically from
+the Loop-Back Log's planned fix: **Modify** for the unit(s) the fix targets,
+**Keep** for all other units, **Modify** for build-and-test itself on re-entry
+(Redo is forbidden there — it would erase the Loop-Back Log). Every
+auto-decision is still audited via `aidlc-state.ts reuse-artifact <slug>
+--decision <keep|modify> --artifacts "<comma-separated list of existing
+artifacts found>"`. In receipt mode apply those decisions inside each emitted
+per-unit replay between `unit start` and the fresh reviewer / `unit complete`;
+in artifact-only mode apply them through the pre-gate override. Either way,
+fresh current-attempt reviews for every applicable unit are mandatory before
+the replayed gate is auto-approved.
+
+**Gated failure loop-back**: the same override applies when the human chose
+"Retry with fix" at the Build-and-Test halt-and-ask in the construction
+protocol module (`aidlc-common/protocols/stage-protocol-construction.md`) under
+`Construction Autonomy Mode: gated` (or unset). Artifact-only workflows may
+arrive directly at the all-covered `gate: true` directive, where the ordinary
+Artifact Re-use question never fires; receipt-mode workflows instead receive
+per-unit replay directives. In the fast path, BEFORE presenting the gate,
+apply the planned fix through the override. In receipt mode, apply it inline
+while the units re-run. Both use **Modify** for the unit(s) the fix targets,
+**Keep** for all other units, and **Modify** for build-and-test itself on
+re-entry (Redo is forbidden there — it would erase the Loop-Back Log), audited
+via the same `aidlc-state.ts reuse-artifact <slug> --decision <keep|modify>
+--artifacts "<comma-separated list of existing artifacts found>"` call. After
+those decisions, dispatch the declared reviewer for every applicable unit and
+record fresh current-attempt reviews BEFORE presenting the settle/approval
+gate. The human already gave the confirming decision by choosing "Retry with
+fix"; this is not a second, silent autonomy inference.
