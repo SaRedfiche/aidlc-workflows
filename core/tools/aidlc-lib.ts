@@ -3964,6 +3964,12 @@ export function summaryConfirmationGuardDisabled(): boolean {
   return process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD === "1";
 }
 
+// Test-only bypass for synthetic gate-transition fixtures that intentionally
+// omit reviewer evidence. Completion paths never honor this variable.
+export function reviewerGateGuardDisabled(): boolean {
+  return process.env.AIDLC_SKIP_REVIEWER_GATE_GUARD === "1";
+}
+
 type SummaryConfirmationStage = Pick<
   StageEntry,
   | "slug"
@@ -4726,12 +4732,8 @@ export interface StaleReviewProgress {
 }
 
 export interface FreshReviewReceipts {
-  /** Verdict of the last fresh terminal receipt for the stage (any receipt,
-   *  unit-scoped included), or null when none survives. For NON-per-unit
-   *  stages a later declared-artifact write clears it; for per-unit stages it
-   *  mirrors the historical sawStageReview flag and is NOT cleared by unit
-   *  writes (only the floor resets it) - per-unit freshness lives in
-   *  unitVerdicts. */
+  /** Verdict of the last fresh terminal receipt without a Unit field, or null
+   *  when none survives. Per-unit receipts live only in unitVerdicts. */
   stageVerdict: ReviewVerdict | null;
   /** A terminal stage-level receipt existed in the current attempt but was
    *  invalidated by a later declared-artifact write or fingerprint mismatch. */
@@ -5038,7 +5040,12 @@ export function freshReviewReceipts(
   const unitPending = new Map<string, PendingReviewProgress>();
   const pendingRequests = new Map<
     string,
-    { unit: string | undefined; iteration: number; recovery: boolean }
+    {
+      unit: string | undefined;
+      iteration: number;
+      recovery: boolean;
+      fingerprint: string | null;
+    }
   >();
   let stageVerdict: ReviewVerdict | null = null;
   let newestSourceFingerprint: string | null = null;
@@ -5068,27 +5075,39 @@ export function freshReviewReceipts(
         stageVerdict = null;
         stageIteration = null;
         stageReceiptRecovery = false;
-      } else if (targetUnit === null) {
-        for (const unit of unitVerdicts.keys()) {
-          unitStale.add(unit);
-          unitStaleProgress.set(unit, {
-            nextIteration: (unitIterations.get(unit) ?? 0) + 1,
-            recoverySpent: unitReceiptRecovery.get(unit) ?? false,
-          });
-        }
-        unitVerdicts.clear();
-        unitIterations.clear();
-        unitReceiptRecovery.clear();
       } else {
-        if (unitVerdicts.delete(targetUnit)) {
-          unitStale.add(targetUnit);
-          unitStaleProgress.set(targetUnit, {
-            nextIteration: (unitIterations.get(targetUnit) ?? 0) + 1,
-            recoverySpent: unitReceiptRecovery.get(targetUnit) ?? false,
-          });
+        if (stageVerdict !== null) {
+          stageStale = true;
+          stageStaleProgress = {
+            nextIteration: (stageIteration ?? 0) + 1,
+            recoverySpent: stageReceiptRecovery,
+          };
         }
-        unitIterations.delete(targetUnit);
-        unitReceiptRecovery.delete(targetUnit);
+        stageVerdict = null;
+        stageIteration = null;
+        stageReceiptRecovery = false;
+        if (targetUnit === null) {
+          for (const unit of unitVerdicts.keys()) {
+            unitStale.add(unit);
+            unitStaleProgress.set(unit, {
+              nextIteration: (unitIterations.get(unit) ?? 0) + 1,
+              recoverySpent: unitReceiptRecovery.get(unit) ?? false,
+            });
+          }
+          unitVerdicts.clear();
+          unitIterations.clear();
+          unitReceiptRecovery.clear();
+        } else {
+          if (unitVerdicts.delete(targetUnit)) {
+            unitStale.add(targetUnit);
+            unitStaleProgress.set(targetUnit, {
+              nextIteration: (unitIterations.get(targetUnit) ?? 0) + 1,
+              recoverySpent: unitReceiptRecovery.get(targetUnit) ?? false,
+            });
+          }
+          unitIterations.delete(targetUnit);
+          unitReceiptRecovery.delete(targetUnit);
+        }
       }
       continue;
     }
@@ -5116,6 +5135,7 @@ export function freshReviewReceipts(
         unit,
         iteration,
         recovery,
+        fingerprint: auditBlockField(e.block, "Artifact Fingerprint"),
       });
       continue;
     }
@@ -5124,9 +5144,13 @@ export function freshReviewReceipts(
     const request = pendingRequests.get(requestKey);
     if (!request || !pendingRequests.delete(requestKey)) continue;
     const recordedFingerprint = auditBlockField(e.block, "Artifact Fingerprint");
+    const requestedFingerprint = request.fingerprint;
     const artifactFingerprintUsable =
+      requestedFingerprint !== null &&
+      /^sha256:[0-9a-f]{64}$/.test(requestedFingerprint) &&
       recordedFingerprint !== null &&
-      /^sha256:[0-9a-f]{64}$/.test(recordedFingerprint);
+      /^sha256:[0-9a-f]{64}$/.test(recordedFingerprint) &&
+      recordedFingerprint === requestedFingerprint;
     const currentFingerprint = reviewArtifactFingerprint(
       projectDir,
       stage,
@@ -5136,7 +5160,7 @@ export function freshReviewReceipts(
     const fingerprintUsable =
       artifactFingerprintUsable && currentFingerprint !== null;
     const fingerprintMatches =
-      fingerprintUsable && recordedFingerprint === currentFingerprint;
+      fingerprintUsable && requestedFingerprint === currentFingerprint;
     const terminalVerdict = request.recovery
       ? verdict
       : terminalReviewVerdict(
@@ -5165,13 +5189,14 @@ export function freshReviewReceipts(
       const pending: PendingReviewProgress = fingerprintMatches
         ? { state: "repair-required", iteration }
         : { state: "outstanding", iteration: iteration + 1 };
-      stageVerdict = null;
-      stageIteration = null;
-      stagePending = pending;
       if (unit) {
         unitVerdicts.delete(unit);
         unitIterations.delete(unit);
         unitPending.set(unit, pending);
+      } else {
+        stageVerdict = null;
+        stageIteration = null;
+        stagePending = pending;
       }
       continue;
     }
@@ -5193,10 +5218,6 @@ export function freshReviewReceipts(
       }
       continue;
     }
-    stageVerdict = terminalVerdict;
-    stageIteration = iteration;
-    stageReceiptRecovery = request.recovery;
-    stagePending = null;
     if (unit) {
       unitVerdicts.set(unit, terminalVerdict);
       unitStale.delete(unit);
@@ -5205,6 +5226,10 @@ export function freshReviewReceipts(
       unitReceiptRecovery.set(unit, request.recovery);
       unitPending.delete(unit);
     } else {
+      stageVerdict = terminalVerdict;
+      stageIteration = iteration;
+      stageReceiptRecovery = request.recovery;
+      stagePending = null;
       stageStale = false;
       stageStaleProgress = null;
     }
@@ -5215,13 +5240,14 @@ export function freshReviewReceipts(
       state: "retry-required",
       iteration: request.iteration,
     };
-    stageVerdict = null;
-    stageIteration = null;
-    stagePending = pending;
     if (request.unit) {
       unitVerdicts.delete(request.unit);
       unitIterations.delete(request.unit);
       unitPending.set(request.unit, pending);
+    } else {
+      stageVerdict = null;
+      stageIteration = null;
+      stagePending = pending;
     }
   }
 

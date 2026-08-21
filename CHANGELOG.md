@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.52] - 2026-08-21
+
+Reviewer-bearing approval gates and review receipts now prove that the configured reviewer inspected the current artifact before the gate is presented. **Upgrade:** re-copy your `dist/<harness>/` shell so every harness receives the strengthened state and review-log guards. Closes #551.
+
+* `report --result awaiting-approval` validates both new and already-open gates; direct rejection from an active stage records `Active → Revising` without fabricating an approval-gate event.
+* `report --result revised` and approve-time revision recovery persist `[R]` until a fresh post-rejection review passes and the normal gate re-entry is recorded.
+* `aidlc-log.ts review` fingerprints artifacts when dispatching and refuses a verdict if the bytes changed before completion; only `--retry-pending` may repeat an outstanding ordinal.
+* Per-unit reviews require membership in the authoritative Unit DAG, or a matching active Bolt for legacy no-DAG swarms; Unit-scoped receipts can no longer satisfy a no-DAG stage-level fallback.
+
 ## [2.6.51] - 2026-08-21
 
 Steering continuation tokens are now single-use on every harness: Claude, Codex, Copilot, Cursor, Kiro CLI, Kiro IDE, and opencode share one engine-owned, crash-safe continuation cursor in the active-directive marker, closing the sessionless same-token replay carve-out accepted in PR #749 (issue #762). **Upgrade:** replace the whole `dist/<harness>/` shell in one quiescent swap (no AI-DLC command or hook running) - mixed old/new tool files are unsupported - then run a fresh `next`; a matching in-flight token instead migrates atomically. Rolling back to an older release restores its sessionless replay behavior until re-upgraded.

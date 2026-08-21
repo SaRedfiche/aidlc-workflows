@@ -125,11 +125,11 @@ stateDiagram-v2
 | Transition | Trigger | Emitter |
 |---|---|---|
 | `Pending → Active` | Engine routes after the previous reported outcome | `tools/aidlc-state.ts` (internal emitter) |
-| `Active → AwaitingApproval` | `aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval` | `tools/aidlc-state.ts` (internal emitter) |
+| `Active → AwaitingApproval` | `aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval`; reviewer-bearing stages require a fresh terminal receipt before gate opening | `tools/aidlc-state.ts` (internal emitter) |
 | `AwaitingApproval → Completed` | `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` | `tools/aidlc-state.ts` (internal emitter) |
 | `AwaitingApproval → Revising` | `aidlc-orchestrate.ts report --stage <slug> --result rejected --user-input <text>` | `tools/aidlc-state.ts` (internal emitter) |
 | `Active → Revising` | The same rejected report when gate-open recovery is needed | `tools/aidlc-state.ts` (internal emitter) |
-| `Revising → AwaitingApproval` | `aidlc-orchestrate.ts report --stage <slug> --result revised` | `tools/aidlc-state.ts` (internal emitter) |
+| `Revising → AwaitingApproval` | `aidlc-orchestrate.ts report --stage <slug> --result revised`; reviewer-bearing stages require a fresh post-rejection terminal receipt before gate re-entry | `tools/aidlc-state.ts` (internal emitter) |
 | `{Active,Revising} → Skipped` | `aidlc-orchestrate.ts report --stage <slug> --result skipped --reason <text>` | `tools/aidlc-state.ts` (internal routed-skip emitter) |
 | `Pending → Skipped` | Scope composition or `aidlc-jump execute` | `tools/aidlc-utility.ts`, `tools/aidlc-jump.ts` |
 
@@ -165,6 +165,19 @@ outside `aidlc/` and the harness dir. A failure writes nothing. Optional outputs
 do not participate. For `produces_kinds`, units whose kind prunes the required
 set to zero owe no artifact; any applicable unit remains strict. Bypass with
 `AIDLC_SKIP_ARTIFACT_GUARD=1`.
+
+**Reviewer gate guard (issue #551).** A reviewer-bearing stage cannot enter
+`AwaitingApproval` through `gate-start` or `revise` until its configured
+reviewer has a fresh terminal `REVIEW_COMPLETED` receipt. The same receipt
+remains mandatory on all four completion paths. Re-reporting an already-open
+gate re-runs these guards without writing a duplicate transition. A rejection
+reported directly from `Active` moves to `Revising` without fabricating a
+`STAGE_AWAITING_APPROVAL` row. Synthetic transition tests that deliberately
+isolate another guard may set
+`AIDLC_SKIP_REVIEWER_GATE_GUARD=1`; this bypass applies only to gate opening,
+never to `approve`, `advance`, `finalize`, or `complete-workflow`. The adjacent
+summary-confirmation test bypass is
+`AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1`.
 
 **Ensemble evidence gate.** On a `mob` or `subagent`-with-supports stage, the
 report path refuses `awaiting-approval`, `revised`, and `approved` while a
@@ -210,7 +223,9 @@ gate without first reporting rejection, the `approved` report reconciles the
 missing `GATE_REJECTED` + `STAGE_REVISING` pair before completion when audit
 evidence proves a post-gate human turn followed by an artifact write. The
 backfilled rows carry `Recovered: true`; reviewer writes before the human turn
-do not count. Bypass with `AIDLC_SKIP_REVISION_BACKSTOP=1`.
+do not count. Reviewer-bearing stages persist `[R]` after that recovered
+rejection and require a fresh review plus the normal `revised` report before
+the gate can reopen. Bypass with `AIDLC_SKIP_REVISION_BACKSTOP=1`.
 
 **Park (issue #365/#367).** `aidlc-orchestrate park` writes a `Parked` / `Parked At Stage` runtime marker (via `aidlc-state.ts park`, which emits `WORKFLOW_PARKED`) without advancing any stage; a subsequent plain `next` re-emits a terminal `parked` directive and the Stop hook lets the turn end, so a long workflow can pause across sessions instead of rubber-stamping the remaining stages to reach `done`. `/aidlc --resume` clears the marker (`unpark` emits `WORKFLOW_UNPARKED`) before continuing. An unattended autonomous Construction run (`Construction Autonomy Mode: autonomous`) refuses to park: both the tool and the Stop hook's `parked` allow decline under autonomous mode, so the loop keeps moving with no human to resume it.
 
@@ -230,9 +245,8 @@ report. The conductor uses this to detect the revision-loop escape hatch
 
 When a revision changes a `produces[]` artifact on a stage whose directive
 carries a reviewer, the conductor re-runs the `stage-protocol-reviewer.md` §12a step before
-reporting `revised` (stage-protocol Part 0) — the engine's own checks on the
-`revised` report remain structural (completion evidence + artifact existence);
-the reviewer re-run is conductor prose, not an engine gate.
+reporting `revised` (stage-protocol Part 0). The engine verifies the fresh
+terminal receipt before accepting the `revised` report and re-opening the gate.
 
 ---
 
@@ -302,8 +316,8 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 | `DECISION_RECORDED` | `tools/aidlc-log.ts` | Fires before a non-gate `AskUserQuestion` so options are captured |
 | `QUESTION_ANSWERED` | `tools/aidlc-log.ts` | Fires after a non-gate question response; approval choices are lifecycle events owned by `report` |
 | `SUMMARY_CONFIRMATION_RECORDED` | `tools/aidlc-log.ts` | Human-backed consolidated-summary receipt; bound to the questions-file digest and reserved from public audit append |
-| `REVIEW_REQUESTED` | `tools/aidlc-log.ts` | Fires when the conductor dispatches the reviewer defined by `stage-protocol-reviewer.md` §12a |
-| `REVIEW_COMPLETED` | `tools/aidlc-log.ts` | Fires only after a matching positive-iteration `REVIEW_REQUESTED` and records an `Artifact Fingerprint` over the declared output paths and bytes. `READY` is terminal immediately; advisory `NOT-READY` is terminal after its normal-flow pass; adversarial `NOT-READY` is terminal only at `reviewer_max_iterations` (earlier rows expose repair/retry progress to a wave). A terminal receipt invalidated by a later declared-output or source write gets one distinct recovery request at the next ordinal; either recovery verdict is terminal, and a second invalidation requires human reset. `workspace_requires` stages also record `Source Fingerprint` (a git-native source hash, or `unbindable`); modern unbindable receipts fail closed, while fieldless pre-#629 rows retain migration behavior. All four completion routes enforce current-attempt artifact evidence and the newest source binding. |
+| `REVIEW_REQUESTED` | `tools/aidlc-log.ts` | Fires when the conductor dispatches the reviewer defined by `stage-protocol-reviewer.md` §12a, records the artifact fingerprint sent for review, and rejects a second normal request while one is unmatched. `--unit` must name a member of the authoritative DAG; a legacy no-DAG swarm may instead prove the exact Unit through a matching, still-open tool-owned Bolt attempt. `--retry-pending` re-dispatches the exact unmatched ordinal. |
+| `REVIEW_COMPLETED` | `tools/aidlc-log.ts` | Fires only after a matching positive-iteration `REVIEW_REQUESTED` whose request fingerprint still equals both the verdict fingerprint and the current declared output paths and bytes; a write during review requires re-dispatch before a verdict can be recorded. `READY` is terminal immediately; advisory `NOT-READY` is terminal after its normal-flow pass; adversarial `NOT-READY` is terminal only at `reviewer_max_iterations` (earlier rows expose repair/retry progress to a wave). A terminal receipt invalidated by a later declared-output or source write gets one distinct recovery request at the next ordinal; either recovery verdict is terminal, and a second invalidation requires human reset. `workspace_requires` stages also record `Source Fingerprint` (a git-native source hash, or `unbindable`); modern unbindable receipts fail closed, while fieldless pre-#629 rows retain migration behavior. Gate-opening transitions (`gate-start` and `revise`) and all completing state transitions (`approve`, `advance`, `finalize`, and `complete-workflow`) require a matching terminal receipt from the current workflow attempt; per-unit stages require one receipt per applicable unit, while only a Unit-less receipt can satisfy a no-DAG stage-level fallback. Autonomous swarm finalization additionally requires each configured unit's paired terminal receipt after its Bolt started, current artifact and source bindings, and every applicable required artifact to exist as a file in that Bolt worktree; absent optional outputs remain valid fingerprint entries. |
 | `PIPELINE_LINK_COMPLETED` | `tools/aidlc-log.ts` | Fires after one declared pipeline link returns. Carries `Stage`, `Link`, and `Position k/N`; multi-repo chains also carry `Repo`, and isolated runs carry `Workflow=single-stage:<slug>`. The tool refuses undeclared, duplicate, or out-of-order links within that receipt scope. Main-workflow gate-start, approval, advance, finalize, and workflow completion ignore isolated rows and require every scanned-repo current-attempt link receipt. |
 
 ### Unit lifecycle (inline per-unit Construction stages)

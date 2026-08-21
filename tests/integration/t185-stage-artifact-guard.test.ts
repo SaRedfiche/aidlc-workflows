@@ -59,14 +59,12 @@ const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const MID_IDEATION = "state-mid-ideation.md"; // Current Stage: feasibility
 
-function reviewCodeGen(proj: string, unit: string): void {
+function reviewCodeGen(proj: string, unit?: string): void {
   const args = [
     LOG,
     "review",
     "--stage",
     "code-generation",
-    "--unit",
-    unit,
     "--reviewer",
     "aidlc-architecture-reviewer-agent",
     "--iteration",
@@ -74,8 +72,12 @@ function reviewCodeGen(proj: string, unit: string): void {
     "--project-dir",
     proj,
   ];
+  if (unit) args.splice(4, 0, "--unit", unit);
   for (const suffix of [[], ["--verdict", "READY"]]) {
-    spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
+    const result = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
+    if ((result.status ?? -1) !== 0) {
+      throw new Error(`reviewCodeGen failed: ${result.stdout}${result.stderr}`);
+    }
   }
 }
 
@@ -103,6 +105,20 @@ function bypassed(proj: string, args: string[]): { rc: number; out: string } {
     AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
   };
   delete env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE;
+  const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
+    encoding: "utf-8",
+    env,
+  });
+  return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+}
+
+function gateSetupBypassed(proj: string, args: string[]): { rc: number; out: string } {
+  const env = {
+    ...process.env,
+    AIDLC_SKIP_ARTIFACT_GUARD: "1",
+    AIDLC_SKIP_REVIEWER_GATE_GUARD: "1",
+    AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+  };
   const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
     encoding: "utf-8",
     env,
@@ -468,6 +484,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
 
     test("REFUSES code-generation with planning docs but no source code", () => {
       stageCodeGenDocsOnly();
+      reviewCodeGen(proj);
       bypassed(proj, ["gate-start", "code-generation"]);
       const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
       expect(r.rc).not.toBe(0);
@@ -477,8 +494,8 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     test("PASSES code-generation once real source exists outside aidlc/", () => {
       stageCodeGenDocsOnly();
       writeWorkspaceFile(proj, "src/auth/login.ts"); // outside aidlc/ + harness
+      reviewCodeGen(proj);
       guarded(proj, ["gate-start", "code-generation"]);
-      reviewCodeGen(proj, UNIT);
       const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
       expect(r.rc).toBe(0);
     });
@@ -497,6 +514,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
       writeRecordDoc(proj, "construction/code-generation/code-summary.md");
       writeWorkspaceFile(proj, "src/stage-level.ts");
 
+      reviewCodeGen(proj);
       const r = guarded(proj, ["gate-start", "code-generation"]);
       expect(r.rc).toBe(0);
     });
@@ -611,8 +629,8 @@ describe("t185: stage-completion artifact guard (#366)", () => {
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-summary.md`);
     }
     function approveCodeGen(): { rc: number; out: string } {
+      reviewCodeGen(proj);
       bypassed(proj, ["gate-start", "code-generation"]);
-      reviewCodeGen(proj, UNIT);
       return guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
     }
 
@@ -746,7 +764,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
 
     test("REFUSES while any DAG unit is unconverged (fails closed)", () => {
       seedSwarm([UNITS[0]]); // one of two converged
-      bypassed(proj, ["gate-start", "code-generation"]);
+      gateSetupBypassed(proj, ["gate-start", "code-generation"]);
       const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
       expect(r.rc).not.toBe(0);
       expect(r.out).toContain("Refusing to complete");

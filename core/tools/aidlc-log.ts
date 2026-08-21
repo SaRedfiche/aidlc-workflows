@@ -14,6 +14,7 @@ import {
   activeIntent,
   activeSpace,
   auditBlockField,
+  boltSlugForUnit,
   emitError,
   errorMessage,
   extractMarkdownSection,
@@ -34,6 +35,7 @@ import {
   readStateFile,
   recordDir,
   reviewArtifactFingerprint,
+  resolveBoltDag,
   resolveProjectDir,
   resolveReviewClass,
   selfAttributedDecisionMarker,
@@ -668,6 +670,7 @@ type ReviewAttemptSummary = {
   boltBatch: string | null;
   boltSlug: string | null;
   pendingIterations: Set<number>;
+  pendingFingerprints: Map<number, string | null>;
   recoveryIteration: number | null;
   recoverySpent: boolean;
 };
@@ -684,7 +687,6 @@ function reviewAttemptSummary(
   reviewer: string,
   unit: string | undefined,
   workflow: string | undefined,
-  trackBoltLifecycle: boolean,
 ): ReviewAttemptSummary {
   const relevant = new Set([
     "WORKFLOW_STARTED",
@@ -721,6 +723,7 @@ function reviewAttemptSummary(
   let boltStarted = false;
   let boltBatch: string | null = null;
   let boltSlug: string | null = null;
+  const expectedBoltSlug = unit === undefined ? null : boltSlugForUnit(unit);
   for (let i = 0; i < events.length; i++) {
     const entry = events[i];
     if (workflow !== undefined) {
@@ -742,9 +745,9 @@ function reviewAttemptSummary(
     }
     if (
       entry.event === "BOLT_STARTED" &&
-      trackBoltLifecycle &&
       unit !== undefined &&
-      auditBlockField(entry.block, "Bolt slug") === unit
+      auditBlockField(entry.block, "Bolt names") === unit &&
+      auditBlockField(entry.block, "Bolt slug") === expectedBoltSlug
     ) {
       floor = i;
       boltStarted = true;
@@ -753,10 +756,9 @@ function reviewAttemptSummary(
       continue;
     }
     if (
-      trackBoltLifecycle &&
       (entry.event === "BOLT_COMPLETED" || entry.event === "BOLT_FAILED") &&
-      unit !== undefined &&
-      auditBlockField(entry.block, "Bolt slug") === unit
+      expectedBoltSlug !== null &&
+      auditBlockField(entry.block, "Bolt slug") === expectedBoltSlug
     ) {
       floor = i;
       boltStarted = false;
@@ -767,18 +769,12 @@ function reviewAttemptSummary(
     if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
     if (entry.event === "GATE_REJECTED") {
       floor = i;
-      boltStarted = false;
-      boltBatch = null;
-      boltSlug = null;
     } else if (
       entry.event === "STAGE_STARTED" &&
       !unitMajor &&
       !auditBlockField(entry.block, "Workflow")?.startsWith("single-stage:")
     ) {
       floor = i;
-      boltStarted = false;
-      boltBatch = null;
-      boltSlug = null;
     }
   }
 
@@ -786,6 +782,7 @@ function reviewAttemptSummary(
   let recoveryIteration: number | null = null;
   let recoverySpent = false;
   const pendingIterations = new Set<number>();
+  const pendingFingerprints = new Map<number, string | null>();
   for (let i = floor + 1; i < events.length; i++) {
     const entry = events[i];
     if (
@@ -818,8 +815,13 @@ function reviewAttemptSummary(
         recoverySpent = true;
       }
       pendingIterations.add(iteration);
+      pendingFingerprints.set(
+        iteration,
+        auditBlockField(entry.block, "Artifact Fingerprint"),
+      );
     } else {
       pendingIterations.delete(iteration);
+      pendingFingerprints.delete(iteration);
     }
   }
   return {
@@ -828,6 +830,7 @@ function reviewAttemptSummary(
     boltBatch,
     boltSlug,
     pendingIterations,
+    pendingFingerprints,
     recoveryIteration,
     recoverySpent,
   };
@@ -948,8 +951,31 @@ function handleReview(args: string[]): void {
       flags.reviewer,
       flags.unit,
       fields.Workflow,
-      autonomousCandidate,
     );
+    if (flags.unit) {
+      const resolution = resolveBoltDag(pd);
+      if (resolution.state === "malformed") {
+        refuseReview(
+          `Cannot record review for "${flags.stage}" unit "${flags.unit}": the authoritative ` +
+            `unit DAG is ${resolution.reason} (${resolution.detail}). Fix ` +
+            "unit-of-work-dependency.md before recording a per-unit review.",
+        );
+      }
+      if (resolution.state === "none" && !attempt.boltStarted) {
+        refuseReview(
+          `Cannot record review for "${flags.stage}" unit "${flags.unit}": no authoritative ` +
+            "unit DAG exists and no matching active Bolt attempt was found. Remove --unit " +
+            "for a stage-level no-DAG review, or run swarm prepare before recording the " +
+            "per-unit review.",
+        );
+      }
+      if (resolution.state === "ok" && !resolution.units.includes(flags.unit)) {
+        refuseReview(
+          `Cannot record review for "${flags.stage}" unit "${flags.unit}": it is not present ` +
+            `in the authoritative unit DAG (${resolution.units.join(", ")}).`,
+        );
+      }
+    }
     const declared = node.review_class ?? "adversarial";
     let reviewClass: ReviewClass | null = null;
     let budget: number | null = null;
@@ -994,6 +1020,7 @@ function handleReview(args: string[]): void {
     try {
       withAuditLock(pd, () => {
         const {
+          node,
           attempt,
           budget,
           receipts,
@@ -1059,6 +1086,14 @@ function handleReview(args: string[]): void {
             );
           }
           fields.Retry = "pending-request";
+          const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit);
+          if (fingerprint === null) {
+            refuseReview(
+              `Cannot record review for "${flags.stage}": the declared artifact set could not be ` +
+                "fingerprinted. Resolve the active intent and readable artifact paths, then retry.",
+            );
+          }
+          fields["Artifact Fingerprint"] = fingerprint;
           emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);
           retried = true;
           return;
@@ -1096,6 +1131,14 @@ function handleReview(args: string[]): void {
         if (!recoveryEligible && budget !== null && expected > budget) {
           refuseReview(reviewBudgetMessage(flags.stage, expected, budget));
         }
+        if (attempt.pendingIterations.size > 0) {
+          const pending = [...attempt.pendingIterations].sort((a, b) => a - b);
+          refuseReview(
+            `Refusing REVIEW_REQUESTED for "${flags.stage}": iteration ${pending.join(", ")} ` +
+              "is still unmatched. Complete it, or repeat that exact ordinal with " +
+              "--retry-pending if the dispatch failed.",
+          );
+        }
         if (iteration !== expected) {
           refuseReview(
             `Refusing REVIEW_REQUESTED for "${flags.stage}": iteration ${iteration} ` +
@@ -1106,6 +1149,14 @@ function handleReview(args: string[]): void {
           fields.Recovery = "stale-receipt";
           recovery = "stale-receipt";
         }
+        const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit);
+        if (fingerprint === null) {
+          refuseReview(
+            `Cannot record review for "${flags.stage}": the declared artifact set could not be ` +
+              "fingerprinted. Resolve the active intent and readable artifact paths, then retry.",
+          );
+        }
+        fields["Artifact Fingerprint"] = fingerprint;
         emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);
       }, intent, space);
     } catch (e) {
@@ -1146,10 +1197,29 @@ function handleReview(args: string[]): void {
             `REVIEW_REQUESTED iteration ${iteration} exists in the current audit attempt.`,
         );
       }
+      const requestedFingerprint = attempt.pendingFingerprints.get(iteration);
+      if (
+        requestedFingerprint === undefined ||
+        requestedFingerprint === null ||
+        !/^sha256:[0-9a-f]{64}$/.test(requestedFingerprint)
+      ) {
+        refuseReview(
+          `Refusing REVIEW_COMPLETED for "${flags.stage}": the matching REVIEW_REQUESTED ` +
+            `iteration ${iteration} has no valid artifact fingerprint. Re-dispatch that exact ` +
+            "iteration with --retry-pending before recording the verdict.",
+        );
+      }
       const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit);
       if (fingerprint === null) {
         refuseReview(
           `Cannot record review for "${flags.stage}": the declared artifact set could not be fingerprinted. Resolve the active intent and readable artifact paths, then record the verdict again.`,
+        );
+      }
+      if (fingerprint !== requestedFingerprint) {
+        refuseReview(
+          `Refusing REVIEW_COMPLETED for "${flags.stage}": declared artifacts changed after ` +
+            `REVIEW_REQUESTED iteration ${iteration}. Re-dispatch that exact iteration with ` +
+            "--retry-pending so the reviewer inspects the current bytes.",
         );
       }
       fields["Artifact Fingerprint"] = fingerprint;

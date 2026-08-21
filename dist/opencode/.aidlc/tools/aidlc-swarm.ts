@@ -380,8 +380,13 @@ function reviewerReceiptError(
     };
   }
 
-  const pendingRequests = new Map<string, boolean>();
-  let latestTerminal: string | null = null;
+  const pendingRequests = new Map<
+    string,
+    { fingerprint: string | null; recovery: boolean }
+  >();
+  let latestTerminal:
+    | { block: string; requestedFingerprint: string | null }
+    | null = null;
   for (let i = boltStart + 1; i < events.length; i++) {
     const event = events[i];
     if (
@@ -398,21 +403,26 @@ function reviewerReceiptError(
     if (!iteration || !/^[1-9][0-9]*$/.test(iteration)) continue;
     const requestKey = `${unit}\u0000${iteration}`;
     if (event.event === "REVIEW_REQUESTED") {
-      pendingRequests.set(
-        requestKey,
-        auditBlockField(event.block, "Recovery") === "stale-receipt",
-      );
+      pendingRequests.set(requestKey, {
+        fingerprint: auditBlockField(event.block, "Artifact Fingerprint"),
+        recovery: auditBlockField(event.block, "Recovery") === "stale-receipt",
+      });
       continue;
     }
-    const recovery = pendingRequests.get(requestKey);
-    if (recovery === undefined || !pendingRequests.delete(requestKey)) continue;
+    const request = pendingRequests.get(requestKey);
+    if (!request || !pendingRequests.delete(requestKey)) continue;
     const rawVerdict = auditBlockField(event.block, "Verdict");
-    const verdict = recovery
+    const verdict = request.recovery
       ? rawVerdict === "READY" || rawVerdict === "NOT-READY"
         ? rawVerdict
         : null
       : terminalReviewVerdict(rawVerdict, iteration, reviewClass, maxIterations);
-    if (verdict !== null) latestTerminal = event.block;
+    if (verdict !== null) {
+      latestTerminal = {
+        block: event.block,
+        requestedFingerprint: request.fingerprint,
+      };
+    }
   }
 
   if (latestTerminal === null) {
@@ -424,7 +434,7 @@ function reviewerReceiptError(
   }
 
   const definition = resolveStage(stage);
-  const recordedArtifactFp = auditBlockField(latestTerminal, "Artifact Fingerprint");
+  const recordedArtifactFp = auditBlockField(latestTerminal.block, "Artifact Fingerprint");
   const currentArtifactFp = definition
     ? reviewArtifactFingerprint(wt, definition, unit, {
         requireRequiredArtifacts: true,
@@ -433,7 +443,10 @@ function reviewerReceiptError(
   if (
     recordedArtifactFp === null ||
     !/^sha256:[0-9a-f]{64}$/.test(recordedArtifactFp) ||
+    latestTerminal.requestedFingerprint === null ||
+    !/^sha256:[0-9a-f]{64}$/.test(latestTerminal.requestedFingerprint) ||
     currentArtifactFp === null ||
+    recordedArtifactFp !== latestTerminal.requestedFingerprint ||
     recordedArtifactFp !== currentArtifactFp
   ) {
     return {
@@ -444,7 +457,7 @@ function reviewerReceiptError(
   }
 
   if (!definition?.workspace_requires) return { error: null };
-  const recordedSourceFp = auditBlockField(latestTerminal, "Source Fingerprint");
+  const recordedSourceFp = auditBlockField(latestTerminal.block, "Source Fingerprint");
   if (process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1") return { error: null };
   if (recordedSourceFp === null) return { error: null }; // pre-binding migration
   const currentSourceFp = worktreeSourceFingerprint(wt);

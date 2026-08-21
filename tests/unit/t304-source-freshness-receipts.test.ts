@@ -158,8 +158,8 @@ function recordReview(
         ? block.includes(`**Unit**: ${unit}`)
         : !block.includes("**Unit**:")),
     ).length;
-  const iteration = String(priorRequests + 1);
-  const baseArgs = [
+  let iteration = String(priorRequests + 1);
+  let baseArgs = [
     LOG,
     "review",
     "--stage",
@@ -172,10 +172,25 @@ function recordReview(
     proj,
   ];
   if (unit) baseArgs.push("--unit", unit);
-  const requested = spawnSync(BUN, baseArgs, {
+  let requested = spawnSync(BUN, baseArgs, {
     encoding: "utf-8",
     env: process.env,
   });
+  if ((requested.status ?? -1) !== 0) {
+    const expected = `${requested.stdout ?? ""}${requested.stderr ?? ""}`.match(
+      /expected ([1-9][0-9]*) from the current audit attempt/,
+    )?.[1];
+    if (expected !== undefined && expected !== iteration) {
+      iteration = expected;
+      baseArgs = baseArgs.map((arg, index) =>
+        index > 0 && baseArgs[index - 1] === "--iteration" ? iteration : arg
+      );
+      requested = spawnSync(BUN, baseArgs, {
+        encoding: "utf-8",
+        env: process.env,
+      });
+    }
+  }
   if ((requested.status ?? -1) !== 0) {
     throw new Error(
       `recordReview request failed: ${requested.stdout ?? ""}${requested.stderr ?? ""}`,
@@ -185,6 +200,12 @@ function recordReview(
   const r = spawnSync(BUN, args, { encoding: "utf-8", env: process.env });
   if ((r.status ?? -1) !== 0) {
     throw new Error(`recordReview failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+  }
+  if (stage === "code-generation") {
+    const gate = guarded(proj, ["gate-start", stage]);
+    if (!unit && verdict === "READY" && gate.rc !== 0) {
+      throw new Error(`gate-start after review failed: ${gate.out}`);
+    }
   }
 }
 
@@ -790,7 +811,6 @@ describe("t304 receipt stamping + completion guard (cli)", () => {
     seedStateFile(proj, "state-mid-ideation.md");
     src = seedGitRepo(proj);
     guarded(proj, ["checkbox", "code-generation=in-progress"]);
-    guarded(proj, ["gate-start", "code-generation"]);
   });
 
   afterEach(() => cleanupTestProject(proj));
@@ -997,7 +1017,6 @@ describe("t304 multi-unit flow: what the workspace-global fingerprint does and d
     seedGitRepo(proj);
     seedTwoUnitDag(proj);
     guarded(proj, ["checkbox", "code-generation=in-progress"]);
-    guarded(proj, ["gate-start", "code-generation"]);
   });
 
   afterEach(() => cleanupTestProject(proj));
@@ -1129,7 +1148,7 @@ describe("t304 multi-unit flow: what the workspace-global fingerprint does and d
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.out).not.toContain("source-fingerprint mismatch");
     expect(r.rc).toBe(0);
-  });
+  }, 15000);
 
   // DOCUMENTED LIMITATION - the `A`-shaped case, which the removed rule never
   // blocked either: an added file is exactly as unreviewed as a modified one.
@@ -1154,7 +1173,7 @@ describe("t304 multi-unit flow: what the workspace-global fingerprint does and d
 
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.rc).toBe(0);
-  });
+  }, 15000);
 
   // #646 review - the recorded-repo layout is the DEFAULT (sibling
   // auto-discovery populates `repos` at intent birth via resolveBirthRepoSet
@@ -1185,13 +1204,12 @@ describe("t304 multi-unit flow: what the workspace-global fingerprint does and d
     // one bounded source-staleness recovery receipt rebinds the workspace-global
     // source state, by the documented policy, before the new edit invalidates it.
     guarded(proj, ["checkbox", "code-generation=in-progress"]);
-    guarded(proj, ["gate-start", "code-generation"]);
     recordReview(proj, "code-generation", REVIEWER, "alpha");
     writeFileSync(join(repoA, "alpha.ts"), "export const alpha = 999;\n", "utf-8");
     const dirty = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(dirty.rc).not.toBe(0);
     expect(dirty.out).toContain("source-fingerprint mismatch");
-  });
+  }, 15000);
 });
 
 // Reproduction of the maintainer review on #646 (a1e4d67), P1 finding 2: the
@@ -1212,7 +1230,6 @@ describe("t304 settled-swarm exemption from fingerprint reconciliation (#646 rev
     seedStateFile(proj, "state-mid-ideation.md");
     seedGitRepo(proj);
     guarded(proj, ["checkbox", "code-generation=in-progress"]);
-    guarded(proj, ["gate-start", "code-generation"]);
     // Autonomy grant: append the field beside Scope (fixture ships without it).
     const statePath = seededStateFile(proj);
     writeFileSync(

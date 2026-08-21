@@ -309,7 +309,10 @@ function recordReview(proj: string, unit?: string, graphPath?: string): void {
     proj,
     "REVIEW_REQUESTED",
     "2026-07-19T00:00:00.000Z",
-    identity,
+    {
+      ...identity,
+      "Artifact Fingerprint": fingerprint,
+    },
   );
   appendAuditEvent(
     proj,
@@ -463,6 +466,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
   test("awaiting-approval opens only after all contribution evidence exists", () => {
     const proj = seedProject("[-]");
     for (const agent of MOB_SUPPORTS) writeContribution(proj, agent);
+    recordReview(proj);
     const d = runReport(proj, [
       "--stage",
       "user-stories",
