@@ -1,6 +1,16 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.41] - 2026-08-21
+
+Workspace detection now follows nested container layouts far enough to find application roots such as `services/api/src/main.py`, preventing incremental scopes from misclassifying existing code as Greenfield and skipping Reverse Engineering. The deterministic fallback evaluates eligible container directories independently up to three levels below the workspace root, aggregates every Brownfield hit without double-counting source files, and reports each hit's relative path. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* `bugfix`, `refactor`, and `security-patch` workflows now detect codebases nested within up to three container levels instead of only checking top-level containers.
+* `Nested Root` audit data and `nestedRoot` detect output now use slash-joined workspace-relative paths such as `services/api`, comma-joining multiple detected roots in deterministic order.
+* Each visited directory is evaluated at its own depth, so sibling projects remain distinct and source files or manifests in a fourth arbitrary container remain outside the documented three-level boundary.
+* Hidden dirs, case-insensitive excluded and sample/documentation names, exact-case recognized source-directory names, symlinks, and non-directories are skipped at every container level; odd-case directories such as `SRC/` remain eligible containers.
+* The Greenfield advisory now describes the three-container-level detection boundary; routing remains unchanged when no code is found.
+
 ## [2.6.40] - 2026-08-21
 
 The shared Stop hook now preserves state-bound Resume waits before probing `next`, and its no-progress cap distinguishes real directive transitions from audit or timestamp noise. **Upgrade:** refresh your `dist/<harness>/` shell so the shared Stop hook and active-directive evidence reader are updated; Copilot's session-owned Stop path remains unchanged.
