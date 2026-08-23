@@ -275,7 +275,7 @@ All six swarm events emit from the swarm referee `aidlc-swarm.ts` — the determ
 
 Hooks emit events through the same library emitter as orchestrator-driven emissions (`appendAuditEntry` from `tools/aidlc-audit.ts`). Hook-emitted events are first-class taxonomy members (`ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `SUBAGENT_COMPLETED`, all `SESSION_*`) — there is no longer a separate "free-form hook entry" format. A hook with no active workflow in `cwd` is a no-op; session events only append to a workflow's audit.md when one exists.
 
-The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the canonical emit path: it refuses authority-bearing receipts (`HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `AUTONOMY_MODE_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`), which only their owning tool or hook may emit. Field names must be printable single-line labels matching the audit field grammar; values have every line terminator escaped. `append-raw` likewise refuses a body carrying an `**Event**:` line naming a taxonomy event and refuses line-breaking headings.
+The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the canonical emit path: it refuses authority-bearing receipts (`STAGE_COMPLETED`, `HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `AUTONOMY_MODE_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`), which only their owning tool or hook may emit. Field names must be printable single-line labels matching the audit field grammar; values have every line terminator escaped. `append-raw` likewise refuses a body carrying an `**Event**:` line naming a taxonomy event and refuses line-breaking headings.
 
 ## Format Standards
 
@@ -320,3 +320,30 @@ The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the can
 
 ---
 ```
+
+## Validation basis on `STAGE_COMPLETED`
+
+Main-workflow `STAGE_COMPLETED` entries may include a compact schema-2 receipt:
+
+```text
+**Validation Basis**: {"schema":2,"graphContract":"sha256:...","projectType":"brownfield","inputs":[{"artifact":"code-summary","producer":"code-generation","required":true,"instanceCount":12,"presentCount":12,"structureHash":"sha256:...","contentHash":"sha256:..."}],"outputs":[...]}
+```
+
+The resolver first computes the concrete runtime artifact-instance set using
+the Bolt DAG, unit kinds, `produces_kinds`, and canonical filename aliases. The
+receipt then stores deterministic stage-level aggregate fingerprints rather
+than every Unit/path row. Optional inputs are included only when at least one
+instance was present when completion was reported. This is a report-time
+snapshot: it does not prove which bytes the stage actually read. "Observed"
+dependency means recorded in this receipt, not runtime read instrumentation;
+changes before capture become the baseline and changes after capture are
+detectable.
+
+If receipt capture is unavailable, the owning completion tool still appends a
+receipt-less `STAGE_COMPLETED` with `Validation Warning`. That completion is
+untracked and advisory rather than a reason to abort the state transition.
+
+The latest receipt remains useful as dependency evidence after a stage is
+reopened, while only a completion in the current attempt counts as current
+tracking for the stage itself. A schema-1, concrete-instance schema-2 Draft, or
+receipt-less completion fails open until the stage completes with this schema.

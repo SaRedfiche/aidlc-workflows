@@ -873,3 +873,30 @@ the revised approach.
 - [Hooks and Tools](06-hooks-and-tools.md) -- hook system, audit event taxonomy
 - [Knowledge System](10-knowledge-system.md) -- 6-step knowledge loading order
 - [Diagrams](diagrams.md) -- all Mermaid diagrams consolidated
+
+## Completed-stage validity advisory
+
+Immediately before normal happy-path routing, `next` performs a read-only
+validity inspection. Runtime artifact instances are resolved through the active
+Bolt DAG, `produces_kinds`, and the shared canonical filename resolver, then
+compared through compact stage-level structure/content fingerprints.
+
+Direct mismatches project `stale`. Propagation follows artifact dependencies
+observed in completed consumer receipts, so absent optional inputs do not cause
+false invalidation. If any completed result is stale or needs revalidation, the
+engine keeps the normal directive kind and attaches a machine-readable
+`stage_validity` advisory. The conductor surfaces its warning, then continues
+routing. Inspection-unavailable stages remain a per-turn advisory because they
+need attention. Receipt-less histories are reported as untracked by
+`/aidlc --status` only, so migration does not add a warning to every `next`.
+
+The suggested recovery uses the existing explicit jump path:
+
+```text
+/aidlc --stage <earliest-affected-stage>
+```
+
+A successful re-completion writes a fresh receipt. Existing workflows and prior
+Draft receipt formats remain fail-open until their stages complete again. Full
+inspection runs on `next` and explicit `--status`, never on each statusline
+render.
