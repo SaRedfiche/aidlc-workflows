@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.65] - 2026-08-23
+
+Stage graph compilation now rejects ambiguous producers before consumers can resolve an artifact by file order. **Upgrade:** refresh your `dist/<harness>/` shell; existing custom stages or plugins that declare the same consumed artifact in `produces` or `optional_produces` must rename one output or update the consumer.
+
+* `aidlc-graph compile` now reports `Duplicate producers for consumed artifact`, naming every producing stage file and slug plus one consuming stage.
+* Shared artifact names remain valid when no stage consumes them, including the shipped multi-stage `traceability` output pattern.
+
 ## [2.6.64] - 2026-08-23
 
 The Kiro IDE distribution now ships only IDE-native agent and permission surfaces. **Upgrade:** re-copy `dist/kiro-ide/` into your project, then remove any `.kiro/agents/aidlc.json`, `.kiro/agents/aidlc-*-agent.json`, and `.kiro/settings/cli.json` files left by an older overlay copy.
