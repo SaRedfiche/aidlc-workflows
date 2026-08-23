@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.60] - 2026-08-23
+
+Kiro CLI and IDE agent Markdown no longer carries the unsupported Claude-only `disallowedTools` key; nested delegation remains blocked by Kiro's native agent tool configuration. **Upgrade:** refresh your `dist/kiro/` or `dist/kiro-ide/` shell, and re-run compose for installed Kiro plugins. An unchanged same-plugin persona is migrated automatically; if doctor reports an already-composed unsupported value, fix the plugin source, remove the named installed persona, and re-run compose.
+
+* Kiro packaging requires exactly one authored `disallowedTools: Task` denial, then omits that inert line from all 14 projected agent personas on both Kiro distributions.
+* Kiro plugin composition strips the supported `Task` denial from new personas, migrates exact unchanged same-plugin legacy copies without clobbering edits, and drop-logs duplicate, unsupported, or already-composed invalid values with recovery guidance.
+
 ## [2.6.56] - 2026-08-23
 
 Kiro CLI agent-v1 hooks retain the literal selectors required by the host's canonical-name/alias glob semantics, while the adapter now normalizes selected payloads before shared guards and observers run. **Upgrade:** re-copy `dist/kiro/` into the project.
