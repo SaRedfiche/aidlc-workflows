@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.86] - 2026-08-25
+
+Code Generation source-freshness receipts now bind supported non-Git and missing-Git workspaces without weakening per-Unit attribution or autonomous swarm Source Commits. **Upgrade:** refresh your `dist/<harness>/` shell. In-flight `workspace_requires` reviews from earlier versions must be reviewed once more before completion because the source identity format changed.
+
+* The source boundary is one bounded filesystem identity and canonical per-path listing, so unchanged source remains stable when repository metadata or the Git executable appears or disappears. Ordinary and ignored application bytes, external source-symlink targets, workspace-roof files, and registered binary or extensionless source are covered; framework state, VCS metadata, dependency/cache paths, and unregistered generated-output directories remain excluded.
+* Real source under `build/`, `coverage/`, `dist/`, `logs/`, `target/`, or `tmp/` can be declared in root `.aidlc-source-paths.json` with schema `{"version":1,"paths":[...]}`. Invalid, unreadable, unstable, or over-budget boundaries record `unbindable` and fail closed.
+* Autonomous swarm snapshots now use that exact boundary for footprint verification and immutable Source Commits. Clean-filter raw-byte rewriting is restricted to filesystem-included regular paths, so excluded generated or framework files cannot re-enter a Source Commit; registered generated source still carries the reviewed raw bytes.
+* New-submodule recovery shares one 30-second cumulative deadline and a 32-proof cap across the full `finalize` call, while retaining the existing per-command, advertised-ref, refspec-size, recursion, and materialized-checkout bounds.
+
 ## [2.6.85] - 2026-08-25
 
 Kiro now relays deterministic command output through a UTF-8 plain-text hook boundary instead of the Windows shell-result transport that can append terminal debris or corrupt glyphs. **Upgrade:** re-copy `dist/kiro/` or `dist/kiro-ide/` into the project; Kiro IDE overlay installs must include the new `aidlc-terminal-command*` hook registrations.

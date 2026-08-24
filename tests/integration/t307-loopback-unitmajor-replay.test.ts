@@ -9,6 +9,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { sourceBaselineAuditFields } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -94,7 +96,6 @@ function run(
       AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
       AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
       AIDLC_SKIP_REVISION_BACKSTOP: "1",
-      AIDLC_SKIP_SOURCE_FRESHNESS: "1",
     },
   });
   const stdout = result.stdout ?? "";
@@ -122,7 +123,6 @@ function next(args: string[] = []): Directive {
       AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
       AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
       AIDLC_SKIP_REVISION_BACKSTOP: "1",
-      AIDLC_SKIP_SOURCE_FRESHNESS: "1",
     },
   });
   expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
@@ -208,6 +208,16 @@ function seedProject(unitMajor: boolean): void {
   project = createOrchestrationTestProject();
   writeFileSync(seededStateFile(project), stateContent(unitMajor), "utf-8");
   seedBoltDag(project, UNITS);
+  appendAuditEntry(
+    "WORKFLOW_STARTED",
+    {
+      Scope: "feature",
+      ...sourceBaselineAuditFields(project, "code-generation"),
+    },
+    project,
+  );
+  const boundarySecond = Math.floor(Date.now() / 1000);
+  while (Math.floor(Date.now() / 1000) === boundarySecond) {}
 }
 
 function completeInitialAttempt(): void {
@@ -227,7 +237,7 @@ function completeInitialAttempt(): void {
     "--user-input",
     "Approve",
   ]);
-  expect(approved.kind).not.toBe("error");
+  expect(approved.kind, JSON.stringify(approved)).not.toBe("error");
   expect(readFileSync(seededStateFile(project), "utf-8")).toContain(
     "- **Current Stage**: build-and-test",
   );
