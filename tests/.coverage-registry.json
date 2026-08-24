@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 674,
+    "total": 675,
     "enumeratedByClass": {
-      "function": 409,
+      "function": 410,
       "audit": 87,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 218,
+      "function": 219,
       "audit": 46,
       "scope": 11,
       "stage": 11,
@@ -2177,6 +2177,10 @@
         {
           "file": "tests/unit/t322-fix-round-hardening.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t328-nodag-per-unit-continuity.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -4018,6 +4022,18 @@
         },
         {
           "file": "tests/unit/t236-ensemble-evidence-gate.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:reviewAttemptWindow",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t328-nodag-per-unit-continuity.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -6332,6 +6348,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t328-nodag-per-unit-continuity.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t33.test.ts",
           "mechanism": "cli"
         },
@@ -6389,6 +6409,10 @@
         },
         {
           "file": "tests/e2e/t11-halt-and-ask-retry-correlation.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t328-nodag-per-unit-continuity.test.ts",
           "mechanism": "cli"
         },
         {
@@ -6457,6 +6481,10 @@
         },
         {
           "file": "tests/integration/t78-bolt-worktree-lifecycle.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t328-nodag-per-unit-continuity.test.ts",
           "mechanism": "cli"
         },
         {
@@ -6923,6 +6951,10 @@
         {
           "file": "tests/unit/t323-review-verdict-closure.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t328-nodag-per-unit-continuity.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -6966,6 +6998,10 @@
         },
         {
           "file": "tests/unit/t207-unit-kind-schema.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t328-nodag-per-unit-continuity.test.ts",
           "mechanism": "cli"
         }
       ],
