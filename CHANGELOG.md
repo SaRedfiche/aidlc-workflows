@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.103] - 2026-08-26
+
+Reviewer receipts now bind one explicit review artifact, every dispatched artifact byte, and workspace source before dispatch, then validate the complete reviewer-owned appendix from one stable completion snapshot. Artifact snapshots reject filesystem aliases outside the workflow record or CodeKB boundary. **Upgrade:** refresh your complete `dist/<harness>/` shell. For every custom or plugin stage declaring `reviewer:`, add `review_artifact:` selecting one required Markdown entry from `produces[]`; for per-Unit stages it must apply to every relevant Unit kind. Composition and graph compilation reject reviewer stages that are not migrated.
+
+* Reviewer-bearing stages declare `review_artifact`, a required Markdown output that remains applicable across the stage's Unit kinds; plugin-added outputs and no-DAG directory order cannot silently redefine ownership.
+* `REVIEW_REQUESTED` captures stable single-link file identities, exact artifact bytes, the append boundary, and request-time workspace source. Symlinks, hardlinks, and paths escaping the active record or CodeKB root fail closed.
+* `--retry-pending` reuses the original artifact and source binding instead of rebaselining current bytes. Valid field-light legacy chains get one audited `Upgrade: legacy-request`; malformed request or completion rows carry no authority.
+* `REVIEW_COMPLETED` accepts only blank separators plus one terminal canonical `## Review` section whose rendered Verdict, Reviewer, and Iteration fields match the request.
+
 ## [2.6.102] - 2026-08-26
 
 Rule files can now carry validated lifecycle metadata, and doctor separates stale team/project overlaps from live contradiction-review candidates without changing runtime rule delivery. **Upgrade:** refresh your `dist/<harness>/` shell; add lifecycle fields only where you want file-level drift triage.
@@ -61,7 +70,6 @@ Type-check sensor incremental state now stays in the project record and uses a d
 `/aidlc --doctor` now reports consumed artifacts with multiple loaded producers before runtime silently selects the first producer by graph load order. **Upgrade:** refresh your `dist/<harness>/` shell to install the new advisory check; no workflow migration is required.
 
 * The passing `Duplicate producers` advisory names every ambiguous consumed artifact and lists its producer stage slugs in runtime resolution order, with the selected producer first.
-
 ## [2.6.94] - 2026-08-25
 
 AI-DLC now describes intent startup consistently as creation across generated harness guidance, user-facing errors, status text, documentation, and the lossless adaptive-composer contract. No command or flag changes are required. The retired `intent-birth` compatibility error still redirects old invocations, and the reserved legacy record name remains switch-reachable. **Upgrade:** refresh your `dist/<harness>/` shell; integrations that read composer proposals must rename `birthDescription` to `creationDescription`, and custom tools importing the renamed internal helpers must update their imports.

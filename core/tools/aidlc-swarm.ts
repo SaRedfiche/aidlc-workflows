@@ -99,6 +99,8 @@ import {
   readStateFile,
   relativeRecordDir,
   reviewArtifactFingerprint,
+  reviewCompletionMatchesRequest,
+  reviewRequestBindingFromBlock,
   reviewedSourceRef,
   resolveAuditWorktreePath,
   resolveBoltDag,
@@ -464,14 +466,19 @@ function reviewerReceiptError(
   const pendingRequests = new Map<
     string,
     {
-      fingerprint: string | null;
+      binding: ReturnType<typeof reviewRequestBindingFromBlock>;
       recovery: boolean;
       timestamp: string;
       shard: string;
     }
   >();
   let latestTerminal:
-    | { block: string; requestedFingerprint: string | null }
+    | {
+        block: string;
+        binding: NonNullable<
+          ReturnType<typeof reviewRequestBindingFromBlock>
+        >;
+      }
     | null = null;
   for (let i = boltStart + 1; i < events.length; i++) {
     const event = events[i];
@@ -490,8 +497,10 @@ function reviewerReceiptError(
     const requestKey = `${unit}\u0000${iteration}`;
     if (event.event === "REVIEW_REQUESTED") {
       if (crossShardTied(i)) continue;
+      const binding = reviewRequestBindingFromBlock(event.block);
+      if (binding === null) continue;
       pendingRequests.set(requestKey, {
-        fingerprint: auditBlockField(event.block, "Artifact Fingerprint"),
+        binding,
         recovery: auditBlockField(event.block, "Recovery") === "stale-receipt",
         timestamp: event.timestamp,
         shard: event.shard,
@@ -506,8 +515,12 @@ function reviewerReceiptError(
     if (
       request === undefined ||
       (request.timestamp === event.timestamp && request.shard !== event.shard) ||
-      !pendingRequests.delete(requestKey)
-    ) continue;
+      !request.binding ||
+      !reviewCompletionMatchesRequest(request.binding, event.block)
+    ) {
+      continue;
+    }
+    pendingRequests.delete(requestKey);
     const rawVerdict = auditBlockField(event.block, "Verdict");
     const verdict = request.recovery
       ? rawVerdict === "READY" || rawVerdict === "NOT-READY"
@@ -517,7 +530,7 @@ function reviewerReceiptError(
     if (verdict !== null) {
       latestTerminal = {
         block: event.block,
-        requestedFingerprint: request.fingerprint,
+        binding: request.binding,
       };
     }
   }
@@ -540,10 +553,7 @@ function reviewerReceiptError(
   if (
     recordedArtifactFp === null ||
     !/^sha256:[0-9a-f]{64}$/.test(recordedArtifactFp) ||
-    latestTerminal.requestedFingerprint === null ||
-    !/^sha256:[0-9a-f]{64}$/.test(latestTerminal.requestedFingerprint) ||
     currentArtifactFp === null ||
-    recordedArtifactFp !== latestTerminal.requestedFingerprint ||
     recordedArtifactFp !== currentArtifactFp
   ) {
     return {
