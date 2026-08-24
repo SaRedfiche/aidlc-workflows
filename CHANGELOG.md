@@ -1,6 +1,18 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.102] - 2026-08-26
+
+Minimal workflows now avoid unrelated framework knowledge, duplicate conductor source scans, and in-context scan-body handoffs while retaining the same artifacts, reviews, sensors, learnings, and approval gates. **Upgrade:** refresh your `dist/<harness>/` shell so the depth-aware context roster and file-backed Reverse Engineering handoff are installed.
+
+* Minimal Intent Capture and Requirements Analysis load only their stage-relevant shipped knowledge; plugin-installed knowledge, Standard and Comprehensive runs, active-space rules, personas, consumes, and user/team knowledge keep the existing full context.
+* Dispatched agents return path/decision/concern summaries instead of repeating artifact, scan, source, or test-output bodies that already exist on disk.
+* Reverse Engineering keeps its developer-to-architect pipeline and all nine CodeKB artifacts, but transfers the developer scan through a durable record file, rejects symlinked handoffs when minting or verifying receipts, binds accepted receipts to the current-attempt path, write time, and content digest, and prevents a duplicate conductor source scan.
+* Isolated pipeline stage runners now record their synthetic start boundary before the first agent dispatch, require their own receipts before completion, and resume that open attempt without touching the main workflow pointer.
+* Isolated Reverse Engineering reuse now emits synthetic-workflow evidence for all-reuse and mixed-reuse runs only when the complete canonical CodeKB artifact set exists and source freshness matches; missing, redirected, invalid, or later-stale evidence cannot complete.
+* Reverse Engineering keeps every recorded repo identity qualified through its handoff filename, receipt chain, resume evidence, and CodeKB destination, including an intent with exactly one registered repo.
+* Plugin composition records exact recursive knowledge ownership and retains provenance for still-installed files removed from a later plugin version, so Minimal context retains active plugin files while deselected or removed plugin knowledge cannot become unowned context.
+
 ## [2.6.101] - 2026-08-26
 
 Human review checkpoints now show deterministic decision context before both summary confirmation and final approval, preserve accepted or rejected finding dispositions without modifying receipt-frozen artifacts, and retain concrete invalidation paths through the required recovery review. **Upgrade:** refresh your `dist/<harness>/` shell so the new review-brief tool, gate audit fields, and protocol guidance are installed.
@@ -77,7 +89,6 @@ Filesystem descendant checks now enforce one mixed-separator boundary on every h
 
 * Relative descendants are parsed with Windows-aware structured path APIs before native joining, so `/` and `\` both delimit components; `..`, POSIX roots, drive-rooted and drive-relative paths, and UNC inputs are refused before filesystem access.
 * Symlink and junction inspection now walks each mixed-separator component before permitting an existing or not-yet-created descendant, preventing an alias from being hidden ahead of a missing leaf.
-
 ## [2.6.91] - 2026-08-25
 
 Lone-repository CodeKB scope fingerprints now avoid Git's unreliable combination of positive and exclude pathspecs and reject fingerprints that contain no files, while Copilot no longer asks an AI-DLC workflow question twice when the model attempts to use a native question picker. **Upgrade:** refresh your `dist/<harness>/` shell before minting or checking CodeKB scope fingerprints, and re-mint (or re-run reverse engineering for) any stored scope timestamp whose fingerprint is `4b825dc642cb6eb9a060e54bf8d69288fbee4904`, the empty-tree value written by the pre-fix bug; in-flight Copilot workflows need no migration.
