@@ -374,22 +374,65 @@ Trust is **host-native** — you don't build anything:
 > [Plugin Mechanism §8](../reference/18-plugin-mechanism.md) for the full
 > platform-team worked example.
 
+## Authoring outside the framework checkout
+
+The installed `aidlc` CLI carries the validator, every harness's projection
+target, and a reference copy of the compose-hook template. A plugin can
+therefore live in its own repository; it does not need to be copied under this
+repository's `plugins/` directory.
+
+From the plugin root:
+
+```bash
+# Validate the current directory. Add --json for structured findings.
+aidlc plugin validate
+
+# Or validate an explicit plugin directory.
+aidlc plugin validate path/to/plugin
+
+# Build one host projection. The default output is dist-plugin/<harness>/.
+aidlc plugin build claude
+
+# Select another output directory or plugin root.
+aidlc plugin build codex ./release/codex
+aidlc plugin build cursor --plugin-root path/to/plugin
+```
+
+Supported harness names are `claude`, `codex`, `copilot`, `cursor`, `kiro`,
+`kiro-ide`, and `opencode`. Validation exits 1 when it reports any finding.
+Build reads the external plugin root directly and emits the same bytes as the
+repository packager. It refuses to erase a non-empty directory unless that
+directory is an earlier AIDLC plugin projection.
+
+The shipped reference hook sources live under
+`<harness-dir>/tools/data/plugin-hooks-template/`; normal builds copy them into
+the projection automatically.
+
+`aidlc plugin test` is intentionally deferred. Deterministic compose tests and
+live-harness tests still use this repository's test harness today, as described
+below.
+
 ## Testing your plugin
 
 Use three tiers, from cheapest to most realistic:
 
-1. **Content validation** is the always-on baseline. Call
-   `validatePluginContent()` against the authored plugin root. It runs pure,
-   deterministic checks for manifest identity, stage schema and ownership,
-   artifact namespacing, contribution targets, scope and agent filenames, and
-   non-empty stage bodies. It is fast and gives precise authoring findings, but
-   it does not prove that packaging or composition succeeds.
-2. **Compose integration** is the default CI check. Call
+1. **Content validation** is the always-on baseline. Run
+   `aidlc plugin validate [path]` (optionally with `--json`). It performs the
+   same pure, deterministic checks as `validatePluginContent()` for manifest
+   identity, stage schema and ownership, artifact namespacing, contribution
+   targets, scope and agent filenames, and non-empty stage bodies. It works
+   from the plugin's own repository, but it does not prove that composition
+   succeeds.
+2. **Projection build** is also checkout-independent. Run
+   `aidlc plugin build <harness> [outDir]`; CI can build every harness it
+   publishes and inspect or archive the resulting host plugin.
+3. **Compose integration** is the default framework-checkout CI check. Call
    `composePluginFixture()` to build the real harness projection, copy a shipped
    install into scratch space, run the emitted compose hook, and inspect the
    compiled graph and installed surfaces. It is deterministic and exercises the
-   actual packager and composer, but it does not launch a model-backed harness.
-3. **Live harness e2e** is opt-in compatibility evidence. Call
+   actual packager and composer, but it currently requires this repository's
+   `tests/harness/plugin-kit.ts`.
+4. **Live harness e2e** is opt-in compatibility evidence. Call
    `invokeHarness()` only behind the gate returned by `liveGateFor()`. The live
    gates are `AIDLC_CLAUDE_SDK_LIVE`, `AIDLC_KIRO_ACP_LIVE`,
    `AIDLC_CODEX_EXEC_LIVE`, `AIDLC_COPILOT_EXEC_LIVE`,
@@ -398,8 +441,9 @@ Use three tiers, from cheapest to most realistic:
    CLIs, credentials, and more time. An unset gate returns a skipped result, so
    a green test run can mean the live check did not run.
 
-Plugin tests under `plugins/<name>/tests/*.test.ts` are discovered
-automatically and join the integration tier. Run one plugin's tests with:
+For plugins developed inside this framework checkout, tests under
+`plugins/<name>/tests/*.test.ts` are discovered automatically and join the
+integration tier. Run one plugin's tests with:
 
 ```bash
 bash tests/run-tests.sh --integration --filter "plugin-<name>"

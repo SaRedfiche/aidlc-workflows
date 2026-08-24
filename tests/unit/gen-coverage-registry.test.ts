@@ -858,6 +858,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t304-loopback-review-receipt-replay.test.ts",
     "integration/t307-loopback-unitmajor-replay.test.ts",
     "integration/t21b.test.ts",
+    "integration/t301-plugin-author-cli.test.ts",
     "integration/t31-help.test.ts",
     "integration/t32-stage-graph-consistency.test.ts",
     "integration/t33-hook-concurrency.test.ts",

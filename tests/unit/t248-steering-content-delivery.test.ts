@@ -1032,7 +1032,8 @@ describe("t248 reviewer knowledge absorption", () => {
         "knowledge",
         "example-reviewer-agent",
       );
-      mkdirSync(join(coreRoot, "aidlc-common", "stages"), {
+      const coreStages = join(coreRoot, "aidlc-common", "stages");
+      mkdirSync(coreStages, {
         recursive: true,
       });
       mkdirSync(stages, { recursive: true });
@@ -1051,11 +1052,15 @@ describe("t248 reviewer knowledge absorption", () => {
       expect(reviewerAgentSet(coreRoot)).toContain(
         "example-reviewer-agent",
       );
+      expect(
+        reviewerAgentSet(coreStages, join(pluginRoot, "stages")),
+      ).toContain("example-reviewer-agent");
       const absorbed = absorbReviewerKnowledge(
         "---\nname: example-reviewer-agent\n---\n\n# Reviewer\n",
         "example-reviewer-agent",
-        coreRoot,
+        coreStages,
         pluginRoot,
+        join(pluginRoot, "stages"),
       );
       expect(absorbed).toContain(
         "Absorbed at build time from knowledge/example-reviewer-agent/reviewing.md",

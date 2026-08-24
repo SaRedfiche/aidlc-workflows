@@ -1,6 +1,16 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.66] - 2026-08-24
+
+Plugin validation and host-projection builds now run from a plugin's own repository through the shipped `aidlc` CLI, without an AI-DLC framework checkout. **Upgrade:** refresh your `dist/<harness>/` shell or installed binary runtime to receive the authoring library, target metadata, and compose-hook templates.
+
+* `aidlc plugin validate [path]` validates the current or named plugin root, supports `--json`, and exits 1 when any structured finding is reported.
+* `aidlc plugin build <harness> [outDir]` builds any of the seven host projections from the current directory or `--plugin-root <path>`; omitted output defaults to `dist-plugin/<harness>`.
+* Every distribution now ships `aidlc-plugin-author.ts`, `tools/data/plugin-targets.json`, and the compose-hook reference sources under `tools/data/plugin-hooks-template/`.
+* The repository packager and reusable plugin test kit delegate validation and projection logic to the shipped library, with byte parity covered by the external-repository CLI integration test.
+* `aidlc plugin test` remains deferred; compose and live-harness testing still use the framework checkout's test harness.
+
 ## [2.6.65] - 2026-08-23
 
 Stage graph compilation now rejects ambiguous producers before consumers can resolve an artifact by file order. **Upgrade:** refresh your `dist/<harness>/` shell; existing custom stages or plugins that declare the same consumed artifact in `produces` or `optional_produces` must rename one output or update the consumer.

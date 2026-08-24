@@ -145,6 +145,12 @@ import {
   captureStageValidationBasis,
   inspectStageValidity,
 } from "./aidlc-validity.ts";
+import {
+  buildPluginProjection,
+  loadPluginTargets,
+  pluginTargetFor,
+  validatePluginContent,
+} from "./aidlc-plugin-author.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
   compiledExecutable,
@@ -334,6 +340,8 @@ Utilities:
   plugin select [names]  Show or set the enabled plugin list
   plugin list       List installed plugins and enabled state (--json for structured output)
   plugin sync       Compose installed plugins into the current install
+  plugin validate [path]  Validate authored plugin content (--json for structured output)
+  plugin build <harness> [outDir]  Build a host plugin projection (--plugin-root <path>)
   knowledge onboard [path]  Index customer documents into the space DocumentKB
   knowledge sync    Reconcile the catalog with disk; retries extractor_unavailable rows
   knowledge list    The DocumentKB catalog (--json for structured output)
@@ -362,6 +370,8 @@ Examples:
   /aidlc compose "harden the deploy pipeline"   Composer proposes a tailored plan
   /aidlc config list                         Show depth, test strategy, and review override
   /aidlc plugin list                         Show installed plugin selection
+  /aidlc plugin validate                     Validate the plugin in the current directory
+  /aidlc plugin build claude                  Build its Claude projection
   /aidlc                                        Resume or begin
   /aidlc --stage code-generation                Jump to code-generation stage
   /aidlc --phase construction --scope bugfix    Jump to construction with bugfix scope
@@ -978,6 +988,113 @@ function handlePluginList(flags: Record<string, string>): void {
       rows.map((row) => `${row.name} ${row.enabled ? "enabled" : "disabled"}`).join("\n") +
       (rows.length > 0 ? "\n" : ""),
   );
+}
+
+function handlePluginValidate(
+  positional: string[],
+  flags: Record<string, string>,
+): void {
+  if (positional.length > 2) {
+    die("Usage: aidlc plugin validate [path] [--json]");
+  }
+  const pluginRoot = resolve(positional[1] ?? process.cwd());
+  const findings = validatePluginContent(pluginRoot);
+  if (flags.json === "true") {
+    process.stdout.write(
+      `${JSON.stringify({
+        pluginRoot,
+        valid: findings.length === 0,
+        findings,
+      })}\n`,
+    );
+  } else if (findings.length === 0) {
+    process.stdout.write(`plugin validation passed: ${pluginRoot}\n`);
+  } else {
+    for (const finding of findings) {
+      process.stdout.write(
+        `${finding.file}: [${finding.code}] ${finding.message}\n`,
+      );
+    }
+    process.stdout.write(
+      `plugin validation failed: ${findings.length} finding(s)\n`,
+    );
+  }
+  if (findings.length > 0) process.exitCode = 1;
+}
+
+function isPriorPluginProjection(
+  outDir: string,
+  manifestDir: string,
+): boolean {
+  try {
+    const manifest = JSON.parse(
+      readFileSync(join(outDir, manifestDir, "plugin.json"), "utf-8"),
+    ) as { name?: unknown };
+    return (
+      typeof manifest.name === "string" &&
+      manifest.name.startsWith("aidlc-")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function assertPluginBuildOutput(outDir: string, manifestDir: string): void {
+  let outputStat: ReturnType<typeof statSync> | null = null;
+  try {
+    outputStat = lstatSync(outDir);
+  } catch {
+    outputStat = null;
+  }
+  if (outputStat?.isSymbolicLink()) {
+    die(`plugin build refuses symlink output directory: ${outDir}`);
+  }
+  if (!outputStat) return;
+  if (!outputStat.isDirectory()) {
+    die(`plugin build output is not a directory: ${outDir}`);
+  }
+  if (
+    readdirSync(outDir).length > 0 &&
+    !isPriorPluginProjection(outDir, manifestDir)
+  ) {
+    die(
+      `plugin build refuses non-empty output that is not a prior AIDLC projection: ${outDir}`,
+    );
+  }
+}
+
+function handlePluginBuild(
+  positional: string[],
+  flags: Record<string, string>,
+): void {
+  const harnessName = positional[1];
+  if (!harnessName || positional.length > 3) {
+    die(
+      "Usage: aidlc plugin build <harness> [outDir] [--plugin-root <path>]",
+    );
+  }
+  if (flags["plugin-root"] === "true") {
+    die("--plugin-root requires a path");
+  }
+  const pluginRoot = resolve(flags["plugin-root"] ?? process.cwd());
+  const targets = loadPluginTargets();
+  const target = pluginTargetFor(harnessName, targets);
+  if (!target) {
+    die(
+      `Unknown plugin harness "${harnessName}". Valid harnesses: ` +
+        targets.map((candidate) => candidate.harnessName).join(", "),
+    );
+  }
+  const outDir = positional[2]
+    ? resolve(positional[2])
+    : join(pluginRoot, "dist-plugin", harnessName);
+  assertPluginBuildOutput(outDir, target.manifestDir);
+  buildPluginProjection({
+    pluginRoot,
+    target,
+    outDir,
+  });
+  process.stdout.write(`plugin build complete: ${outDir}\n`);
 }
 
 function pluginRootCandidatesFromEnv(): string[] {
@@ -6462,6 +6579,17 @@ export async function main(argv: string[]): Promise<void> {
     );
     return;
   }
+  if (
+    (subcommand === "plugin-validate" || subcommand === "plugin-build") &&
+    (flags.help === "true" || rawArgs.includes("-h"))
+  ) {
+    process.stdout.write(
+      subcommand === "plugin-validate"
+        ? "Usage: aidlc plugin validate [path] [--json]\n"
+        : "Usage: aidlc plugin build <harness> [outDir] [--plugin-root <path>]\n",
+    );
+    return;
+  }
   const isIntentCreate =
     subcommand === "intent-create" ||
     subcommand === "init" ||
@@ -6527,6 +6655,12 @@ export async function main(argv: string[]): Promise<void> {
     case "plugin-sync":
       await handlePluginSync(projectDir);
       break;
+    case "plugin-validate":
+      handlePluginValidate(positional, flags);
+      break;
+    case "plugin-build":
+      handlePluginBuild(positional, flags);
+      break;
     // init / state-init are transition-only and intentionally absent from help.
     // Stale init callers get a loud error for this release; workflow start is
     // still intent-create through the orchestrator.
@@ -6585,6 +6719,7 @@ export async function main(argv: string[]): Promise<void> {
         `Unknown command "${subcommand}". Run \`aidlc-utility help\` for what this tool can do.\n\n` +
           "Available commands: help, version, status, doctor, intent-create, intent, space, " +
           "space-create, codekb-path, codekb-scope-diff, detect, select-plugins, plugin-list, plugin-sync, " +
+          "plugin-validate, plugin-build, " +
           "recompose, scope-change, config-change, config-get, config-list, set-status, " +
           "detect-scope, resolve-env-scope, scope-table, stage-table, upgrade\n" +
           "Common options: [--project-dir <path>] [--scope <scope>] [--json]"

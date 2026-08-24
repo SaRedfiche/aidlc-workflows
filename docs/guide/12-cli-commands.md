@@ -49,6 +49,8 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | `/aidlc plugin select [names]` | Show or set the enabled plugin list for this install |
 | `/aidlc plugin list` | List installed plugins and enabled state |
 | `/aidlc plugin sync` | Compose installed plugin roots into the current install |
+| `/aidlc plugin validate [path]` | Validate an authored plugin (`--json` for structured findings) |
+| `/aidlc plugin build <harness> [outDir]` | Build a host plugin projection from an external plugin repo |
 | `/aidlc --version` | Print the framework version |
 | `/aidlc --help` | Display usage information |
 | `bun .claude/tools/aidlc-utility.ts select-plugins [names]` | Direct utility form of plugin selection |
@@ -822,6 +824,15 @@ bun .claude/tools/aidlc-utility.ts select-plugins aidlc,test-pro
 The command validates names, writes `.claude/tools/data/harness.json`, strips a newly disabled plugin's merged contributions from core stage source (structural adds via the compose-written sidecar, spliced prose via its sentinel markers; re-enabling restores them on the next session start), recompiles the full graph with disabled nodes marked `enabled:false`, prunes/regenerates stage and scope runners, and refreshes the generated SKILL.md scope/stage tables in one transaction. `aidlc` is core; omitting it disables core surfaces except the always-on Initialization stages. A change that would strand an active workflow (its scope, or a pending EXECUTE stage in its plan, owned by a plugin the new selection disables) is refused with each dependency named - complete or park the workflow first, or keep the plugin enabled.
 
 `/aidlc plugin sync` runs installed plugin compose hooks. It is safe to run repeatedly; when no plugin roots are present it exits 0 with `no installed plugins; nothing to sync`.
+
+`/aidlc plugin validate [path]` and
+`/aidlc plugin build <harness> [outDir]` are authoring commands and do not
+require an installed project harness. Both default the plugin root to the
+current directory; build also accepts `--plugin-root <path>` and defaults its
+output to `<pluginRoot>/dist-plugin/<harness>`. Supported harnesses are
+`claude`, `codex`, `copilot`, `cursor`, `kiro`, `kiro-ide`, and `opencode`.
+Validation exits 1 when findings exist. See
+[Authoring a Plugin](../harness-engineering/10-authoring-a-plugin.md#authoring-outside-the-framework-checkout).
 
 ### `aidlc-utility recompose` - in-flight plan flips
 

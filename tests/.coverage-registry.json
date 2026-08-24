@@ -20,14 +20,14 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 607,
+    "total": 609,
     "enumeratedByClass": {
       "function": 345,
       "audit": 86,
       "scope": 11,
       "stage": 33,
       "hook": 17,
-      "subcommand": 108,
+      "subcommand": 110,
       "render-surface": 7
     },
     "coveredByClass": {
@@ -36,7 +36,7 @@
       "scope": 11,
       "stage": 11,
       "hook": 17,
-      "subcommand": 96,
+      "subcommand": 98,
       "render-surface": 7
     }
   },
@@ -6951,6 +6951,18 @@
     },
     {
       "unitClass": "subcommand",
+      "unitId": "aidlc-utility plugin-build",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t301-plugin-author-cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
       "unitId": "aidlc-utility plugin-list",
       "minMechanism": "cli",
       "coveredBy": [
@@ -6972,6 +6984,18 @@
         },
         {
           "file": "tests/unit/t238-build-binaries.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility plugin-validate",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t301-plugin-author-cli.test.ts",
           "mechanism": "cli"
         }
       ],

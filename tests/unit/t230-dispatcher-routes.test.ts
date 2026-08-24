@@ -360,6 +360,18 @@ describe("t230 dispatcher route parity", () => {
       fixture: true,
     },
     {
+      name: "plugin validate maps to plugin-validate",
+      routerArgs: ["plugin", "validate", "--help"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["plugin-validate", "--help"],
+    },
+    {
+      name: "plugin build maps to plugin-build",
+      routerArgs: ["plugin", "build", "--help"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["plugin-build", "--help"],
+    },
+    {
       name: "init maps to utility transition handler",
       routerArgs: ["init"],
       tool: "aidlc-utility.ts",
@@ -666,6 +678,10 @@ describe("t230 dispatcher help and errors", () => {
     const help = viaDispatcher(["plugin", "help"], REPO_ROOT);
     expect(help.exitCode).toBe(0);
     expect(help.stdout.toString("utf-8")).toContain("plugin select [names]");
+    expect(help.stdout.toString("utf-8")).toContain("plugin validate [path]");
+    expect(help.stdout.toString("utf-8")).toContain(
+      "plugin build <harness> [outDir]",
+    );
 
     const invalid = viaDispatcher(["plugin", "remove"], REPO_ROOT);
     expect(invalid.exitCode).toBe(1);
