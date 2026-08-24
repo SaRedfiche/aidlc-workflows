@@ -48,6 +48,7 @@ import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
 import {
   activeIntent,
   activeSpace,
+  auditBlockField,
   auditFilePath,
   auditShards,
   createIntent,
@@ -97,6 +98,7 @@ import {
   parseStageFrontmatter,
   parseStateStageSuffixes,
   readAllAuditShards,
+  readAuditShardEvents,
   readActiveDirectiveMarker,
   recordHookDrop,
   readCurrentSessionId,
@@ -140,6 +142,7 @@ import {
   _resetStageGraphForTests,
   classifyStateVersion,
   CURRENT_STATE_VERSION,
+  type AuditShardEvent,
 } from "./aidlc-lib.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import {
@@ -1065,6 +1068,97 @@ async function handlePluginSync(projectDir: string): Promise<void> {
 // status
 // ---------------------------------------------------------------------------
 
+export const GATE_PENDING_ADVISORY_MS = 24 * 60 * 60 * 1000;
+
+interface PendingOrganicGate {
+  timestamp: string;
+  timestampMs: number;
+}
+
+function pendingOrganicGate(
+  audit: AuditShardEvent[],
+  stage: string,
+): PendingOrganicGate | null {
+  const relevant = new Set([
+    "WORKFLOW_STARTED",
+    "STAGE_JUMPED",
+    "STAGE_STARTED",
+    "STAGE_AWAITING_APPROVAL",
+    "GATE_APPROVED",
+    "GATE_REJECTED",
+  ]);
+  const events = audit
+    .filter((event) => relevant.has(event.event))
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
+    });
+
+  let pending: PendingOrganicGate | null = null;
+  for (let start = 0; start < events.length;) {
+    let end = start + 1;
+    while (
+      end < events.length &&
+      events[end].timestamp === events[start].timestamp
+    ) {
+      end++;
+    }
+
+    // Only same-shard append order is causal. The last effective row in each
+    // shard can be globally last; disagreeing effects therefore fail closed.
+    const effectByShard = new Map<string, "open" | "clear">();
+    for (const event of events.slice(start, end)) {
+      const eventStage = auditBlockField(event.block, "Stage");
+      const boundary =
+        event.event === "WORKFLOW_STARTED" ||
+        event.event === "STAGE_JUMPED" ||
+        (
+          event.event === "STAGE_STARTED" &&
+          eventStage === stage &&
+          !auditBlockField(event.block, "Workflow")?.startsWith("single-stage:")
+        );
+      if (boundary) {
+        effectByShard.set(event.shard, "clear");
+        continue;
+      }
+      if (eventStage !== stage) continue;
+      if (event.event === "STAGE_AWAITING_APPROVAL") {
+        if (
+          auditBlockField(event.block, "Recovered") === "true" ||
+          auditBlockField(event.block, "Revalidated") === "true"
+        ) {
+          continue;
+        }
+        effectByShard.set(event.shard, "open");
+      } else {
+        effectByShard.set(event.shard, "clear");
+      }
+    }
+
+    const effects = new Set(effectByShard.values());
+    if (effects.size > 1 || effects.has("clear")) {
+      pending = null;
+    } else if (effects.has("open")) {
+      const timestamp = events[start].timestamp;
+      const timestampMs = Date.parse(timestamp);
+      pending = Number.isFinite(timestampMs)
+        ? { timestamp, timestampMs }
+        : null;
+    }
+    start = end;
+  }
+  return pending;
+}
+
+function pendingDuration(ageMs: number): string {
+  const minutes = Math.floor(Math.max(0, ageMs) / (60 * 1000));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
 function handleStatus(projectDir: string, flags: Record<string, string>): void {
   // --intent <record> / --space <name> target a specific intent's status
   // (vision §5); omitted -> the active record.
@@ -1110,6 +1204,19 @@ To get started:
   if (currentCheckbox?.state === "awaiting-approval") {
     const displayName = currentEntry?.name ?? currentStage;
     statusLine = `Awaiting your approval on ${displayName}`;
+    try {
+      const pending = pendingOrganicGate(
+        readAuditShardEvents(projectDir, flags.intent, flags.space),
+        currentStage,
+      );
+      if (pending) {
+        statusLine +=
+          ` (waiting since ${pending.timestamp}, ` +
+          `~${pendingDuration(Date.now() - pending.timestampMs)})`;
+      }
+    } catch {
+      // Status remains useful when the ledger is absent, unreadable, or stale.
+    }
   } else if (currentCheckbox?.state === "revising") {
     const displayName = currentEntry?.name ?? currentStage;
     const revisionCount = getField(content, "Revision Count");
@@ -2473,6 +2580,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
   const stateMdPath = stateFilePath(projectDir);
   // Read across every per-clone audit shard (single shard in the common case).
   const auditAllShards = readAllAuditShards(projectDir);
+  const auditShardEvents = readAuditShardEvents(projectDir);
   if (existsSync(stateMdPath) && auditAllShards.length > 0) {
     try {
       const auditContent = auditAllShards;
@@ -2605,6 +2713,40 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     }
   } catch {
     // Compose-marker probe failure is non-fatal for the doctor report.
+  }
+
+  // A long-open approval gate is healthy waiting, not a hung workflow. Surface
+  // it as an advisory PASS so operators can distinguish human latency from a
+  // stuck engine without changing doctor's exit code.
+  try {
+    if (existsSync(stateMdPath)) {
+      const stateContent = readFileSync(stateMdPath, "utf-8");
+      const currentStage = getField(stateContent, "Current Stage");
+      const currentCheckbox = currentStage
+        ? parseCheckboxes(stateContent).find((c) => c.slug === currentStage)
+        : undefined;
+      if (currentStage && currentCheckbox?.state === "awaiting-approval") {
+        const pending = pendingOrganicGate(auditShardEvents, currentStage);
+        if (pending) {
+          const ageMs = Date.now() - pending.timestampMs;
+          if (ageMs > GATE_PENDING_ADVISORY_MS) {
+            const displayName =
+              loadStageGraph().find((stage) => stage.slug === currentStage)?.name ??
+              currentStage;
+            const duration = pendingDuration(ageMs);
+            results.push({
+              pass: true,
+              label:
+                `Approval gate pending: ${displayName} (~${duration}); ` +
+                "waiting for a human, not stuck. Run /aidlc --status to review the current gate.",
+              fix: "run `/aidlc --status` to review and resolve the pending approval",
+            });
+          }
+        }
+      }
+    }
+  } catch {
+    // Gate-pending probe failure is non-fatal for the doctor report.
   }
 
   // ===========================================================================
