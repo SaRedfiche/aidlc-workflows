@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.102] - 2026-08-26
+
+Zero-Unit Code Generation now uses its documented stage-level record as a first-class Plan Approval authority, and inline generation cannot bypass the approval enforced on delegated workers. Workspace aliases retain the same trusted planning operations without weakening child-symlink rejection. **Upgrade:** refresh your `dist/<harness>/` shell so the updated stage, testing-posture tool, plan-approval hook, and mutation-surface registrations are installed together.
+
+* `aidlc-testing-posture.ts fingerprint`, `verify`, and `begin` accept the stage-level Code Generation target while preserving per-Unit targets and bind approval to the active intent, directive epoch, source floor, plan, instructions, and Testing Contract.
+* Protected, gitignored challenge, response, and receipt state authorizes Code Generation; the Markdown `PLAN_APPROVAL_RECORDED` event remains provenance rather than authority.
+* Write, edit, patch, shell, interpreter, build-tool, and symlink or junction mutation paths refuse until approval, while exact installed `tools/aidlc-*.ts` invocations and writes inside the active Code Generation record remain available through aliased workspace roots.
+* Code Generation publication and resume paths preserve or rotate the source-bound authority under the active-directive and audit locks, including swarm and legacy Kiro IDE flows.
+
 ## [2.6.101] - 2026-08-26
 
 Human review checkpoints now show deterministic decision context before both summary confirmation and final approval, preserve accepted or rejected finding dispositions without modifying receipt-frozen artifacts, and retain concrete invalidation paths through the required recovery review. **Upgrade:** refresh your `dist/<harness>/` shell so the new review-brief tool, gate audit fields, and protocol guidance are installed.
