@@ -1,6 +1,16 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.62] - 2026-08-24
+
+Cursor now protects reviewer-attribution state across POSIX and Windows shell path dialects, evaluators, aliases, and wildcard forms. **Upgrade:** re-copy `dist/cursor/` into the project so the updated Cursor adapter and version metadata replace the vulnerable hook.
+
+* Interpret shell words under both POSIX escape rules and Windows separator rules, preserving UNC roots and active wildcard meaning without confusing ordinary POSIX escapes for path separators.
+* Deny delegated PowerShell and cmd evaluators, method- or expression-built PowerShell command names, direct host expressions and aliases, Windows script hosts, awk-family evaluators, inline, indirect, newly configured, or pre-existing Git shell aliases/config sources, including aliases selected per invocation through direct or option/split-string `env` wrappers, command-local `HOME`/`XDG_CONFIG_HOME`, and `-C`/`--git-dir` repository context, while reviewer attribution is active.
+* Canonicalize existing path ancestors, current/named-user home aliases, POSIX `~+`/`~-` directory aliases, and wildcarded 8.3 components at any path depth through real paths so symlink, junction, device, trailing-dot/space, Git-Bash drive, native Windows, mixed-separator, and UNC aliases cannot hide protected state.
+* Track literal or `builtin`-wrapped `cd`/`pushd`/`popd` and PowerShell location changes across compound shell commands and control structures, including `case`, loops, conditionals, and function bodies; successful sequential changes replace the prior cwd, while only filesystem-viable ambiguous branches are retained for failures, pipelines, backgrounds, or subshells.
+* Continue allowing ordinary safe paths, quoted or trailing-separator directories, and non-evaluating shell commands; unsupported device identities and otherwise ambiguous protected-path interpretations fail closed.
+
 ## [2.6.61] - 2026-08-23
 
 Plugins can now extend `/aidlc --doctor` with selection-aware, fail-loud install checks while preserving advisory findings that do not block CI. **Upgrade:** re-copy `dist/<harness>/` for the updated `aidlc-utility.ts`, then refresh and re-compose each plugin's `dist/plugins/<name>/<harness>/` projection to install its doctor script.

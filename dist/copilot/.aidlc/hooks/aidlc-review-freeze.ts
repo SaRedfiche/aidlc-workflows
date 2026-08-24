@@ -96,6 +96,14 @@ function shellWords(command: string): string[] {
       escaped = false;
       continue;
     }
+    if (
+      ch === "\\" &&
+      quote === '"' &&
+      !'$`"\\\n'.includes(command[i + 1] ?? "")
+    ) {
+      word += ch;
+      continue;
+    }
     if (ch === "\\" && quote !== "'") {
       escaped = true;
       continue;
@@ -130,6 +138,13 @@ function shellCommandSegments(command: string): string[] {
       escaped = false;
       continue;
     }
+    if (
+      ch === "\\" &&
+      quote === '"' &&
+      !'$`"\\\n'.includes(command[i + 1] ?? "")
+    ) {
+      continue;
+    }
     if (ch === "\\" && quote !== "'") {
       escaped = true;
       continue;
@@ -154,30 +169,88 @@ function shellCommandSegments(command: string): string[] {
 export interface ShellInvocation {
   name: string;
   args: string[];
+  ambiguous?: boolean;
+}
+
+function shellExecutableName(value: string): string {
+  const normalized = value.replaceAll("\\", "/");
+  const leaf = normalized.slice(normalized.lastIndexOf("/") + 1);
+  return leaf.replace(/\.(?:exe|com|cmd|bat)$/i, "").toLowerCase();
+}
+
+interface WrapperOptionSpec {
+  shortValues?: readonly string[];
+  longValues?: readonly string[];
+  shortOptionalValues?: readonly string[];
+  longOptionalValues?: readonly string[];
+  shortFlags?: readonly string[];
+  longFlags?: readonly string[];
+  numericShortValue?: boolean;
 }
 
 function consumeWrapperOptions(
   words: string[],
   index: number,
-  shortValueOptions = new Set<string>(),
-  longValueOptions = new Set<string>(),
-): number {
+  spec: WrapperOptionSpec,
+): { index: number; ambiguous: boolean } {
+  const shortValues = new Set(spec.shortValues ?? []);
+  const longValues = new Set(spec.longValues ?? []);
+  const shortOptionalValues = new Set(spec.shortOptionalValues ?? []);
+  const longOptionalValues = new Set(spec.longOptionalValues ?? []);
+  const shortFlags = new Set(spec.shortFlags ?? []);
+  const longFlags = new Set(spec.longFlags ?? []);
   while (index < words.length) {
     const option = words[index];
-    if (option === "--") return index + 1;
-    if (option === "-" || !option.startsWith("-")) return index;
+    if (option === "--") return { index: index + 1, ambiguous: false };
+    if (option === "-" || !option.startsWith("-")) return { index, ambiguous: false };
     if (option.startsWith("--")) {
       const equals = option.indexOf("=");
       const name = equals === -1 ? option : option.slice(0, equals);
+      if (longValues.has(name)) {
+        if (equals !== -1) {
+          index++;
+        } else if (words[index + 1] !== undefined) {
+          index += 2;
+        } else {
+          return { index, ambiguous: true };
+        }
+        continue;
+      }
+      if (longOptionalValues.has(name) || longFlags.has(name)) {
+        index++;
+        continue;
+      }
+      return { index, ambiguous: true };
+    }
+    if (spec.numericShortValue && /^-\d+$/.test(option)) {
       index++;
-      if (equals === -1 && longValueOptions.has(name)) index++;
       continue;
     }
     const name = option.slice(0, 2);
-    index++;
-    if (shortValueOptions.has(name) && option.length === 2) index++;
+    if (shortValues.has(name)) {
+      if (option.length > 2) {
+        index++;
+      } else if (words[index + 1] !== undefined) {
+        index += 2;
+      } else {
+        return { index, ambiguous: true };
+      }
+      continue;
+    }
+    if (shortOptionalValues.has(name)) {
+      index++;
+      continue;
+    }
+    if (
+      option.length > 1 &&
+      [...option.slice(1)].every((flag) => shortFlags.has(`-${flag}`))
+    ) {
+      index++;
+      continue;
+    }
+    return { index, ambiguous: true };
   }
-  return index;
+  return { index, ambiguous: false };
 }
 
 function shellInvocation(words: string[], depth = 0): ShellInvocation | null {
@@ -189,7 +262,7 @@ function shellInvocation(words: string[], depth = 0): ShellInvocation | null {
   skipAssignments();
 
   while (index < words.length) {
-    const wrapper = basename(words[index]);
+    const wrapper = shellExecutableName(words[index]);
     if (["}", "fi", "done", "esac"].includes(wrapper)) return null;
     if (["{", "then", "else", "do", "!"].includes(wrapper)) {
       index++;
@@ -209,6 +282,9 @@ function shellInvocation(words: string[], depth = 0): ShellInvocation | null {
         if (option === "--") break;
         // `command -v/-V` queries a name; it does not execute the following word.
         if (option.includes("v") || option.includes("V")) return null;
+        if (![...option.slice(1)].every((flag) => flag === "p")) {
+          return { name: "", args: [], ambiguous: true };
+        }
       }
       skipAssignments();
       continue;
@@ -234,18 +310,46 @@ function shellInvocation(words: string[], depth = 0): ShellInvocation | null {
           index++;
           continue;
         }
-        if (/^(?:-u|--unset|-C|--chdir)$/.test(option)) {
+        if (option.startsWith("-S") && option.length > 2) {
+          splitCommand = shellWords(option.slice(2));
+          index++;
+          continue;
+        }
+        if (/^-(?:u|C|a).+/.test(option)) {
+          index++;
+          continue;
+        }
+        if (/^(?:-u|--unset|-C|--chdir|-a|--argv0)$/.test(option)) {
           index += 2;
           continue;
         }
-        if (/^(?:--unset|--chdir)=/.test(option) || option === "-i") {
+        if (
+          /^(?:--unset|--chdir|--argv0)=/.test(option) ||
+          option === "-" ||
+          option === "-i" ||
+          option === "--ignore-environment" ||
+          option === "-0" ||
+          option === "--null"
+        ) {
           index++;
           continue;
         }
-        if (option.startsWith("-")) {
+        if (/^-[i0v]+$/.test(option)) {
           index++;
           continue;
         }
+        if (
+          option === "-v" ||
+          option === "--debug" ||
+          option === "--list-signal-handling" ||
+          option === "--help" ||
+          option === "--version" ||
+          /^(?:--default-signal|--ignore-signal|--block-signal)(?:=.*)?$/.test(option)
+        ) {
+          index++;
+          continue;
+        }
+        if (option.startsWith("-")) return { name: "", args: [], ambiguous: true };
         break;
       }
       skipAssignments();
@@ -255,22 +359,30 @@ function shellInvocation(words: string[], depth = 0): ShellInvocation | null {
       continue;
     }
 
-    const simpleWrappers: Record<
-      string,
-      { shortValues?: string[]; longValues?: string[] }
-    > = {
-      exec: {},
-      nohup: {},
-      nice: { shortValues: ["-n"], longValues: ["--adjustment"] },
+    const simpleWrappers: Record<string, WrapperOptionSpec> = {
+      exec: { shortValues: ["-a"], shortFlags: ["-c", "-l"] },
+      nohup: { longFlags: ["--help", "--version"] },
+      nice: {
+        shortValues: ["-n"],
+        longValues: ["--adjustment"],
+        longFlags: ["--help", "--version"],
+        numericShortValue: true,
+      },
       ionice: {
         shortValues: ["-c", "-n", "-p", "-P", "-u"],
         longValues: ["--class", "--classdata", "--pid", "--pgid", "--uid"],
+        shortFlags: ["-t"],
+        longFlags: ["--ignore", "--help", "--version"],
       },
       stdbuf: {
         shortValues: ["-i", "-o", "-e"],
         longValues: ["--input", "--output", "--error"],
+        longFlags: ["--help", "--version"],
       },
-      setsid: {},
+      setsid: {
+        shortFlags: ["-c", "-f", "-w"],
+        longFlags: ["--ctty", "--fork", "--wait", "--help", "--version"],
+      },
       sudo: {
         shortValues: ["-C", "-D", "-g", "-h", "-p", "-r", "-t", "-T", "-u"],
         longValues: [
@@ -283,45 +395,85 @@ function shellInvocation(words: string[], depth = 0): ShellInvocation | null {
           "--type",
           "--user",
         ],
+        shortOptionalValues: ["-E"],
+        longOptionalValues: ["--preserve-env"],
+        shortFlags: ["-A", "-b", "-e", "-H", "-K", "-k", "-l", "-n", "-P", "-S", "-s", "-V", "-v"],
+        longFlags: [
+          "--askpass",
+          "--background",
+          "--edit",
+          "--help",
+          "--login",
+          "--non-interactive",
+          "--remove-timestamp",
+          "--reset-timestamp",
+          "--set-home",
+          "--shell",
+          "--stdin",
+          "--validate",
+          "--version",
+        ],
       },
-      doas: { shortValues: ["-C", "-u"] },
+      doas: {
+        shortValues: ["-C", "-u"],
+        shortFlags: ["-L", "-n", "-s"],
+      },
       xargs: {
-        shortValues: ["-a", "-E", "-I", "-L", "-n", "-P", "-s"],
+        shortValues: ["-a", "-d", "-E", "-I", "-J", "-L", "-n", "-P", "-s"],
         longValues: [
           "--arg-file",
-          "--eof",
-          "--replace",
-          "--max-lines",
+          "--delimiter",
           "--max-args",
           "--max-procs",
           "--max-chars",
+          "--process-slot-var",
+        ],
+        shortOptionalValues: ["-e", "-i", "-l"],
+        longOptionalValues: ["--eof", "--replace", "--max-lines"],
+        shortFlags: ["-0", "-o", "-p", "-r", "-t", "-x"],
+        longFlags: [
+          "--null",
+          "--open-tty",
+          "--interactive",
+          "--no-run-if-empty",
+          "--show-limits",
+          "--verbose",
+          "--exit",
+          "--help",
+          "--version",
         ],
       },
       time: {
         shortValues: ["-f", "-o"],
         longValues: ["--format", "--output"],
+        shortFlags: ["-a", "-p", "-v"],
+        longFlags: ["--append", "--portability", "--verbose", "--help", "--version"],
       },
-      unbuffer: {},
+      unbuffer: { shortFlags: ["-p"] },
     };
     const spec = simpleWrappers[wrapper];
     if (spec) {
-      index = consumeWrapperOptions(
-        words,
-        index + 1,
-        new Set(spec.shortValues ?? []),
-        new Set(spec.longValues ?? []),
-      );
+      const consumed = consumeWrapperOptions(words, index + 1, spec);
+      if (consumed.ambiguous) return { name: "", args: [], ambiguous: true };
+      index = consumed.index;
       skipAssignments();
       continue;
     }
 
     if (wrapper === "timeout") {
-      index = consumeWrapperOptions(
-        words,
-        index + 1,
-        new Set(["-k", "-s"]),
-        new Set(["--kill-after", "--signal"]),
-      );
+      const consumed = consumeWrapperOptions(words, index + 1, {
+        shortValues: ["-k", "-s"],
+        longValues: ["--kill-after", "--signal"],
+        longFlags: [
+          "--foreground",
+          "--preserve-status",
+          "--verbose",
+          "--help",
+          "--version",
+        ],
+      });
+      if (consumed.ambiguous) return { name: "", args: [], ambiguous: true };
+      index = consumed.index;
       if (index < words.length) index++; // duration
       skipAssignments();
       continue;
@@ -333,7 +485,7 @@ function shellInvocation(words: string[], depth = 0): ShellInvocation | null {
   const executable = words[index];
   if (!executable) return null;
   return {
-    name: basename(executable),
+    name: shellExecutableName(executable),
     args: words.slice(index + 1),
   };
 }
@@ -531,7 +683,11 @@ export function shellWriteTargets(command: string, cwd = process.cwd()): string[
   // Parse each command segment independently so a mutator never claims a
   // later read-only command's operands. Only destination/in-place operands are
   // candidates for commands that also have read-only source operands.
-  for (const { name: commandName, args } of shellCommandInvocations(command)) {
+  for (const { name: commandName, args, ambiguous } of shellCommandInvocations(command)) {
+    if (ambiguous) {
+      add(cwd);
+      continue;
+    }
     if (commandName === "dd") {
       for (const arg of args) if (arg.startsWith("of=")) add(arg);
       continue;
