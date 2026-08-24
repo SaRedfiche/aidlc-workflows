@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
@@ -15,6 +15,8 @@ import {
   codekbDir,
   codekbRepoName,
   countCheckboxes,
+  currentSwarmSourceMergeChain,
+  currentSwarmAttemptObligations,
   emitError,
   errorMessage,
   extractMarkdownSection,
@@ -61,6 +63,9 @@ import {
   reviewArtifactFingerprint,
   reviewerGateGuardDisabled,
   resolveReviewClass,
+  sourceClaimCovers,
+  sourceBaselineAuditFields,
+  sourceListingEntriesEqual,
   resolveProjectDir,
   resolveStage,
   setCheckbox,
@@ -77,6 +82,7 @@ import {
   worktreeDocsDir,
   worktreePath,
   worktreeStateFilePath,
+  workspaceSourceState,
   writeStateFile,
   writeFileAtomic,
 } from "./aidlc-lib.js";
@@ -1445,15 +1451,128 @@ function isSettledSwarmForArtifactGuard(
   pd: string,
   stage: { slug: string; phase: string; for_each?: string; mode?: string },
   stateContent: string,
+  action: ReviewerPreconditionAction = "complete",
 ): boolean {
+  if (getField(stateContent, "Construction Iteration")?.trim() === "unit-major") {
+    return false;
+  }
   if (!isAutonomousSwarmStage(pd, stateContent, stage)) return false;
-  const resolution = resolveBoltDag(pd);
-  if (resolution.state !== "ok") return false;
+  const units = currentAttemptSwarmUnits(pd, stage.slug, action);
+  if (units === null || units.length === 0) return false;
   // Shared attempt-scoped read (aidlc-lib.ts): a row counts only when its
   // Stage names this slug AND its Run floor equals the current attempt's
   // floor, so stale-attempt and cross-stage rows never satisfy the guard.
   const converged = swarmConvergedUnits(pd, stage.slug);
-  return resolution.units.every((unit) => converged.has(unit));
+  return units.every((unit) => converged.has(unit));
+}
+
+function settledSwarmForArtifactGuardOrError(
+  pd: string,
+  stage: { slug: string; phase: string; for_each?: string; mode?: string },
+  stateContent: string,
+  action: ReviewerPreconditionAction,
+): boolean {
+  try {
+    return isSettledSwarmForArtifactGuard(pd, stage, stateContent, action);
+  } catch (e) {
+    error(
+      `${reviewerPreconditionPrefix(stage.slug, action)}: the settled-swarm probe failed unexpectedly ` +
+        `(${errorMessage(e)}). Restore readable state, audit, and Unit DAG evidence before retrying.`,
+    );
+  }
+}
+
+function currentAttemptSwarmUnits(
+  pd: string,
+  stageSlug: string,
+  action: ReviewerPreconditionAction,
+): string[] | null {
+  const obligations = currentSwarmAttemptObligations(pd, stageSlug);
+  if (obligations.state === "invalid") {
+    error(
+      `${reviewerPreconditionPrefix(stageSlug, action)}: current swarm Unit obligations are invalid ` +
+        `(${obligations.reason}). Restore unit-of-work-dependency.md or restart the stage attempt.`,
+    );
+  }
+  const resolution = resolveBoltDag(pd);
+  if (obligations.state === "none") {
+    return resolution.state === "ok" ? resolution.units : null;
+  }
+  if (resolution.state !== "ok") {
+    error(
+      `${reviewerPreconditionPrefix(stageSlug, action)}: the current Unit DAG cannot be compared with ` +
+        `the attempt-bound Unit obligations. Restore unit-of-work-dependency.md or restart the stage attempt.`,
+    );
+  }
+  const live = new Set(resolution.units);
+  const missing = [...obligations.units].filter((unit) => !live.has(unit)).sort();
+  const added = resolution.units
+    .filter((unit) => !obligations.units.has(unit))
+    .sort();
+  if (missing.length > 0 || added.length > 0) {
+    const detail = [
+      missing.length > 0 ? `missing attempt Units: ${missing.join(", ")}` : "",
+      added.length > 0 ? `added Units: ${added.join(", ")}` : "",
+    ].filter(Boolean).join("; ");
+    error(
+      `${reviewerPreconditionPrefix(stageSlug, action)}: the Unit DAG changed during the current swarm attempt ` +
+        `(${detail}). Restore unit-of-work-dependency.md to the attempt-bound Unit set or restart the stage attempt.`,
+    );
+  }
+  return [...obligations.units];
+}
+
+function verifySettledSwarmSourceBinding(
+  pd: string,
+  stage: { slug: string; workspace_requires?: boolean },
+  action: ReviewerPreconditionAction,
+): void {
+  if (
+    stage.workspace_requires !== true ||
+    process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1"
+  ) {
+    return;
+  }
+  const units = currentAttemptSwarmUnits(pd, stage.slug, action);
+  if (units === null) {
+    error(
+      `${reviewerPreconditionPrefix(stage.slug, action)}: its settled swarm Unit obligations cannot be resolved for the current attempt.`,
+    );
+  }
+  const chain = currentSwarmSourceMergeChain(pd, stage.slug);
+  if (chain.state === "none") {
+    error(
+      `Refusing to complete "${stage.slug}": every Bolt converged, but no current-attempt post-merge main-checkout source binding exists. Merge each reviewed source commit before approval.`,
+    );
+  }
+  if (chain.state === "invalid") {
+    error(
+      `Refusing to complete "${stage.slug}": its post-merge main-checkout source binding chain is invalid (${chain.reason}). Re-run the affected source merge or restart the Bolt attempt.`,
+    );
+  }
+  const missing = units.filter((unit) => !chain.units.has(unit));
+  if (missing.length > 0) {
+    error(
+      `Refusing to complete "${stage.slug}": ${missing.length} converged unit(s) have no current-attempt post-merge source binding (${missing.join(", ")}). Merge every reviewed source commit before approval.`,
+    );
+  }
+  const current = workspaceSourceState(pd);
+  if (current === null || current.fingerprint !== chain.fingerprint) {
+    error(
+      `Refusing to complete "${stage.slug}": the main checkout source no longer matches the final reviewed swarm merge (source-fingerprint mismatch). Revert the unreviewed edit or restart and re-review the affected Bolt.`,
+    );
+  }
+}
+
+function priorAcceptedSourceFields(
+  pd: string,
+  stage: { slug: string; workspace_requires?: boolean },
+): Record<string, string> {
+  if (stage.workspace_requires !== true) return {};
+  const chain = currentSwarmSourceMergeChain(pd, stage.slug);
+  return chain.state === "ready"
+    ? { "Prior Accepted Source Fingerprint": chain.fingerprint }
+    : {};
 }
 
 // Deterministic off-switch for the approve-time gate-revision backstop (mirrors
@@ -1700,7 +1819,8 @@ function workspaceHasWork(pd: string): boolean {
 // untouched. `stage` is the StageEntry being completed. No-op when bypass active.
 function verifyStageArtifacts(
   pd: string,
-  stage: { slug: string; name: string; phase: string; for_each?: string; mode?: string; produces?: string[]; produces_kinds?: Record<string, string[]>; workspace_requires?: boolean }
+  stage: { slug: string; name: string; phase: string; for_each?: string; mode?: string; produces?: string[]; produces_kinds?: Record<string, string[]>; workspace_requires?: boolean },
+  action: ReviewerPreconditionAction = "complete",
 ): void {
   if (artifactGuardDisabled()) return;
 
@@ -1708,16 +1828,25 @@ function verifyStageArtifacts(
   // convergence ledger; its artifacts live in Bolt worktrees this walk cannot
   // see. Same exemption the engine's report-side evidence gate applies.
   let settledSwarm = false;
+  let stateContent: string | null = null;
   try {
-    settledSwarm = isSettledSwarmForArtifactGuard(pd, stage, readStateFile(pd));
+    stateContent = readStateFile(pd);
   } catch {
     // No readable state file: not a swarm settle; stay strict.
+  }
+  if (stateContent !== null) {
+    settledSwarm = settledSwarmForArtifactGuardOrError(
+      pd,
+      stage,
+      stateContent,
+      action,
+    );
   }
   if (settledSwarm) return;
 
   if (!producesArtifactsExist(pd, stage)) {
     error(
-      `Refusing to complete "${stage.slug}": none of its declared artifacts exist ` +
+      `${reviewerPreconditionPrefix(stage.slug, action)}: none of its declared artifacts exist ` +
         `under the intent's record directory. The stage protocol requires ${stage.name} ` +
         `to produce output before the gate. Produce the artifacts before completing. ` +
         `(declared: ${(stage.produces ?? []).join(", ") || "none"})`
@@ -1726,7 +1855,7 @@ function verifyStageArtifacts(
 
   if (stage.workspace_requires && !workspaceHasWork(pd)) {
     error(
-      `Refusing to complete "${stage.slug}": it is a code-producing stage ` +
+      `${reviewerPreconditionPrefix(stage.slug, action)}: it is a code-producing stage ` +
         `(workspace_requires) but no source work is evident outside the aidlc/ ` +
         `workspace tree. In a git workspace this means no uncommitted change and no ` +
         `code in the last commit; otherwise no source file exists. Planning docs alone ` +
@@ -1841,20 +1970,80 @@ function verifyReviewerPrecondition(
   const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
   const perUnit = stage.for_each === "unit-of-work";
 
-  // Source-state equality composes with v2's bounded stale-receipt recovery:
-  // the newest modern binding is reconciled once for the workspace. A mismatch
-  // blocks every completion route and exposes one Recovery: stale-receipt pass,
-  // even when the normal iteration budget is exhausted. One fresh receipt
-  // against the current tree restores the collected per-unit receipts. This is
-  // deliberately not per-unit attribution; see RFC #662.
+  // Source-state equality composes with v2's bounded stale-receipt recovery.
+  // The workspace-global newest-receipt reconciliation remains the outer
+  // boundary; freshReviewReceipts additionally validates each modern unit
+  // binding and applies newest-fresh-claimant shielding per path.
   const sourceFreshnessOff =
     process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1";
-  const settledSwarm = isSettledSwarmForArtifactGuard(pd, stage, content);
+  const settledSwarm = settledSwarmForArtifactGuardOrError(
+    pd,
+    stage,
+    content,
+    action,
+  );
+  // A tightly bounded reconciliation handles the one intentional exception to
+  // the global outer boundary: after an unclaimed addition is reverted, the
+  // current baseline delta can be fully covered by fresh modern unit bindings
+  // even though the newest workspace-global receipt saw the transient file.
+  // Any legacy/missing/stale unit evidence or remaining unclaimed baseline delta
+  // keeps the normal global-first refusal.
+  let baselineChanged: Set<string> | null = null;
+  let baselineUnclaimed: string[] | null = null;
+  if (
+    stage.workspace_requires === true &&
+    receipts.sourceBaseline.state === "ready" &&
+    receipts.currentSourceListing !== null
+  ) {
+    baselineChanged = new Set<string>();
+    const baseline = receipts.sourceBaseline.listing;
+    for (const [pathKey, oid] of baseline) {
+      if (
+        !sourceListingEntriesEqual(
+          receipts.currentSourceListing.get(pathKey),
+          oid,
+        )
+      ) {
+        baselineChanged.add(pathKey);
+      }
+    }
+    for (const pathKey of receipts.currentSourceListing.keys()) {
+      if (!baseline.has(pathKey)) baselineChanged.add(pathKey);
+    }
+    const claimModels = [...receipts.freshUnitClaims.values()];
+    baselineUnclaimed = [...baselineChanged]
+      .filter((pathKey) => !claimModels.some((claims) => sourceClaimCovers(pathKey, claims)))
+      .sort();
+  }
+  const resolutionForReconciliation = perUnit ? resolveBoltDag(pd) : null;
+  const applicableReconciliationUnits =
+    resolutionForReconciliation?.state === "ok"
+      ? resolutionForReconciliation.units.filter(
+          (unit) =>
+            filterProducesByKind(
+              stage.produces_kinds,
+              stage.produces ?? [],
+              resolutionForReconciliation.unitKinds?.get(unit) ?? null,
+            ).length > 0,
+        )
+      : [];
+  const baselineReversionReconciled =
+    receipts.sourceStale &&
+    perUnit &&
+    applicableReconciliationUnits.length > 0 &&
+    applicableReconciliationUnits.every(
+      (unit) =>
+        receipts.unitVerdicts.has(unit) &&
+        receipts.freshUnitClaims.has(unit) &&
+        !receipts.unitStale.has(unit),
+    ) &&
+    baselineUnclaimed?.length === 0;
   const staleSource =
     stage.workspace_requires === true &&
     !sourceFreshnessOff &&
     !settledSwarm &&
-    receipts.sourceStale;
+    receipts.sourceStale &&
+    !baselineReversionReconciled;
   if (staleSource) {
     staleSourcePreconditionError(
       stage.slug,
@@ -1863,8 +2052,14 @@ function verifyReviewerPrecondition(
     );
   }
 
-  // Already-[x] recovery skips only existence/cardinality. A modern binding was
-  // still compared above, so crash-window recovery cannot ship changed source.
+  if (settledSwarm) {
+    verifySettledSwarmSourceBinding(pd, stage, action);
+    return;
+  }
+
+  // Already-[x] recovery skips only existence/cardinality and therefore every
+  // attribution check that depends on a complete fresh-unit claim union. The
+  // modern global binding was still compared above, preserving crash recovery.
   if (!requireReceiptExistence) return;
 
   const sawStageReview = receipts.stageVerdict !== null;
@@ -1932,7 +2127,8 @@ function verifyReviewerPrecondition(
           `run \`aidlc-log.ts review --stage ${stage.slug} --unit <unit> --reviewer ` +
           `${reviewer} --iteration <next ordinal>\`, then record the verdict with ` +
           `the same command plus \`--verdict <READY|NOT-READY>\` and stop editing ` +
-          `produces[] artifacts.`,
+          `produces[] artifacts, that unit's source-manifest.json, and that unit's ` +
+          `claimed source paths.`,
       );
     }
     if (recoverySpent.length > 0) {
@@ -1964,6 +2160,45 @@ function verifyReviewerPrecondition(
         `${neverReviewed.length > 0 ? neverReviewed.join(", ") : "none"}. ` +
         guidance.join(" ")
     );
+  }
+
+  const attributionApplies =
+    stage.workspace_requires === true && !sourceFreshnessOff && !settledSwarm;
+  if (!attributionApplies) return;
+
+  if (
+    receipts.sourceBaseline.state === "unbindable" ||
+    receipts.sourceBaseline.state === "invalid"
+  ) {
+    error(
+      `Refusing to complete "${stage.slug}": the stage's source baseline snapshot is missing, ` +
+        `inconsistent with other modern source-binding evidence, or does not match its recorded hash, ` +
+        `so unclaimed source changes cannot be verified. Re-enter the stage ` +
+        `(a stage jump records a fresh baseline) or set AIDLC_SKIP_SOURCE_FRESHNESS=1 to bypass ` +
+        `deterministically.`,
+    );
+  }
+  if (
+    receipts.sourceBaseline.state === "ready" &&
+    receipts.currentSourceListing !== null
+  ) {
+    const unclaimed = baselineUnclaimed ?? [];
+    if (unclaimed.length > 0) {
+      const rendered = unclaimed.slice(0, 10).map((key) => {
+        const separator = key.indexOf("\0");
+        const repo = key.slice(0, separator);
+        const path = key.slice(separator + 1);
+        return repo ? `${repo}/${path}` : path;
+      });
+      const more = unclaimed.length > 10 ? ` … and ${unclaimed.length - 10} more` : "";
+      error(
+        `Refusing to complete "${stage.slug}": ${unclaimed.length} application-source path(s) changed during this stage run ` +
+          `that no reviewed unit's source manifest claims (${rendered.join(", ")}${more}). Add each path to the owning ` +
+          `unit's source-manifest.json and record that unit's one bounded stale-receipt recovery review ` +
+          `(aidlc-log.ts review --stage ${stage.slug} --unit <unit> --reviewer ${reviewer} --iteration <next ordinal>, ` +
+          `then --verdict <READY|NOT-READY>), or revert the change. Unclaimed source changes fail closed (RFC #662).`,
+      );
+    }
   }
 }
 
@@ -2333,6 +2568,9 @@ function handleAdvance(
     emitAudit(pd, "STAGE_STARTED", {
       Stage: nextSlug,
       Agent: nextStage.lead_agent,
+      ...(nextStage.workspace_requires
+        ? sourceBaselineAuditFields(pd, nextSlug)
+        : {}),
     });
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
@@ -2662,7 +2900,7 @@ function handleGateStart(args: string[]): void {
   if (!stage) error(`Unknown stage: ${slug}`);
   validateSlugInState(content, slug, ["in-progress", "awaiting-approval"]);
   const alreadyAwaiting = getSlugState(content, slug) === "awaiting-approval";
-  verifyStageArtifacts(pd, stage);
+  verifyStageArtifacts(pd, stage, "present-approval-gate");
   verifySummaryConfirmationPrecondition(pd, content, stage);
   verifyPipelineLinkPrecondition(pd, stage);
   if (!reviewerGateGuardDisabled()) {
@@ -2836,6 +3074,7 @@ function handleApprove(args: string[]): void {
         Details:
           "Backfilled by the revision backstop: the artifact was revised at " +
           "an open gate with no reject recorded",
+        ...priorAcceptedSourceFields(pd, stage),
       });
       emitAudit(pd, "STAGE_REVISING", {
         Stage: slug,
@@ -3085,6 +3324,7 @@ function handleReject(args: string[]): void {
     const rejFields: Record<string, string> = {
       Stage: slug,
       Feedback: feedback,
+      ...priorAcceptedSourceFields(pd, stage),
     };
     emitAudit(pd, "GATE_REJECTED", rejFields);
     emitAudit(pd, "STAGE_REVISING", {
@@ -3114,7 +3354,7 @@ function handleRevise(args: string[]): void {
   const stage = findStageBySlug(slug);
   if (!stage) error(`Unknown stage: ${slug}`);
   validateSlugInState(content, slug, "revising");
-  verifyStageArtifacts(pd, stage);
+  verifyStageArtifacts(pd, stage, "present-approval-gate");
   verifySummaryConfirmationPrecondition(pd, content, stage);
   if (!reviewerGateGuardDisabled()) {
     verifyReviewerPrecondition(pd, content, stage, "present-approval-gate");
@@ -3314,6 +3554,9 @@ function handleSkip(args: string[]): void {
         emitAudit(pd, "STAGE_STARTED", {
           Stage: nextStage.slug,
           Agent: nextStage.lead_agent,
+          ...(nextStage.workspace_requires
+            ? sourceBaselineAuditFields(pd, nextStage.slug)
+            : {}),
         });
       }
     } else {
@@ -4156,7 +4399,7 @@ function handleFork(args: string[]): void {
     try {
       appendAuditEntryUnlocked("STATE_FORKED", {
         "Bolt slug": slug,
-        "Worktree path": wtPath,
+        "Worktree path": relative(pd, wtPath).replaceAll("\\", "/"),
         "Source state hash": sha,
         "Target state hash": sha, // fork = byte-identical copy
       }, pd, resolvedIntent, space);
@@ -4334,7 +4577,7 @@ function handleMerge(args: string[]): void {
     try {
       appendAuditEntryUnlocked("STATE_MERGED", {
         "Bolt slug": slug,
-        "Worktree path": wtPath,
+        "Worktree path": relative(pd, wtPath).replaceAll("\\", "/"),
         "Source state hash": wtSha,
         "Target state hash": postMergeSha,
         "Conflict resolution": conflictResolutionField,

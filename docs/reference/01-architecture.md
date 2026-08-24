@@ -109,7 +109,7 @@ Worked examples:
 - *"Trunk-based development is the recommended branching strategy"* — same for every project (framework opinion) and loaded continuously (read at delivery-planning). Goes to `aidlc/spaces/<active-space>/memory/org.md`.
 - *"The 5 common branching strategies and their trade-offs"* — same for every project (framework reference) and loaded continuously (aidlc-pipeline-deploy-agent reads when discovering branching strategy). Goes to `.claude/knowledge/aidlc-pipeline-deploy-agent/branching-strategies.md`.
 - *"This run's requirements analysis"* — project-specific and per-workflow (each run produces fresh analysis). Goes to `<record>/inception/requirements-analysis/`.
-- *"Bolt-1's worktree state mid-Construction"* — project-specific and per-workflow (regenerated each Bolt). Goes to the Bolt worktree's copy of the record dir, `.aidlc/worktrees/bolt-1/<record>/aidlc-state.md`.
+- *"State in the worktree hosting Bolt-1 mid-Construction"* — project-specific and per-workflow (regenerated for each swarm-mode Bolt). Goes to that worktree's copy of the record dir, `.aidlc/worktrees/bolt-1/<record>/aidlc-state.md`.
 
 ### Sub-categories of harness config (top row)
 
@@ -480,7 +480,7 @@ appends — there is intentionally no `merge=union` attribute.
 
 11. **Phase boundary verification** -- Traceability checks run automatically at phase transitions (Initialization->Ideation auto-proceed, Ideation->Inception, Inception->Construction, Construction->Operation). This catches missing requirements-to-design links, orphaned artifacts, and inconsistencies before downstream stages build on incomplete foundations.
 
-12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 86-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
+12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 87-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
 
 13. **No nested delegation** -- The conductor (SKILL.md) performs every agent Task call. Agents never invoke each other or spawn subagents. This keeps the delegation graph flat and debuggable.
 
