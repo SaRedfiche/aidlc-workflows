@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 638,
+    "total": 641,
     "enumeratedByClass": {
-      "function": 375,
+      "function": 378,
       "audit": 87,
       "scope": 11,
       "stage": 33,
@@ -500,6 +500,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t311-gate-sensor-enforcement.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t92.test.ts",
           "mechanism": "cli"
         }
@@ -514,6 +518,10 @@
         {
           "file": "tests/e2e/t-tui-custom-harness.serial.test.ts",
           "mechanism": "tui"
+        },
+        {
+          "file": "tests/integration/t311-gate-sensor-enforcement.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1274,6 +1282,27 @@
     {
       "unitClass": "function",
       "unitId": "function:AUTONOMY_MODE_FIELD",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:BLOCKING_SENSOR_OVERRIDE_CHOICE",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:BLOCKING_SENSOR_OVERRIDE_DECISION",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:BLOCKING_SENSOR_OVERRIDE_OPTIONS",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -6580,6 +6609,10 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/integration/t311-gate-sensor-enforcement.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t92.test.ts",
           "mechanism": "cli"
         }
@@ -6755,6 +6788,10 @@
       "unitId": "aidlc-state gate-start",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/integration/t311-gate-sensor-enforcement.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/integration/t47-failure-injection.test.ts",
           "mechanism": "cli"

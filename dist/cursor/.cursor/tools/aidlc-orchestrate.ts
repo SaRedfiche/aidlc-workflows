@@ -108,6 +108,7 @@ import {
   activeUnitCheckpoint,
   artifactFilename,
   auditBlockField,
+  BLOCKING_SENSOR_OVERRIDE_CHOICE,
   type CheckboxLine,
   checkSummaryConfirmationEvidence,
   clearActiveDirectiveMarker,
@@ -5009,6 +5010,7 @@ interface ReportFlags {
   skeletonStance?: string; // the classify round-trip's classified stance
   single?: boolean; // --single: commit a synthetic-id STAGE_STARTED/COMPLETED pair, never the main pointer
   stage?: string; // --stage <slug>: the acted stage (required under --single; preferred for main workflow reports)
+  overrideBlockingSensors?: boolean;
 }
 
 // Extract report's flags. --result is the verdict; --user-input carries the
@@ -5038,6 +5040,8 @@ function parseReportFlags(args: string[]): ReportFlags {
       i++;
     } else if (a === "--single") {
       flags.single = true;
+    } else if (a === "--override-blocking-sensors") {
+      flags.overrideBlockingSensors = true;
     }
   }
   return flags;
@@ -5834,6 +5838,32 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     readAutonomyMode(stateContent) !== "autonomous" &&
     process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD !== "1";
 
+  if (flags.overrideBlockingSensors) {
+    if (
+      flags.result !== "awaiting-approval" &&
+      flags.result !== "revised"
+    ) {
+      emit(errorDirective(
+        "--override-blocking-sensors is valid only while opening or re-entering a gate.",
+      ));
+      return;
+    }
+    if (readAutonomyMode(stateContent) === "autonomous") {
+      emit(errorDirective(
+        `Refusing blocking sensor override for "${slug}": Construction Autonomy Mode ` +
+          "is autonomous. Unattended runs must halt on blocking sensor failures.",
+      ));
+      return;
+    }
+    if (flags.userInput?.trim() !== BLOCKING_SENSOR_OVERRIDE_CHOICE) {
+      emit(errorDirective(
+        `A blocking sensor override requires --user-input ` +
+          `"${BLOCKING_SENSOR_OVERRIDE_CHOICE}", the exact choice offered to the human.`,
+      ));
+      return;
+    }
+  }
+
   if (protectedHumanGate && flags.result === "rejected") {
     if (flags.userInput?.trim() !== "Request Changes") {
       emit(errorDirective(
@@ -5918,6 +5948,13 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         return;
       }
       subArgs = ["gate-start", slug];
+      if (flags.overrideBlockingSensors) {
+        subArgs.push(
+          "--override-blocking-sensors",
+          "--user-input",
+          flags.userInput!,
+        );
+      }
     } else if (flags.result === "rejected") {
       if (
         stageCheckbox.state !== "in-progress" &&
@@ -5945,6 +5982,13 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         return;
       }
       subArgs = ["revise", slug];
+      if (flags.overrideBlockingSensors) {
+        subArgs.push(
+          "--override-blocking-sensors",
+          "--user-input",
+          flags.userInput!,
+        );
+      }
     }
 
     const res = spawnState(pd, subArgs);

@@ -71,6 +71,16 @@ export interface StageEntry {
   // approve/advance: a code-generation stage that wrote only its markdown
   // produces[] docs but no actual code must not pass (issue #366).
   workspace_requires?: boolean;
+  // Compile-resolved sensor bindings. Runtime dispatchers consume the detailed
+  // graph shape; user-facing directives intentionally project only sensor ids.
+  sensors_applicable?: Array<{
+    id: string;
+    path: string;
+    fire_on: "write" | "gate";
+    default_severity: "advisory" | "blocking";
+    category?: string;
+    matches?: string;
+  }>;
 }
 
 // The per-unit marker carried by the Construction stages that run once per
@@ -3697,6 +3707,13 @@ function cloneId(projectDir: string): string {
 // there is no per-stage scoping. AUTONOMY_MODE_SET only counts when its Mode is
 // autonomous because that grant consumes the human turn that unlocks downstream
 // presence carve-outs.
+export const BLOCKING_SENSOR_OVERRIDE_CHOICE = "Override blocking sensors";
+export const BLOCKING_SENSOR_OVERRIDE_DECISION = "Blocking gate sensor failure";
+export const BLOCKING_SENSOR_OVERRIDE_OPTIONS = [
+  "Fix findings",
+  BLOCKING_SENSOR_OVERRIDE_CHOICE,
+] as const;
+
 const GATE_RESOLUTION_EVENTS = new Set([
   "GATE_APPROVED",
   "GATE_REJECTED",
