@@ -364,6 +364,8 @@ export const ROUTES: readonly Route[] = [
     },
     human: [
       { command: "plugin select [names]", summary: "set enabled plugins" },
+      { command: "plugin list", summary: "list installed plugin enablement" },
+      { command: "plugin sync", summary: "compose installed plugins" },
       { command: "plugin validate [path]", summary: "validate an authored plugin" },
       { command: "plugin build <harness> [outDir]", summary: "build a host plugin projection" },
     ],

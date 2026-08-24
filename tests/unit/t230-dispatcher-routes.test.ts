@@ -625,7 +625,7 @@ describe("t230 dispatcher route completeness", () => {
 describe("t230 dispatcher help and errors", () => {
   test("human help stays short and hides plumbing nouns", () => {
     const text = renderHumanHelp();
-    expect(text.trimEnd().split("\n").length).toBeLessThanOrEqual(20);
+    expect(text.trimEnd().split("\n").length).toBeLessThanOrEqual(22);
     for (const noun of [
       "state",
       "audit",
@@ -678,6 +678,8 @@ describe("t230 dispatcher help and errors", () => {
     const help = viaDispatcher(["plugin", "help"], REPO_ROOT);
     expect(help.exitCode).toBe(0);
     expect(help.stdout.toString("utf-8")).toContain("plugin select [names]");
+    expect(help.stdout.toString("utf-8")).toContain("plugin list");
+    expect(help.stdout.toString("utf-8")).toContain("plugin sync");
     expect(help.stdout.toString("utf-8")).toContain("plugin validate [path]");
     expect(help.stdout.toString("utf-8")).toContain(
       "plugin build <harness> [outDir]",
