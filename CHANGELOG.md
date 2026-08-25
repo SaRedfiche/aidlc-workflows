@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.89] - 2026-08-25
+
+The conductor no longer parks a workflow because context *feels* heavy. The orchestrator skill previously licensed parking when context seemed low even though the conductor cannot measure its own usage, causing unnecessary park/resume interruptions while most of the window remained free. **Upgrade:** refresh your `dist/<harness>/` shell to install the bounded parking guidance.
+
+* Parking for context now requires a usage figure surfaced by the harness at or above 80%; without one, the conductor keeps running stages.
+* User-requested parking and the rule to park instead of fabricating a `done` remain unchanged.
+* The rule applies to all manifest-discovered harness orchestrator skills.
+
 ## [2.6.88] - 2026-08-25
 
 Kiro conductors now treat stage diaries as engine-created write targets instead of pre-stage inputs. Diary observations and lifecycle behavior are unchanged. **Upgrade:** refresh `dist/kiro/` or `dist/kiro-ide/` so the corrected conductor skill is installed.
