@@ -88,7 +88,10 @@ optional doctor check.
 Keep tests and fixtures in the plugin's top-level `tests/` directory, never
 inside `tools/`. Compose drops files under `tools/tests/`, `tools/__tests__/`,
 or `tools/fixtures/`, plus co-located `*.test.ts` and `*.spec.ts` files, and
-records an advisory drop surfaced by `/aidlc --doctor`.
+records an advisory drop surfaced by `/aidlc --doctor`. It also scans the
+installed tools tree for payloads left by older compose versions; because those
+legacy files carry no provenance, that migration advisory names the installed
+path without attributing it to the plugin currently composing.
 `memory` merges into the default-space method seed, **not** a `rules/` dir (that
 directory is no longer read — see §4). `overlays` is special: it is **not**
 copied; it holds the per-stage contributions consumed by the merge (§3).
