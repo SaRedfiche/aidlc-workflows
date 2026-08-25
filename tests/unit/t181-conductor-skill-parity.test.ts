@@ -29,6 +29,7 @@
 // (t148/package.ts --check), so gating the authored source covers every tree.
 
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
@@ -143,6 +144,13 @@ const SUMMARY_STOP_ANNEX_TOKENS = [
   "checkpoint-specific `aidlc-log.ts answer`",
   '**"What should change?"**',
 ];
+
+const P3_EVIDENCE_DIR = join(
+  REPO_ROOT,
+  "tests",
+  "evidence",
+  "p3-kiro-routing",
+);
 
 const FRESH_SESSION_TOKENS: Record<string, string[]> = {
   claude: ["/clear", "`/aidlc`"],
@@ -401,6 +409,126 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(annex).toContain('ask_type: "new-work-routing"');
     expect(annex).toContain("routes through `next`");
     expect(annex).toContain("never through `report`");
+  });
+
+  test("Kiro renders engine asks without a second routing query or replacement prompt", () => {
+    const missing: string[] = [];
+    for (const harness of ["kiro", "kiro-ide"]) {
+      const skillRel = `harness/${harness}/skills/aidlc/SKILL.md`;
+      const annexRel = `harness/${harness}/skills/aidlc/question-rendering.md`;
+      const skill = readFileSync(join(REPO_ROOT, skillRel), "utf-8");
+      const annex = readFileSync(join(REPO_ROOT, annexRel), "utf-8");
+      for (const token of [
+        "sole route authority",
+        "including `intent --json`",
+        "add a recommendation",
+        "then END THE TURN",
+        "unselected-intent clone",
+        "Only before the first engine response",
+        '"or tell me" does not satisfy this required option',
+        "With `available_intents`",
+        "directive.available_intents",
+        "directive.numbered_prose_question",
+        "do not render, paraphrase, or reconstruct",
+        "If continuation or reshape is chosen without a record",
+      ]) {
+        if (!skill.includes(token)) missing.push(`${skillRel}  missing: ${token}`);
+      }
+      for (const token of [
+        "## Engine-emitted ask directives",
+        "Untyped asks use `directive.question`",
+        'For `ask_type: "new-work-routing"`',
+        "`directive.numbered_prose_question` verbatim",
+        "`4. **Other** — describe what you want instead`",
+        "older and newer Kiro",
+        "untyped intent-picker ask",
+        "Every engine-ask render is invalid",
+      ]) {
+        if (!annex.includes(token)) missing.push(`${annexRel}  missing: ${token}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  test("retained native Windows evidence proves completed CLI and IDE routing", () => {
+    const manifest = readFileSync(join(P3_EVIDENCE_DIR, "README.md"), "utf-8");
+    const hashes: Record<string, string> = {
+      "windows-kiro-routing-cli.log":
+        "06c92f9aff519cb74c4c3a34349dc8b9ba8dcfd2e3e78face38b733e5efa2b44",
+      "windows-kiro-routing-cli.ndjson":
+        "32783d2859d8c17f0bf8a4635d68f72505f6c0ea34b904e805f4295d5a550c3e",
+      "windows-kiro-routing-ide.log":
+        "b4f3f68dda120e2764ddaa8873dfaae99e33e4352e0d5e81fc2ae0c1641fcb95",
+      "windows-kiro-routing-ide.ndjson":
+        "d776cbe91f870fcda0b558657e1fcafeccd8f32190793bfb9e7cd5ce18937252",
+    };
+    for (const [file, expected] of Object.entries(hashes)) {
+      const body = readFileSync(join(P3_EVIDENCE_DIR, file));
+      expect(createHash("sha256").update(body).digest("hex"), file).toBe(
+        expected,
+      );
+      expect(manifest).toContain(`${expected}  ${file}`);
+    }
+
+    const cliLog = readFileSync(
+      join(P3_EVIDENCE_DIR, "windows-kiro-routing-cli.log"),
+      "utf-8",
+    );
+    expect(cliLog).toContain(" 2 pass");
+    expect(cliLog).toContain(" 0 fail");
+    const cliEvents = readFileSync(
+      join(P3_EVIDENCE_DIR, "windows-kiro-routing-cli.ndjson"),
+      "utf-8",
+    )
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const cliResults = cliEvents.filter((event) => event.event === "result");
+    expect(cliResults).toHaveLength(2);
+    for (const result of cliResults) {
+      expect(result.stopReason).toBe("end_turn");
+      expect(result.toolCalls).toBe(1);
+    }
+    const cliToolCalls = cliEvents.filter((event) => event.event === "tool_call");
+    expect(cliToolCalls).toHaveLength(2);
+    expect(
+      cliToolCalls.every((event) =>
+        String(event.title).includes("aidlc-orchestrate.ts next")
+      ),
+    ).toBe(true);
+    expect(
+      cliToolCalls.some((event) => String(event.title).includes("intent --json")),
+    ).toBe(false);
+
+    const ideLog = readFileSync(
+      join(P3_EVIDENCE_DIR, "windows-kiro-routing-ide.log"),
+      "utf-8",
+    );
+    expect(ideLog).toContain(" 1 pass");
+    expect(ideLog).toContain(" 0 fail");
+    const ide = JSON.parse(
+      readFileSync(
+        join(P3_EVIDENCE_DIR, "windows-kiro-routing-ide.ndjson"),
+        "utf-8",
+      ),
+    ) as {
+      platform?: string;
+      completed_turn?: boolean;
+      intent_query_present?: boolean;
+      directive?: {
+        ask_type?: string;
+        numbered_prose_question?: string;
+      };
+      ordered_lists?: string[][];
+    };
+    expect(ide.platform).toBe("win32");
+    expect(ide.completed_turn).toBe(true);
+    expect(ide.intent_query_present).toBe(false);
+    expect(ide.directive?.ask_type).toBe("new-work-routing");
+    expect(ide.directive?.numbered_prose_question).toContain("4. **Other**");
+    expect(ide.ordered_lists).toHaveLength(1);
+    expect(ide.ordered_lists?.[0]).toHaveLength(4);
+    expect(ide.ordered_lists?.[0]?.[3]).toContain("Other");
   });
 
   test("prose renderers remap file-backed source letters to numbered prose", () => {

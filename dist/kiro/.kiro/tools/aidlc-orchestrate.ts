@@ -450,6 +450,31 @@ function emit(directive: Directive): void {
 const TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
 const IS_COMPILED = import.meta.url.includes("/$bunfs/");
 
+function isKiroRoutingHarness(): boolean {
+  if (IS_COMPILED) {
+    const explicit = process.env.AIDLC_HARNESS_NAME?.trim();
+    return explicit === "kiro" || explicit === "kiro-ide";
+  }
+  const invokedScript = (process.argv[1] ?? "").replaceAll("\\", "/");
+  if (
+    /(^|\/)\.kiro\/tools\/aidlc-orchestrate\.ts$/.test(invokedScript)
+  ) {
+    return true;
+  }
+  try {
+    const parsed = JSON.parse(
+      readFileSync(join(TOOLS_DIR, "data", "harness.json"), "utf-8"),
+    ) as { name?: unknown };
+    return parsed.name === "kiro" || parsed.name === "kiro-ide";
+  } catch {
+    // The authored core tree and compiled binaries may lack generated metadata.
+    // The explicit name is their test/build seam; installed source trees always
+    // take the metadata branch above.
+    const explicit = process.env.AIDLC_HARNESS_NAME?.trim();
+    return explicit === "kiro" || explicit === "kiro-ide";
+  }
+}
+
 function toolPath(file: string): string {
   return join(TOOLS_DIR, file);
 }
@@ -705,16 +730,23 @@ function askDirective(question: string): AskDirective {
 
 function newWorkRoutingAskDirective(
   question: string,
+  numberedProseQuestion: string,
   description: string,
   proposedScope: string,
+  availableIntents?: string[],
 ): AskDirective {
+  // Once emitted, this typed ask is the sole route authority for the pending
+  // prose. Harnesses render it and stop; they must not query intent state or
+  // re-classify the request into a replacement question.
   return {
     kind: "ask",
     ask_type: "new-work-routing",
     response_route: "next",
     question,
+    numbered_prose_question: numberedProseQuestion,
     new_work_description: description,
     proposed_scope: proposedScope,
+    ...(availableIntents ? { available_intents: availableIntents } : {}),
   };
 }
 
@@ -1140,13 +1172,14 @@ function composeDispatchDirective(
 // This consults the deterministic query layer (listIntents over the active
 // space) and, when intents EXIST but none is flagged active, NAMES the
 // disambiguation move as an `ask` directive that lists the existing intents and
-// asks the human to pick one via `/aidlc intent <slug>` — instead of birthing.
+// asks the human to pick one via `/aidlc intent <name>` — instead of birthing.
 // Returns null when birth should proceed unchanged (zero intents in the space,
 // or one already resolved active — the latter only when this is reached with an
 // explicit scope/intent that didn't load a cursor'd state). The engine stays
 // read-only: it emits a directive, it does not touch the cursor.
 function intentPickPromptIfRecordsExist(
   projectDir: string,
+  pendingWork?: { description: string; proposedScope: string },
 ): AskDirective | null {
   const selection = engineSelection(projectDir);
   const space = selection.space;
@@ -1154,15 +1187,60 @@ function intentPickPromptIfRecordsExist(
   if (intents.length === 0) return null; // zero intents → birth is correct
   if (intents.some((i) => i.active)) return null; // a cursor already resolves → not a birth path
   // Records exist but no cursor is set (the fresh-clone / >1-no-cursor case).
-  // NAME the existing intents and ask the human to select one rather than
-  // birthing a duplicate. Order follows listIntents (registry order).
-  const slugs = intents.map((i) => i.slug);
-  const list = slugs.map((s) => `\`${s}\``).join(", ");
+  // Carry the exact record-dir selectors accepted by `intent <name>`. Slugs are
+  // display labels only: duplicate labels are legal, while a slug-only switch
+  // is ambiguous and fails. Registry-only rows with no on-disk record are not
+  // selectable and therefore cannot enter the route contract.
+  const selectable = intents.flatMap((intent) =>
+    intent.dirName
+      ? [{
+          label: intent.slug,
+          selector: intent.dirName,
+        }]
+      : []
+  );
+  const selectors = selectable.map((intent) => intent.selector);
+  const list = selectable.length > 0
+    ? selectable
+      .map(({ label, selector }) =>
+        label === selector
+          ? `\`${selector}\``
+          : `\`${label}\` (record: \`${selector}\`)`
+      )
+      .join(", ")
+    : intents.map((intent) => `\`${intent.slug}\``).join(", ");
   const spaceLabel = space === "default" ? "" : ` in space "${space}"`;
+  // The unselected typed subtype is Kiro-specific. Other harness skills retain
+  // the established picker/scope-confirm contracts and must never receive
+  // available_intents they do not know how to route.
+  if (
+    isKiroRoutingHarness() &&
+    pendingWork?.description.trim() &&
+    selectors.length > 0
+  ) {
+    return newWorkRoutingAskDirective(
+      `This project already has ${intents.length} piece${intents.length === 1 ? "" : "s"} of work in progress${spaceLabel}, ` +
+        `and none is currently selected: ${list}. You said: "${pendingWork.description}". ` +
+        `Is this (1) part of existing work - select its record and continue it; ` +
+        `(2) a separate new piece of work - Yes, set it up alongside the existing work as ` +
+        `"${pendingWork.proposedScope}" work without changing it; or (3) a change to an ` +
+        "existing remaining plan - select its record, then reshape it?",
+      `**New work routing** — This project already has ${intents.length} piece${intents.length === 1 ? "" : "s"} of work in progress${spaceLabel}, ` +
+        `and none is currently selected: ${list}. You said: "${pendingWork.description}". What should I do?\n\n` +
+        `1. **Part of existing work** — Select one of ${list} and continue it\n` +
+        `2. **Separate new piece of work** — Yes, set it up alongside the existing work as "${pendingWork.proposedScope}" work without changing it\n` +
+        `3. **Reshape existing work** — Select one of ${list}, then reshape its remaining plan\n` +
+        "4. **Other** — describe what you want instead\n\n" +
+        "Reply with a number (or just tell me).",
+      pendingWork.description,
+      pendingWork.proposedScope,
+      selectors,
+    );
+  }
   return askDirective(
     `This project already has ${intents.length} piece${intents.length === 1 ? "" : "s"} of work in progress${spaceLabel}, and none is currently selected ` +
       `(which one you are on is tracked per-person and does not travel with the repo). ` +
-      `Pick the one to work on with \`/aidlc intent <slug>\`: ${list}. ` +
+      `Pick the one to work on with \`/aidlc intent <name>\`: ${list}. ` +
       "That selects it; re-run `next` afterward to carry on where it left off.",
   );
 }
@@ -3333,7 +3411,15 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     // Don't birth a duplicate over a multi-intent workspace whose cursor is
     // unset (fresh clone) — prompt the human to pick an existing intent. null →
     // zero intents → birth as before.
-    const pick = intentPickPromptIfRecordsExist(pd);
+    const pick = intentPickPromptIfRecordsExist(
+      pd,
+      flags.intent
+        ? {
+            description: flags.intent,
+            proposedScope: flags.positionalScope,
+          }
+        : undefined,
+    );
     if (pick) {
       emit(pick);
       return;
@@ -3368,6 +3454,20 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     !flags.positionalScope
   ) {
     const inferred = inferScopeFromText(flags.intent);
+    // Branch 8 had no unselected-intent guard before the Kiro routing fix.
+    // Keep every non-Kiro harness on its established scope-confirm/compose
+    // contract; only Kiro needs the typed ask that fixes its live replacement
+    // prompt failure.
+    if (isKiroRoutingHarness()) {
+      const pick = intentPickPromptIfRecordsExist(pd, {
+        description: flags.intent,
+        proposedScope: inferred.scope,
+      });
+      if (pick) {
+        emit(pick);
+        return;
+      }
+    }
     if (inferred.source === "keyword") {
       // Preview the ceremony the user is confirming: stage/gate counts from the
       // compiled grid (never estimates). Drop the clause if the scope does not
@@ -3413,7 +3513,15 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     // Same fresh-clone guard as Branch 7b: if intents already exist in the
     // active space with no cursor set, prompt to pick one instead of birthing a
     // duplicate. null → zero intents → birth as before.
-    const pick = intentPickPromptIfRecordsExist(pd);
+    const pick = intentPickPromptIfRecordsExist(
+      pd,
+      flags.intent
+        ? {
+            description: flags.intent,
+            proposedScope: scope,
+          }
+        : undefined,
+    );
     if (pick) {
       emit(pick);
       return;
@@ -3471,14 +3579,23 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     // Name the scope a confirmed new intent would get (the same pure
     // inference Branch 8 uses) so the single ask carries everything the offer
     // needs: active work, the new text, the proposed scope, and a "Yes"-led
-    // affirmative. inferScopeFromText always returns a deterministic scope,
-    // including its selection-aware fallback for rich prose.
+    // affirmative. Once emitted, this question is the sole route authority:
+    // the harness renders these exact three choices and stops rather than
+    // querying intent state and replacing the ask. inferScopeFromText always
+    // returns a deterministic scope, including its selection-aware fallback
+    // for rich prose.
     const inferred = inferScopeFromText(flags.intent);
     emit(newWorkRoutingAskDirective(
       `Work is already in progress on: "${activeLabel}". You said: "${flags.intent}". ` +
         `Is this (1) part of that work - continue it; (2) a separate new piece of work - ` +
         `Yes, set it up alongside the current one as "${inferred.scope}" work without changing it; ` +
         "or (3) a change to how the remaining plan is shaped?",
+      `**New work routing** — Work is already in progress on: "${activeLabel}". You said: "${flags.intent}". What should I do?\n\n` +
+        "1. **Part of the active work** — Continue the current workflow\n" +
+        `2. **Separate new piece of work** — Yes, set it up alongside the current one as "${inferred.scope}" work without changing it\n` +
+        "3. **Reshape the active work** — Change how the remaining plan is shaped\n" +
+        "4. **Other** — describe what you want instead\n\n" +
+        "Reply with a number (or just tell me).",
       flags.intent,
       inferred.scope,
     ));

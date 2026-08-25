@@ -9,7 +9,11 @@ import {
   workspaceCommandUtilityArgv,
 } from "./aidlc-lib.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
-import { packagedDistributionRoot, runtimeHarnessDir } from "./aidlc-runtime-paths.ts";
+import {
+  packagedDistributionRoot,
+  runtimeHarnessDir,
+  runtimeHarnessName,
+} from "./aidlc-runtime-paths.ts";
 
 type Classification = "passthrough" | "translation" | "stub" | "routing-only" | "help";
 type RouteKind =
@@ -1185,13 +1189,17 @@ export async function main(argv: string[]): Promise<void> {
     await metrics.sendMetricFromStdin();
     return;
   }
-  if (import.meta.url.includes("/$bunfs/") && !process.env.AIDLC_HARNESS_DIR) {
-    // Compiled, no explicit harness: probe the project install (.claude /
-    // .kiro / .codex by tools/data/harness.json) rather than assuming
-    // .claude — module-relative derivation can't work from $bunfs, and every
-    // delegate and sibling tool reads this env, so pin the probe's answer
-    // once here. Falls back to .claude when no install is present.
-    process.env.AIDLC_HARNESS_DIR = runtimeHarnessDir();
+  if (import.meta.url.includes("/$bunfs/")) {
+    // Compiled modules cannot derive the installed harness from their $bunfs
+    // path, and embedded data may be Claude-flavoured. Probe the project once
+    // and pin BOTH identifiers before lazy delegate imports so same-directory
+    // harnesses (Kiro/Kiro IDE, Copilot/OpenCode) retain their exact identity.
+    if (!process.env.AIDLC_HARNESS_DIR) {
+      process.env.AIDLC_HARNESS_DIR = runtimeHarnessDir();
+    }
+    if (!process.env.AIDLC_HARNESS_NAME) {
+      process.env.AIDLC_HARNESS_NAME = runtimeHarnessName();
+    }
   }
   const code = await execute(resolveAction(argv));
   process.exitCode = code;

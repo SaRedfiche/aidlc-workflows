@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.83] - 2026-08-25
+
+Kiro CLI and Kiro IDE now preserve engine-authored routing questions instead of querying intent state and replacing them with a conductor-derived prompt. **Upgrade:** refresh your `dist/kiro/` or `dist/kiro-ide/` shell so the updated conductor and numbered-prose rendering contract are installed.
+
+* A typed `new-work-routing` ask is the sole route authority once emitted: its engine-authored `numbered_prose_question` carries routes 1-3 plus `4. Other`, which Kiro prints verbatim before ending the turn without an extra `intent --json` query or recommendation.
+* On Kiro CLI and IDE, unselected-intent clones with pending new prose receive the same typed routing ask plus engine-listed `available_intents`; those values are exact record-directory selectors, so duplicate labels remain switchable through `next intent <name>`. Other harnesses retain their prior picker and scope-confirm contracts.
+* The compiled `aidlc` dispatcher now pins both the installed harness directory and exact harness name before loading the orchestrator, preserving Kiro routing when module paths and embedded metadata cannot identify the host.
+* Continuation and plan-reshape classification remain available before the first engine response; once an ask exists, both old and new Kiro versions use the same prose-only stop-and-wait path.
+
 ## [2.6.82] - 2026-08-25
 
 `/aidlc --doctor` now catches hooks that Claude Code has globally disabled. Previously an install with `"disableAllHooks": true` could pass every check yet block at runtime because doctor verified that hook files were present and wired, but not that Claude Code would run them. **Upgrade:** refresh your `dist/<harness>/` shell to pick up the new check.
