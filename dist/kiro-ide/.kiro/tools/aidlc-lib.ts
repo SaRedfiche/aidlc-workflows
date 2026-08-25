@@ -1019,6 +1019,15 @@ function terminalCommandFromPluginCommand(
 // all enumerate the same surface instead of three hand-kept copies drifting.
 // `remove` is deliberately absent: deletion stays "delete your own original,
 // then sync", so the tool never holds a destructive verb over user-owned files.
+//
+// `summarize` (S3b) is a deliberate EIGHTH verb, not a flag riding on an
+// existing one. It is not the same case the design rejected for an extractor-
+// config verb (§7's option (b), which had a strictly better packager-owned
+// alternative): a summary is LLM-authored text with no other entry point into
+// the tool, so persisting it needs its own verb exactly as `associate`/
+// `dissociate` needed theirs. The tool stays deterministic -- it validates,
+// bounds, digests and persists the text a caller supplies; it never generates
+// or judges content itself (design §6's execution model).
 export const KNOWLEDGE_VERBS: readonly string[] = Object.freeze([
   "onboard",
   "sync",
@@ -1027,6 +1036,7 @@ export const KNOWLEDGE_VERBS: readonly string[] = Object.freeze([
   "associate",
   "dissociate",
   "rebind",
+  "summarize",
 ]);
 
 export type KnowledgeCommand =
@@ -10754,7 +10764,11 @@ export function assertNoSymlinkInChainOrThrow(anchorReal: string, rel: string): 
 //
 // Throws (does not exit) so each caller can attach its own flag name and exit
 // code. `what` names the thing in the message: "--text-file", "source", ….
-export function readRegularFileNoFollowOrThrow(path: string, what: string): Buffer {
+export function readRegularFileNoFollowOrThrow(
+  path: string,
+  what: string,
+  maxBytes?: number,
+): Buffer {
   let fd: number;
   try {
     // O_NONBLOCK matters as much as O_NOFOLLOW here, and for a non-obvious
@@ -10803,6 +10817,12 @@ export function readRegularFileNoFollowOrThrow(path: string, what: string): Buff
           `A hardlink can alias content from elsewhere on the filesystem into this ` +
           `directory. Replace it with an independent copy — ` +
           `cp <file> <file>.copy && mv <file>.copy <file> — and re-run.`,
+      );
+    }
+    if (maxBytes !== undefined && st.size > maxBytes) {
+      throw new Error(
+        `${what} is ${st.size} bytes, above the ${maxBytes}-byte limit: ${path}. ` +
+          `Reduce the file before retrying.`,
       );
     }
     // Fallback for platforms without O_NOFOLLOW, and a pathname/descriptor
