@@ -75,6 +75,7 @@ import {
   isoTimestamp,
   isPackageJson,
   codekbDir,
+  intentsDir,
   codekbRepoName,
   codekbScopeFingerprint,
   parseReScope,
@@ -103,6 +104,7 @@ import {
   readActiveDirectiveMarker,
   recordHookDrop,
   readCurrentSessionId,
+  resolveWorkflowSelection,
   readStateFile,
   refreshActiveDirectiveMarker,
   resolveBirthRepoSet,
@@ -127,6 +129,7 @@ import {
   stageEnabledBySelection,
   stagesInScope,
   stateFilePath,
+  clearSessionIntentUuid,
   sourceBaselineAuditFields,
   withAuditLock,
   validateBoltSlug,
@@ -135,6 +138,7 @@ import {
   worktreePath,
   worktreeStateFilePath,
   writeSessionIntentUuid,
+  writeSessionBinding,
   writeStateFile,
   harnessDir,
   rulesSubdir,
@@ -142,6 +146,7 @@ import {
   _resetScopeMappingForTests,
   _resetStageGraphForTests,
   classifyStateVersion,
+  clearSessionRebindOffer,
   CURRENT_STATE_VERSION,
   type AuditShardEvent,
 } from "./aidlc-lib.ts";
@@ -1189,7 +1194,14 @@ function pendingDuration(ageMs: number): string {
 function handleStatus(projectDir: string, flags: Record<string, string>): void {
   // --intent <record> / --space <name> target a specific intent's status
   // (vision §5); omitted -> the active record.
-  const sp = stateFilePath(projectDir, flags.intent, flags.space);
+  const selection = resolveWorkflowSelection(projectDir, {
+    space: flags.space,
+    intent: flags.intent,
+  });
+  const sp =
+    selection.intent === null
+      ? join(intentsDir(projectDir, selection.space), "aidlc-state.md")
+      : stateFilePath(projectDir, selection.intent, selection.space);
   if (!existsSync(sp)) {
     process.stdout.write(
       `No active AI-DLC workflow found.
@@ -4526,6 +4538,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     die(`Unknown test strategy: "${testStrategyOverride}". Valid: minimal, standard, comprehensive.`);
   }
   const reviewOverride = parseReviewOverride(flags.review);
+  const initialSelection = resolveWorkflowSelection(projectDir);
 
   // Resolve the repo set the intent touches (P7 multi-repo): an explicit
   // `--repos a,b` wins; absent it, sibling auto-discovery scans the workspace
@@ -4556,6 +4569,14 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     // project skips it).
     const migration = migrateFlatLayout(projectDir);
     if (migration) {
+      if (initialSelection.sessionId) {
+        writeSessionBinding(
+          projectDir,
+          initialSelection.sessionId,
+          DEFAULT_SPACE,
+          migration.intentDirName,
+        );
+      }
       gitRmFlatTree(projectDir, migration.movedFrom);
       const migratedState = readStateFile(projectDir);
       const reviewUpdate = applyReviewOverride(
@@ -4616,8 +4637,15 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
         `"${slug}" is a reserved name and cannot be an intent label. Pick a label that describes the work.`
       );
     }
-    const space = activeSpace(projectDir);
-    createIntent(projectDir, slug, space, scope, repos);
+    const space = initialSelection.space;
+    const created = createIntent(
+      projectDir,
+      slug,
+      space,
+      scope,
+      repos,
+      initialSelection.sessionId ?? undefined,
+    );
 
     const ts = isoTimestamp();
 
@@ -4703,7 +4731,15 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       Details: phaseDirDetail,
     });
 
-    handleIntentCreateStateBuild(projectDir, flags, scope, ts, reviewOverride);
+    handleIntentCreateStateBuild(
+      projectDir,
+      flags,
+      scope,
+      ts,
+      reviewOverride,
+      created.dirName,
+      created.space,
+    );
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
 
@@ -4717,6 +4753,8 @@ function handleIntentCreateStateBuild(
   scope: string,
   ts: string,
   reviewOverride: ReviewOverride | undefined,
+  createdDir: string,
+  createdSpace: string,
 ): void {
   const depthOverride = flags.depth;
   const testStrategyOverride = flags["test-strategy"];
@@ -4989,13 +5027,12 @@ ${stageProgress}
   // Combined stdout summary (intent born + state-build). The active-intent
   // cursor + the record dir were set by createIntent above; the state file lives
   // under the born intent's record (resolved by writeStateFile's default).
-  const bornDir = activeIntent(projectDir) ?? "(legacy flat record)";
   const submoduleWarningLine =
     uninitSubmodules.length > 0
       ? `Warning: ${uninitSubmodules.length} uninitialized git submodule path(s) (${enumerateSubmodulePaths(uninitSubmodules)}) - run '${SUBMODULE_INIT_REMEDY}' before proceeding so reverse-engineering can read the code.\n`
       : "";
   process.stdout.write(
-    `Intent created: ${bornDir} (space: ${activeSpace(projectDir)})
+    `Intent created: ${createdDir} (space: ${createdSpace})
 State initialized: ${scope} scope, ${totalInScope} stages, ${effectiveDepth} depth
 Project type: ${scan.projectType}
 Languages: ${scan.languages}
@@ -5033,9 +5070,13 @@ function handleUpgrade(): void {
 // shape: {active, spaces:[...], intents:[{uuid,slug,status,repos}]} — consumed
 // by the birth gate, resume-rebind, and statusline; human text is the bare
 // `/aidlc intent` rendering. Pure read.
-function printIntentListing(projectDir: string, asJson: boolean): void {
-  const space = activeSpace(projectDir);
-  const intents = listIntents(projectDir, space);
+function printIntentListing(
+  projectDir: string,
+  asJson: boolean,
+): void {
+  const selection = resolveWorkflowSelection(projectDir);
+  const space = selection.space;
+  const intents = listIntents(projectDir, space, selection.intent);
   const active = intents.find((i) => i.active);
   if (asJson) {
     process.stdout.write(
@@ -5073,8 +5114,12 @@ function printIntentListing(projectDir: string, asJson: boolean): void {
 
 // Print a space listing (human OR --json). --json shape:
 // {active, spaces:[{name,active}]}. Pure read.
-function printSpaceListing(projectDir: string, asJson: boolean): void {
-  const spaces = listSpaces(projectDir);
+function printSpaceListing(
+  projectDir: string,
+  asJson: boolean,
+): void {
+  const selection = resolveWorkflowSelection(projectDir);
+  const spaces = listSpaces(projectDir, selection.space);
   const active = spaces.find((s) => s.active);
   if (asJson) {
     process.stdout.write(
@@ -5130,8 +5175,9 @@ function handleIntent(
     handleHelp();
     return;
   }
-  const space = activeSpace(projectDir);
-  const intents = listIntents(projectDir, space);
+  const selection = resolveWorkflowSelection(projectDir);
+  const space = selection.space;
+  const intents = listIntents(projectDir, space, selection.intent);
   // Exact record-dir match first; then a unique slug match.
   let match = intents.find((i) => i.dirName === target);
   if (!match) {
@@ -5166,8 +5212,14 @@ function handleIntent(
   // session → its stamp moves, not ours → a genuine resume of our session still
   // offers the rebind. writeSessionIntentUuid no-ops on a blank uuid, so an
   // orphan (registry-less) record is fail-safe. Best-effort throughout.
-  const sid = readCurrentSessionId(projectDir);
-  if (sid && match.uuid) writeSessionIntentUuid(projectDir, sid, match.uuid);
+  const sid =
+    selection.sessionId ??
+    readCurrentSessionId(projectDir);
+  if (sid) {
+    writeSessionBinding(projectDir, sid, space, match.dirName);
+    clearSessionRebindOffer(projectDir, sid);
+    if (match.uuid) writeSessionIntentUuid(projectDir, sid, match.uuid);
+  }
   process.stdout.write(`Active intent → ${match.dirName} (space: ${space})\n`);
 }
 
@@ -5216,7 +5268,22 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
       `Unknown space "${target}". Existing: ${spaces.map((s) => s.name).join(", ")}. This command only switches between existing spaces. Do not create a space to recover from this error - creating one is a separate, deliberate move (/aidlc space create <name>, or legacy /aidlc space-create <name>).`
     );
   }
+  const selection = resolveWorkflowSelection(projectDir);
   setActiveSpaceCursor(projectDir, target);
+  const sessionId = selection.sessionId ?? readCurrentSessionId(projectDir);
+  if (sessionId) {
+    const targetIntent = activeIntent(projectDir, target);
+    writeSessionBinding(projectDir, sessionId, target, targetIntent);
+    clearSessionRebindOffer(projectDir, sessionId);
+    if (targetIntent) {
+      const uuid = listIntents(projectDir, target).find(
+        (entry) => entry.dirName === targetIntent,
+      )?.uuid;
+      if (uuid) writeSessionIntentUuid(projectDir, sessionId, uuid);
+    } else {
+      clearSessionIntentUuid(projectDir, sessionId);
+    }
+  }
   // Re-point the harness-native includes at the switched space so the NEXT turn
   // loads its method into ambient context (the cursor alone only moves AIDLC's
   // own resolver; the CLI-native include is the ambient channel). Surgical
@@ -5236,8 +5303,11 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
 // no state read, no audit — mirrors the intent/space read-only query arms.
 function handleCodekbPath(projectDir: string, flags: Record<string, string>): void {
   const asJson = flags.json === "true";
-  const space = activeSpace(projectDir);
-  const repo = flags.repo && flags.repo.length > 0 ? flags.repo : codekbRepoName(projectDir, space);
+  const selection = resolveWorkflowSelection(projectDir);
+  const space = selection.space;
+  const repo = flags.repo && flags.repo.length > 0
+    ? flags.repo
+    : codekbRepoName(projectDir, space, selection.intent ?? undefined);
   const dir = relativeCodekbDir(projectDir, repo, space);
   if (asJson) {
     process.stdout.write(`${JSON.stringify({ space, repo, dir })}\n`);
@@ -5274,8 +5344,11 @@ function handleCodekbPath(projectDir: string, flags: Record<string, string>): vo
 // no audit.
 function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>): void {
   const asJson = flags.json === "true";
-  const space = activeSpace(projectDir);
-  const repo = flags.repo && flags.repo.length > 0 ? flags.repo : codekbRepoName(projectDir, space);
+  const selection = resolveWorkflowSelection(projectDir);
+  const space = selection.space;
+  const repo = flags.repo && flags.repo.length > 0
+    ? flags.repo
+    : codekbRepoName(projectDir, space, selection.intent ?? undefined);
   const storeDir = relativeCodekbDir(projectDir, repo, space);
   const storePath = join(projectDir, ...storeDir.split("/"), "reverse-engineering-timestamp.md");
 

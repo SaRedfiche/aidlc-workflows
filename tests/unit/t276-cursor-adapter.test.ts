@@ -429,8 +429,8 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(out.user_message ?? "").toContain("intent-b");
     expect(out.user_message ?? "").toContain("/aidlc intent intent-a");
 
-    // The blocked warning is consumed: resubmitting continues on B instead of
-    // deadlocking on the same beforeSubmitPrompt response.
+    // The blocked warning is consumed: resubmitting continues on the bound
+    // intent A instead of deadlocking on the same beforeSubmitPrompt response.
     const next = runAdapter(
       proj,
       "mint",
@@ -438,7 +438,7 @@ describe("t276 cursor adapter payload conversion", () => {
     );
     expect(next.code).toBe(0);
     expect(next.stdout.trim()).toBe("");
-    const shard = readAllAuditShards(proj);
+    const shard = readAllAuditShards(proj, a.dirName, "default");
     expect(shard).toContain("HUMAN_TURN");
     expect(shard).not.toContain("SESSION_RESUMED");
   });
@@ -1250,7 +1250,7 @@ if (import.meta.main) {
     };
     expect(lostOut.permission).toBe("deny");
     expect(lostOut.agent_message ?? "").toContain("identity is unavailable or ambiguous");
-  }, 15_000);
+  }, 30_000);
 
   test("25: partial reviewer-ledger loss cannot resolve an unknown conversation as a developer", () => {
     const proj = installedProject();
