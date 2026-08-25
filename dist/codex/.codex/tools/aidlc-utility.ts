@@ -19,6 +19,7 @@ import {
   relative,
   resolve,
   sep,
+  win32 as winPath,
 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
@@ -1408,6 +1409,38 @@ export const PRACTICES_STALENESS_DAYS = 90;
 // covers a generous LLM Task call budget (Haiku 30s + retry + parse).
 export const MERGE_DISPATCH_TIMEOUT_SEC = 60;
 
+/**
+ * Resolve the ordered list of Claude Code `managed-settings.json` paths to probe
+ * for a `disableAllHooks` override, most-authoritative first. Pure and
+ * platform/env-injected so every OS can be unit-tested without a host of that OS.
+ *
+ * Paths per Claude Code's settings docs (code.claude.com/docs/en/settings):
+ *   - macOS:       /Library/Application Support/ClaudeCode/managed-settings.json
+ *   - Linux / WSL: /etc/claude-code/managed-settings.json
+ *   - Windows:     %ProgramFiles%\ClaudeCode\managed-settings.json
+ *                  (legacy %PROGRAMDATA%\ClaudeCode\ — unsupported since v2.1.75,
+ *                   kept only as a secondary probe)
+ *
+ * AIDLC_MANAGED_SETTINGS_PATH overrides the list entirely — a custom managed
+ * path, and the seam tests use to stay hermetic against the host's real file.
+ */
+export function resolveManagedSettingsCandidates(
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+): string[] {
+  if (env.AIDLC_MANAGED_SETTINGS_PATH) return [env.AIDLC_MANAGED_SETTINGS_PATH];
+  if (platform === "darwin") return ["/Library/Application Support/ClaudeCode/managed-settings.json"];
+  if (platform === "win32") {
+    // Use the win32 joiner explicitly so paths carry backslashes regardless of
+    // the host OS running doctor's tests (native `join` would use the host's).
+    return [
+      winPath.join(env.ProgramFiles || "C:\\Program Files", "ClaudeCode", "managed-settings.json"),
+      winPath.join(env.PROGRAMDATA || "C:\\ProgramData", "ClaudeCode", "managed-settings.json"),
+    ];
+  }
+  return ["/etc/claude-code/managed-settings.json"];
+}
+
 interface NamingMismatch {
   file: string;
   stem: string;
@@ -1940,6 +1973,72 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
         });
       }
     }
+
+    // Hooks GLOBALLY disabled (issue #802). Every check above verifies the hook
+    // files are present and wired, but Claude Code honours `disableAllHooks:
+    // true` in any settings layer, which silently skips EVERY hook — audit
+    // emission, state sync, sensor dispatch, stage-graph rebuild, the lot. A
+    // regulated-industry install (IT policy sets the flag) then passes doctor
+    // clean yet blocks at runtime on the first stage: the exact false positive
+    // reported. The presence rows can't catch it, so probe the flag explicitly.
+    //
+    // Resolve it the way Claude Code does — the HIGHEST-precedence layer that
+    // sets the key wins — so a lower layer's `true` overridden by a higher
+    // layer's `false` does not false-alarm. Precedence (high→low): enterprise
+    // managed settings, project settings.local.json, project settings.json,
+    // user ~/.claude/settings.json. (The command line can also disable hooks
+    // via `--settings '{"disableAllHooks": true}'`, sitting between managed and
+    // local, but that is not persisted to a file so it is unprobeable here.)
+    //
+    // We inspect only the on-disk managed-settings FILE. Claude Code can also
+    // receive managed policy through channels we cannot read from here (MDM,
+    // Windows registry, a remote/server-managed source, a `managed-settings.d/`
+    // fragment dir) — so a pass means the resolved value is not true in the
+    // settings files we could inspect, not a guarantee the whole enterprise
+    // layer is clean.
+    //
+    // Managed-settings file location is platform-specific (resolved by the pure,
+    // per-platform-tested resolveManagedSettingsCandidates below).
+    const managedCandidates = resolveManagedSettingsCandidates(process.platform, process.env);
+    const home = process.env.HOME || process.env.USERPROFILE || "";
+    const MANAGED_LABEL = "enterprise managed settings";
+    const hookDisableLayers: Array<[string, string]> = [
+      ...managedCandidates.map((p) => [p, MANAGED_LABEL] as [string, string]),
+      [join(projectDir, harness, "settings.local.json"), ".claude/settings.local.json"],
+      [join(projectDir, harness, "settings.json"), ".claude/settings.json"],
+      ...(home ? [[join(home, ".claude", "settings.json"), "~/.claude/settings.json"] as [string, string]] : []),
+    ];
+    let hooksDisabledBy: string | null = null;
+    for (const [path, label] of hookDisableLayers) {
+      try {
+        const parsed = JSON.parse(readFileSync(path, "utf-8")) as { disableAllHooks?: unknown };
+        // Only a layer that EXPLICITLY sets the boolean resolves it; a layer
+        // that omits the key defers to the next-lower layer.
+        if (typeof parsed.disableAllHooks === "boolean") {
+          if (parsed.disableAllHooks) hooksDisabledBy = label;
+          break; // highest-precedence definition wins, true or false
+        }
+      } catch {
+        // Absent/unreadable/malformed layer — the wiring-config rows own those
+        // cases; here we only care about an explicit disableAllHooks setting.
+      }
+    }
+    // Enterprise managed settings is the highest-precedence layer: nothing in a
+    // project or user file can override it, so the remedy must not suggest that.
+    const disabledByManaged = hooksDisabledBy === MANAGED_LABEL;
+    results.push({
+      pass: hooksDisabledBy === null,
+      label:
+        hooksDisabledBy === null
+          ? "Hooks enabled (resolved disableAllHooks is not true)"
+          : `Hooks DISABLED via "disableAllHooks": true in ${hooksDisabledBy} — AI-DLC cannot run (audit, state sync, sensors, and stage-graph rebuild are all silently skipped even though the hook files are present)`,
+      fix:
+        hooksDisabledBy === null
+          ? undefined
+          : disabledByManaged
+            ? `"disableAllHooks": true is enforced by enterprise managed settings — the highest-precedence layer, which a project or user setting cannot override. IT policy must remove it (or set it to false) for AI-DLC to run. If policy mandates disabled hooks, AI-DLC v2 is not compatible with this environment — its workflow engine is hook-driven.`
+            : `remove "disableAllHooks": true from ${hooksDisabledBy} (or set it to false in a higher-precedence layer such as .claude/settings.local.json) and restart the Claude Code session — AI-DLC's workflow engine is hook-driven and cannot advance while hooks are disabled.`,
+    });
   } else {
     // Kiro / Codex: the wiring config is not settings.json (it is
     // agents/aidlc.json / hooks.json — checked below). The core hook bodies
