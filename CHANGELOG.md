@@ -7,6 +7,7 @@ Kiro CLI and Kiro IDE now preserve engine-authored routing questions instead of 
 
 * A typed `new-work-routing` ask is the sole route authority once emitted: its engine-authored `numbered_prose_question` carries routes 1-3 plus `4. Other`, which Kiro prints verbatim before ending the turn without an extra `intent --json` query or recommendation.
 * On Kiro CLI and IDE, unselected-intent clones with pending new prose receive the same typed routing ask plus engine-listed `available_intents`; those values are exact record-directory selectors, so duplicate labels remain switchable through `next intent <name>`. Other harnesses retain their prior picker and scope-confirm contracts.
+* Selecting `4. Other` now has a complete response route on both Kiro surfaces: a bare selection requests the missing details, while a substantive alternative is forwarded unchanged through `next` and never through `report`.
 * The compiled `aidlc` dispatcher now pins both the installed harness directory and exact harness name before loading the orchestrator, preserving Kiro routing when module paths and embedded metadata cannot identify the host.
 * Continuation and plan-reshape classification remain available before the first engine response; once an ask exists, both old and new Kiro versions use the same prose-only stop-and-wait path.
 

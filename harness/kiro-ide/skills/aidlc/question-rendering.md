@@ -93,6 +93,11 @@ recommendation, or call `intent --json`; the typed ask and its
 `response_route: "next"` metadata remain authoritative for the next human
 answer.
 
+If that answer is only `4` or `Other`, ask exactly
+**"What would you like me to do instead?"** and END THE TURN without calling a
+tool. Forward the human's subsequent substantive alternative unchanged through
+`next "<human alternative>"`; never use `report` for this response route.
+
 For an untyped intent-picker ask that explicitly names
 `/aidlc intent <name>`, keep the complete `directive.question` as the prompt,
 render each record name already named by the engine as one numbered option in the same

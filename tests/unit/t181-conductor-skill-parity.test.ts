@@ -431,6 +431,10 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         "directive.numbered_prose_question",
         "do not render, paraphrase, or reconstruct",
         "If continuation or reshape is chosen without a record",
+        "**Typed new-work Other response.**",
+        'ask exactly **"What would you like me to do instead?"**',
+        '`next "<human alternative>"`',
+        "with their words unchanged",
       ]) {
         if (!skill.includes(token)) missing.push(`${skillRel}  missing: ${token}`);
       }
@@ -443,6 +447,9 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         "older and newer Kiro",
         "untyped intent-picker ask",
         "Every engine-ask render is invalid",
+        '**"What would you like me to do instead?"**',
+        '`next "<human alternative>"`',
+        "never use `report` for this response route",
       ]) {
         if (!annex.includes(token)) missing.push(`${annexRel}  missing: ${token}`);
       }
