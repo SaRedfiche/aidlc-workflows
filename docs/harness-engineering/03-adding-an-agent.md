@@ -29,10 +29,11 @@ existing agent knows* through team knowledge rather than editing the file (see
 move: a new file, owned by you, that survives upgrades.
 
 The frontmatter is the part the framework parses. The body is prose the agent
-reads about itself when it activates — its responsibilities, the stages it
-owns, how it loads knowledge, its working principles. Only the frontmatter is
-machine-read; the body is for the agent's own framing, and you write it to
-match the structure of the shipped files.
+reads about itself when it activates — its responsibilities, collaboration,
+memory focus, and working principles. Only the frontmatter is machine-read;
+the body is for the agent's own framing, and you write it to match the
+structure of the shipped files. The packager adds the mandatory delegated
+knowledge preflight to every harness projection.
 
 Here is the frontmatter from a real agent, authored at
 `core/agents/aidlc-architect-agent.md`:
@@ -168,7 +169,7 @@ Mirroring the reference recipe, here is the workflow end to end.
    agents ship it today (see the reviewer personas' `## Turn Budget` section
    for the pairing convention).
    Write the body to match the shipped files' structure (Core Responsibilities,
-   Stages Owned, Collaboration, Knowledge Loading, Key Principles).
+   Collaboration, optional Memory Focus, Key Principles).
 2. **Add knowledge files** under `core/knowledge/aidlc-<slug>-agent/` for the
    methodology the persona should load on activation.
 3. **Wire it into stages** — add the slug to the `lead_agent` /
