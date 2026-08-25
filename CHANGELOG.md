@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.91] - 2026-08-25
+
+Lone-repository CodeKB scope fingerprints now avoid Git's unreliable combination of positive and exclude pathspecs and reject fingerprints that contain no files. **Upgrade:** refresh your `dist/<harness>/` shell before minting or checking CodeKB scope fingerprints, and re-mint (or re-run reverse engineering for) any stored scope timestamp whose fingerprint is `4b825dc642cb6eb9a060e54bf8d69288fbee4904`, the empty-tree value written by the pre-fix bug.
+
+* `codekbScopeFingerprint` omits exclusions outside analyzed roots, drops analyzed paths covered by exclusions, and preserves root and nested-project scope boundaries without silently rewriting malformed absolute paths.
+* Scopes that stage zero paths now mint `unknown` and report `UNVERIFIED`, never a false `CURRENT` or permanent `STALE` verdict.
+* Deterministic regression coverage verifies distinct narrow fingerprints, full-root exclusions, nested-project boundaries, malformed paths, and empty scopes.
+
 ## [2.6.90] - 2026-08-25
 
 `/aidlc --doctor` now distinguishes hook directories that have not had a chance to populate from dead hook seams after a workflow stage ran. **Upgrade:** refresh your `dist/<harness>/` shell so doctor can detect this condition.
