@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.86] - 2026-08-25
+
+Bolt terminology now preserves the sprint-like Construction iteration while matching the shipped stage-major runtime. Delivery Planning still records the intended Bolt grouping, Definition of Done, confidence hypothesis, and ownership, but runtime batching and ordering remain driven by the Unit dependency graph. **Upgrade:** refresh your `dist/<harness>/` shell so the reconciled protocol, glossary, audit reference, and stage guidance are installed.
+
+* The canonical protocol and glossary distinguish a Bolt from a Unit, worktree, swarm, and runtime batch while documenting that the default stage-major walk does not consume `bolt-plan.md` as an execution boundary.
+* Construction guidance keeps current stage-level gates, unit-major's retained gate cascade, and `org.md` → `team.md` → `project.md` walking-skeleton stance executable while labeling future Bolt-major ceremony non-executable.
+* `BOLT_STARTED` and `BOLT_COMPLETED` are documented as per-Unit/worktree events on the swarm path; `SWARM_COMPLETED` remains the event that closes the runtime batch.
+
 ## [2.6.85] - 2026-08-25
 
 Kiro now relays deterministic command output through a UTF-8 plain-text hook boundary instead of the Windows shell-result transport that can append terminal debris or corrupt glyphs. **Upgrade:** re-copy `dist/kiro/` or `dist/kiro-ide/` into the project; Kiro IDE overlay installs must include the new `aidlc-terminal-command*` hook registrations.
@@ -92,6 +100,7 @@ Shared write hooks now normalize project-relative file payloads before applying 
 
 * Artifact audit logging resolves relative record paths before its path gates while preserving project-prefix redaction in the recorded `File` value.
 * Sensor dispatch resolves relative paths before its recursion guard, glob match, and `--output-path` argument while preserving gate-only sensor isolation.
+
 ## [2.6.74] - 2026-08-24
 
 Defined quality targets now remain binding from Code Generation through Build and Test: every measurable target is inventoried from NFR Requirements, NFR Design, and the approved Testing Contract, then finalized with evidence before the stage can succeed. **Upgrade:** refresh your `dist/<harness>/` shell so the updated Construction stage and protocol guidance are installed.
@@ -202,7 +211,6 @@ Kiro CLI agent-v1 hooks retain the literal selectors required by the host's cano
 
 * The existing literal `fs_write` and `fs_read` registrations continue to select the live-proven write/read alias families exactly once; the adapter normalizes create, replace, and append payloads to Write/Edit, audits each project-relative or batched target, and forwards all supported path fields to reviewer scope and review freeze.
 * Literal `subagent` registrations do not select `subagent_response`; legacy crew and defensive direct-dispatch payloads share one normalization path, and a nonblank `task` cannot be hidden by a blank higher-priority `prompt` during stage-rule delivery.
-
 ## [2.6.55] - 2026-08-22
 
 Run-stage directive emission now creates each stage diary deterministically before the agent begins work, eliminating failed read probes for a file that is expected to be absent on first entry. Internal Stop-hook probes remain write-free, and size-bounded waves create diaries only for the Unit entries actually carried by the emitted directive. **Upgrade:** refresh your `dist/<harness>/` shell so the updated engine and stage guidance are installed.

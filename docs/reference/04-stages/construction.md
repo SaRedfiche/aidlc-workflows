@@ -7,10 +7,11 @@ tested software. It covers seven stages (3.1 through 3.7) that span functional
 design, non-functional requirements and design, infrastructure design, code
 generation, build/test verification, and CI pipeline configuration.
 
-Construction is the fourth of five phases in the AI-DLC methodology. It is
-driven by the **execution plan** produced during Delivery Planning (Stage 2.9).
-The plan determines which stages execute, which are skipped, and in what order
-units are built.
+Construction is the fourth of five phases in the AI-DLC methodology. The
+compiled scope grid determines which stages execute and which are skipped.
+Runtime Unit batches come from `unit-of-work-dependency.md` (stage 2.7).
+Delivery Planning (Stage 2.9) produces the approved Bolt plan — planning
+content, not the walk source.
 
 All stages follow `stage-protocol.md` for approval gates, question format,
 completion messages, and state tracking.
@@ -29,32 +30,41 @@ completion messages, and state tracking.
 
 ---
 
-## Bolt-by-Bolt Construction
+## Construction walk
 
-Construction executes **Bolt by Bolt**, driven by `bolt-plan.md` (Bolt
-sequence + walking-skeleton marker) from stage 2.9 and the dependency DAG
-from stage 2.7. A [Bolt](../../guide/glossary.md) is one pass through stages
-3.1–3.5 for a Unit or small group of dependency-linked Units. Stages 3.6
-(Build and Test) and 3.7 (CI Pipeline) run **once** at the end across all
-Bolts.
+A [Bolt](../../guide/glossary.md) is the planned Construction delivery
+slice from Delivery Planning (2.9): one or more Units with a Definition
+of Done, a confidence hypothesis, and ownership. Construction's
+**default walk is stage-major**: one stage runs for every Unit, then the
+next stage, with code-generation last. That walk does not yet treat the
+2.9 plan as a runtime boundary. The opt-in
+`Construction Iteration: unit-major` walk (one Unit through every
+per-unit stage, then the next Unit) is closer to a per-Unit Bolt.
+
+`BOLT_STARTED` / `BOLT_COMPLETED` are emitted on the swarm / worktree
+path; a default gated run does not record them. Runtime batches are
+recomputed from `unit-of-work-dependency.md` (stage 2.7).
+`bolt-plan.md` from stage 2.9 is the planning artifact (sequence,
+per-Bolt DoD, walking-skeleton marker). Walking-skeleton stance
+resolves `org.md` → `team.md` → `project.md` (most-specific non-empty
+statement wins); the bolt-plan marker is advisory against that resolved
+stance (`PRACTICES_OVERRIDE` / `bolt-plan-marker-conflict`). Under the
+default walk, the walking-skeleton gate is the first in-scope
+Construction EXECUTE stage.
+Stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run **once** at the
+end across all Units.
 
 ```
-Bolt 1 (walking skeleton) — always gated:
-  Questions (3.1–3.4 across the Bolt's Units in QUESTION-ONLY mode)
-  → Answers gate (Bolt-level)
-  Design artifacts (3.1–3.4 in ARTIFACT-ONLY mode)
-  Code generation (3.5 per Unit via Task delegation)
+Default walk (stage-major):
+  First in-scope Construction EXECUTE stage for every Unit
   → Walking-skeleton gate
-  → Ladder prompt (fires once): "autonomous" or "gated"
-  → Write Construction Autonomy Mode to state
+  → Ladder prompt (fires once): "Continue autonomously" or "Gate every Bolt"
+  Then the next stage for every Unit, code-generation last
 
-Bolt 2..N — autonomy mode governs the gate:
-  (Parallel-eligible Bolts run as a batch; single batch-level gate covers
-   every Bolt in it.)
-  Questions → Answers gate (Bolt-level) → Design → Code-gen → Bolt/batch
-  gate (skipped if autonomous). Failure always halts and asks.
+Opt-in (`Construction Iteration: unit-major`):
+  Each Unit through every per-unit stage, then the next Unit
 
-After all Bolts:
+After all Units:
   3.6 Build and Test (runs once across the full codebase)
   3.7 CI Pipeline    (runs once, conditional)
 ```
@@ -62,9 +72,11 @@ After all Bolts:
 Each design stage file (3.1–3.4) supports QUESTION-ONLY and ARTIFACT-ONLY
 execution modes — see the individual stage files for details. Code Generation's
 Step 3 **Plan Approval always hard-stops before generation**, including during
-Bolt execution. Only its Step 7 per-Unit completion approval gate is
-**suppressed by the engine** during normal Bolt execution; a single Bolt-level
-(or batch-level) completion gate replaces it. The per-Unit completion gate
+Construction. Only its Step 7 per-Unit completion approval gate is
+**suppressed by the engine** during normal Construction; a single stage-level
+completion gate replaces it after the last Unit settles. Under an autonomous
+swarm that gate fires only after the final DAG batch has converged
+(intermediate batches merge without a gate). The per-Unit completion gate
 remains for direct-invocation use (e.g., `/aidlc --stage code-generation`).
 
 **Construction iteration order (opt-in).** By default the engine iterates the
@@ -111,19 +123,21 @@ a dependent batch or the single stage gate. Waves never apply under
 primitive process the entries serially. See
 `stage-protocol-construction.md` § "Per-unit batch waves" for the full contract.
 
-**Parallel batches.** When two or more Bolts share dependency-satisfaction
+**Parallel batches.** When two or more Units share dependency-satisfaction
 and don't depend on each other, the conductor dispatches their Code
 Generation stages concurrently by issuing N `Task` calls in a single
-assistant message. One batch-level gate covers them all. Audit events
-(`BOLT_STARTED`, `BOLT_COMPLETED`) carry a `Batch=N` field so siblings are
-recoverable from the log.
+assistant message. Under an autonomous swarm the engine converges every
+DAG batch and then presents **one** Code Generation stage gate —
+intermediate batches merge without a gate. Audit events (`BOLT_STARTED`,
+`BOLT_COMPLETED`) are per Unit/worktree on the swarm path; `SWARM_COMPLETED`
+closes the batch. A default gated run does not record `BOLT_*`.
 
-**Failure handling.** A Bolt failure always halts Construction regardless
-of autonomy mode. Options are retry (re-run just the failed Bolt), skip
-(mark `[S]` and continue — dependent Bolts may also fail), or abort.
+**Failure handling.** A Code Generation failure always halts Construction
+regardless of autonomy mode. Options are retry (re-run just the failed
+Unit), skip (mark `[S]` and continue — dependents may also fail), or abort.
 Successful siblings in a parallel batch keep their `[x]` status and
-artifacts. See `stage-protocol-construction.md` § "Construction Bolt gates" and
-SKILL.md §CONSTRUCTION Flow for the canonical specification.
+artifacts. See `stage-protocol-construction.md` § "Construction Bolt gates"
+for the canonical specification.
 
 ---
 
@@ -1212,7 +1226,9 @@ through a phased construction flow:
 **Key characteristics:**
 - Stages 3.1-3.4 are CONDITIONAL; 3.5-3.6 ALWAYS execute; 3.7 is CONDITIONAL
 - All conditional stages follow the execution plan from Delivery Planning
-- Per-unit loop ensures one unit completes fully before the next begins
+- Default walk is stage-major (a stage for every Unit, then the next stage);
+  the opt-in `unit-major` walk runs one Unit through every per-unit stage
+  before the next Unit begins
 - NFR artifacts use expanded granularity (6 files for requirements, 6 for
   design) compared to the upstream reference
 - Infrastructure Design is expanded to 5 artifacts with dedicated monitoring
