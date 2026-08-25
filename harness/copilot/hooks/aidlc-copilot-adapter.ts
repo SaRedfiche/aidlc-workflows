@@ -71,9 +71,11 @@ import {
   type CopilotCommandClaim,
   type CopilotDirectiveMetadata,
   recordCopilotHumanSequence,
+  resolveWorkflowSelection,
   settleCopilotCommand,
   settleCopilotIntentBoundary,
   stateFilePath,
+  stateFilePathForSelection,
 } from "../tools/aidlc-lib.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -187,6 +189,15 @@ export async function run(
     semantic_search: "Grep",
     semanticSearch: "Grep",
   };
+  const NATIVE_QUESTION_PICKERS = new Set([
+    "ask_user",
+    "askUser",
+    "vscode/askQuestions",
+    "askQuestions",
+    "ask_questions",
+    "askQuestion",
+    "ask_question",
+  ]);
   const rawToolName = copilot.tool_name ?? copilot.toolName ?? "";
   const toolName = TOOL_ALIAS[rawToolName] ?? rawToolName;
   const isApplyPatch = rawToolName === "apply_patch" || rawToolName === "applyPatch";
@@ -274,6 +285,22 @@ export async function run(
         permissionDecisionReason: reason.trim() || "Blocked by an AIDLC guard hook.",
       },
     })}\n`;
+  }
+
+  function selectedWorkflowIsRunning(): boolean {
+    try {
+      const selection = resolveWorkflowSelection(
+        projectDir,
+        sessionId ? { sessionId } : {},
+      );
+      const stateContent = readFileSync(
+        stateFilePathForSelection(projectDir, selection),
+        "utf-8",
+      );
+      return stateContent.match(/^- \*\*Status\*\*:\s*(\S+)\s*$/m)?.[1] === "Running";
+    } catch {
+      return false;
+    }
   }
 
   type ParsedOrchestration =
@@ -912,6 +939,16 @@ export async function run(
       // agent dispatches first receive the exact active-stage rule bundle.
       // Copilot consumes the shared hookSpecificOutput.updatedInput envelope
       // directly, so no adapter-specific reshaping is needed.
+      if (
+        NATIVE_QUESTION_PICKERS.has(rawToolName) &&
+        selectedWorkflowIsRunning()
+      ) {
+        process.stdout.write(denyJson(
+          "Render this AI-DLC question as numbered prose in chat per question-rendering.md, then end the turn and wait for the user's next chat message. Native picker answers do not fire UserPromptSubmit, so they cannot record the trusted HUMAN_TURN required for answer and approval logging.",
+        ));
+        return 0;
+      }
+
       if (toolName.toLowerCase() === "agent") {
         const dispatch = runCoreWithStderr(
           "aidlc-deliver-stage-rules.ts",
