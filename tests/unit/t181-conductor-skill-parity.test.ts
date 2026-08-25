@@ -454,11 +454,11 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     const manifest = readFileSync(join(P3_EVIDENCE_DIR, "README.md"), "utf-8");
     const hashes: Record<string, string> = {
       "windows-kiro-routing-cli.log":
-        "06c92f9aff519cb74c4c3a34349dc8b9ba8dcfd2e3e78face38b733e5efa2b44",
+        "465b2cb860a748d4af7189a16409914f6a134d62b7824e75bd39d390450324f7",
       "windows-kiro-routing-cli.ndjson":
-        "32783d2859d8c17f0bf8a4635d68f72505f6c0ea34b904e805f4295d5a550c3e",
+        "034b783b3389ab002dc8f5714023d618363600bb4205e826a2314631ce89a600",
       "windows-kiro-routing-ide.log":
-        "b4f3f68dda120e2764ddaa8873dfaae99e33e4352e0d5e81fc2ae0c1641fcb95",
+        "f76c3e7ba1a8b4bb8ea9d313dca33d072baa6ea95826391115900da98c6b4ceb",
       "windows-kiro-routing-ide.ndjson":
         "d776cbe91f870fcda0b558657e1fcafeccd8f32190793bfb9e7cd5ce18937252",
     };
