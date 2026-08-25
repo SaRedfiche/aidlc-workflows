@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 645,
+    "total": 646,
     "enumeratedByClass": {
-      "function": 381,
+      "function": 382,
       "audit": 87,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 197,
+      "function": 198,
       "audit": 46,
       "scope": 11,
       "stage": 11,
@@ -3842,6 +3842,18 @@
         },
         {
           "file": "tests/unit/t236-ensemble-evidence-gate.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:reviewArtifactSnapshot",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/e2e/t134-swarm-referee.test.ts",
           "mechanism": "cli"
         }
       ],
