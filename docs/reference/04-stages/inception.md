@@ -415,7 +415,7 @@ large scope with significant unknowns.
 5. **Completeness Analysis** -- Evaluate coverage across six dimensions:
    1. Functional requirements -- core behaviors, features, use cases
    2. Non-functional requirements -- performance, security, scalability,
-      reliability
+      reliability, observability
    3. User scenarios -- user workflows, edge cases, error scenarios
    4. Business context -- goals, success metrics, stakeholders, constraints
    5. Technical context -- integration points, platform requirements,
@@ -452,8 +452,11 @@ large scope with significant unknowns.
     `<record>/inception/requirements-analysis/requirements.md` containing:
     - Intent analysis -- what the user is trying to achieve (goals, not just
       features)
-    - Functional requirements -- organized by feature area or domain
-    - Non-functional requirements -- performance, security, scalability targets
+    - Functional requirements -- organized by feature area or domain. Give
+      every requirement a stable `FR{n}` ID (for example `FR1`) and every
+      sub-requirement an `FR{n}.{m}` ID (for example `FR1.2`)
+    - Non-functional requirements -- performance, security, scalability,
+      reliability, and observability targets, each with a stable `NFR{n}` ID
     - Constraints -- technical, business, organizational
     - Assumptions -- documented with rationale
     - Out of scope -- explicitly excluded items
