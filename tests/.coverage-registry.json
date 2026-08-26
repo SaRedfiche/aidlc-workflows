@@ -20,23 +20,23 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 675,
+    "total": 678,
     "enumeratedByClass": {
-      "function": 410,
+      "function": 411,
       "audit": 87,
       "scope": 11,
       "stage": 33,
       "hook": 18,
-      "subcommand": 109,
+      "subcommand": 111,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 219,
+      "function": 220,
       "audit": 46,
       "scope": 11,
       "stage": 11,
       "hook": 18,
-      "subcommand": 97,
+      "subcommand": 99,
       "render-surface": 7
     }
   },
@@ -4119,6 +4119,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:runWithOwnerStampedLock",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t315-plugin-build.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:sanitizeHarnessPlainText",
       "minMechanism": "none",
       "coveredBy": [
@@ -7827,6 +7839,18 @@
     },
     {
       "unitClass": "subcommand",
+      "unitId": "aidlc-utility plugin-build",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t327-plugin-author-routes.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
       "unitId": "aidlc-utility plugin-list",
       "minMechanism": "cli",
       "coveredBy": [
@@ -7848,6 +7872,18 @@
         },
         {
           "file": "tests/unit/t238-build-binaries.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility plugin-validate",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t327-plugin-author-routes.test.ts",
           "mechanism": "cli"
         }
       ],

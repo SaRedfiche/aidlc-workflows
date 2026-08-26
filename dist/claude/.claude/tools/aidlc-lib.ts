@@ -980,6 +980,10 @@ export function parsePluginCommand(args: string[]): PluginCommand {
       ? "plugin-list"
       : verb === "sync"
         ? "plugin-sync"
+        : verb === "validate"
+          ? "plugin-validate"
+          : verb === "build"
+            ? "plugin-build"
         : undefined;
   if (target !== undefined) {
     return { kind: "run", argv: [target, ...args.slice(2)] };
@@ -11615,6 +11619,30 @@ function acquireOwnerStampedLock(
     if (attempt < maxRetries) Bun.sleepSync(retryMs);
   }
   return null;
+}
+
+export type OwnerStampedLockRun<T> =
+  | { acquired: false }
+  | { acquired: true; value: T };
+
+export function runWithOwnerStampedLock<T>(
+  lockDir: string,
+  maxRetries: number,
+  retryMs: number,
+  action: () => T,
+): OwnerStampedLockRun<T> {
+  const receipt = acquireOwnerStampedLock(lockDir, maxRetries, retryMs);
+  if (!receipt) return { acquired: false };
+  const onExit = () => {
+    releaseCanonicalOwnerStampedLock(receipt);
+  };
+  process.on("exit", onExit);
+  try {
+    return { acquired: true, value: action() };
+  } finally {
+    const outcome = releaseCanonicalOwnerStampedLock(receipt);
+    if (outcome !== "retryable") process.off("exit", onExit);
+  }
 }
 
 function acquireActiveDirectiveLock(lockDir: string): OwnerStampedLockReceipt | null {
