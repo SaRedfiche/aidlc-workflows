@@ -123,6 +123,7 @@ import {
   setStageSuffix,
   scopeGridPath,
   scopesDir,
+  inspectSubagentInflight,
   harnessDataPath,
   pluginsEnabled,
   selectionAwareDefaultScope,
@@ -3071,6 +3072,29 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     }
   } catch {
     // Gate-pending probe failure is non-fatal for the doctor report.
+  }
+
+  // Background-subagent ledger probe. Fresh entries are expected while
+  // accepted run_in_background dispatches are active, so they are advisory.
+  // Stale or malformed entries fail with manual remediation. Read-only: doctor
+  // never rewrites the ledger; the Stop hook prunes stale entries.
+  try {
+    const subagents = inspectSubagentInflight(projectDir);
+    if (subagents.exists) {
+      const ageMs = subagents.oldestAgeMs ?? 0;
+      const ageHours = Math.floor(ageMs / (60 * 60 * 1000));
+      const ageLabel = ageHours >= 1 ? `${ageHours}h old` : "under 1h old";
+      const countLabel = subagents.malformed
+        ? "malformed"
+        : `${subagents.freshCount} fresh, ${subagents.staleCount} stale, oldest ${ageLabel}`;
+      results.push({
+        pass: !subagents.malformed && subagents.staleCount === 0,
+        label: `Background-subagent ledger present (aidlc/.aidlc-subagent-inflight, ${countLabel})`,
+        fix: "if no background subagent is actually running, delete it ('rm aidlc/.aidlc-subagent-inflight'). Stale or malformed entries never authorize the Stop hook, but the ledger should not linger.",
+      });
+    }
+  } catch {
+    // Background-subagent ledger probe failure is non-fatal for doctor.
   }
 
   // ===========================================================================

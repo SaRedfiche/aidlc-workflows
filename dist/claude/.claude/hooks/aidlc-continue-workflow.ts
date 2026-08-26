@@ -45,8 +45,8 @@
 //      directive advances, the signature changes and the counter resets to 0,
 //      so a healthy loop is never throttled.
 //
-// Six human-wait carve-outs keep the hook from punishing a turn that ended
-// *because* it is waiting on the human (or is simply conversational):
+// Eight turn-stop carve-outs keep the hook from punishing a turn that ended
+// for a legitimate wait (human input, background work, or conversation):
 //   1. The Esc interrupt is FREE: Stop hooks do not fire on user interrupt, so
 //      an Esc can never be trapped — no code needed for that case.
 //   2. The interactive GATE is not free: the Stop hook DOES fire when the
@@ -74,7 +74,14 @@
 //      learnings ritual), and for harnesses that render questions as prose.
 //      Like the pending-file carve-out, it is limited to [-] and suppressed
 //      under autonomous Construction.
-//   5. A CONVERSATIONAL turn ends with the human's last prompt answered and NO
+//   5. An IN-FLIGHT COMPOSE gate is positively signalled by the fresh
+//      workspace-level compose marker and is suppressed under autonomous
+//      Construction.
+//   6. An IN-FLIGHT BACKGROUND SUBAGENT is positively signalled by a fresh
+//      session-scoped ledger entry added after background dispatch acceptance
+//      and removed one-at-a-time on SubagentStop. Autonomous Construction
+//      remains guarded.
+//   7. A CONVERSATIONAL turn ends with the human's last prompt answered and NO
 //      workflow-engine engagement (the conductor ran neither aidlc-orchestrate
 //      nor aidlc-state since that prompt). Issue #365's broader reading: a human
 //      who just wants to CHAT mid-workflow should not be nudged at all. We ALLOW
@@ -99,7 +106,7 @@
 //        marker. A conductor that jumps the pointer and then quits is released
 //        here and blocked on Claude. Narrow but real; see the coverage-gap note
 //        on markEngineTouch in aidlc-lib.ts.
-//   6. A RESUME CHOICE has a state-bound active-directive marker with kind
+//   8. A RESUME CHOICE has a state-bound active-directive marker with kind
 //      `ask` and resume status `waiting`. On the shared non-Copilot path we must
 //      read this latch BEFORE probing `next`, because the probe publishes its
 //      own sessionless directive and can overwrite the `ask` kind. We ALLOW the
@@ -132,6 +139,7 @@ import {
   isEngineToolCall,
   hooksHealthDir,
   isoTimestamp,
+  matchSubagentInflight,
   parseCheckboxes,
   readActiveDirectiveMarker,
   readSessionIntentHandoff,
@@ -631,6 +639,52 @@ function isPendingComposeStop(projectDir: string, stateContent: string): boolean
   }
 }
 
+// --- Tier-2c: pending in-flight background subagent carve-out ----------------
+//
+// A background Agent/Task dispatch legitimately ends the conductor's turn
+// while the worker remains in flight. The stage stays pending, so the bare
+// `next` probe would otherwise inject a forwarding-loop nudge before the
+// background result arrives. POSITIVE-CONFIRMATION: the dispatch hook adds one
+// session-scoped ledger entry only for an accepted `run_in_background: true`
+// call, and SubagentStop removes one entry for that same session. AUTONOMY
+// GUARD: never fires under autonomous Construction, where the unattended loop
+// must remain enforced.
+//
+// STALENESS BOUND. A crashed session or missing SubagentStop can strand an
+// entry. The shared ledger helper prunes stale entries under the workspace lock
+// and matches only the current payload session. Malformed or foreign-session
+// evidence fails closed and falls through to the cap-bounded block.
+function isPendingSubagentStop(
+  projectDir: string,
+  stateContent: string,
+  sessionId: unknown,
+): boolean {
+  try {
+    if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") {
+      return false; // autonomy guard - keep the loop alive
+    }
+    const match = matchSubagentInflight(projectDir, sessionId);
+    if (match.malformed) {
+      recordHookDrop(
+        projectDir,
+        HOOK_NAME,
+        "background-subagent in-flight ledger is malformed; refusing the pending-subagent carve-out",
+      );
+      return false;
+    }
+    if (match.staleRemoved > 0) {
+      recordHookDrop(
+        projectDir,
+        HOOK_NAME,
+        `pruned ${match.staleRemoved} orphaned background-subagent in-flight ${match.staleRemoved === 1 ? "entry" : "entries"} before evaluating the pending-subagent carve-out`,
+      );
+    }
+    return match.active;
+  } catch {
+    return false;
+  }
+}
+
 // --- Tier-3: conversational-turn carve-out (issue #365 broader reading) -------
 //
 // Issue #365's literal fix is `park` (the conductor explicitly pauses the run).
@@ -1095,8 +1149,10 @@ function continuationReason(
 export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 let earlySessionId = "";
+let earlyRawSessionId: unknown;
 try {
   const early = JSON.parse(input) as { session_id?: unknown };
+  earlyRawSessionId = early.session_id;
   if (typeof early.session_id === "string") {
     earlySessionId = validSessionId(early.session_id) ?? "";
   }
@@ -1148,6 +1204,7 @@ let transcriptPath: string | null = null;
 // (a TTY/empty invocation or a host that omits it); writeCurrentTranscriptPath
 // still writes the unscoped `current.transcript` fallback in that case.
 let sessionId = earlySessionId;
+let rawSessionId = earlyRawSessionId;
 // Transcript format: Codex's rollout JSONL lives under a `.../sessions/<date>/
 // rollout-*.jsonl` path and uses a {type,payload} shape; Claude's is message-
 // shaped JSONL. Default to Claude; switch to Codex when the path looks like a
@@ -1159,6 +1216,7 @@ try {
   if (raw !== null && typeof raw === "object") {
     const obj = raw as Record<string, unknown>;
     if ("stop_hook_active" in obj) stopHookActive = obj.stop_hook_active === true;
+    if ("session_id" in obj) rawSessionId = obj.session_id;
     if (typeof obj.session_id === "string") {
       sessionId = validSessionId(obj.session_id) ?? "";
     }
@@ -1383,6 +1441,20 @@ if (isPendingComposeStop(projectDir, stateContent)) {
     projectDir,
     HOOK_NAME,
     "an in-flight compose proposal is pending human approval (aidlc/.aidlc-compose-pending present); allowing the stop (pending-compose carve-out)",
+  );
+  return allowStop();
+}
+
+// Pending-background-subagent carve-out (tier 2c): a background Agent/Task is
+// still running, so the conductor is correctly parked until its result arrives.
+// Positive-confirmation only (a matching ledger entry), session-isolated,
+// autonomy-guarded, freshness-bounded, and fail-open (see
+// isPendingSubagentStop).
+if (isPendingSubagentStop(projectDir, stateContent, rawSessionId)) {
+  recordHookDrop(
+    projectDir,
+    HOOK_NAME,
+    "a background subagent is still in flight for this session; allowing the stop (pending-subagent carve-out)",
   );
   return allowStop();
 }

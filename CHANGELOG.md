@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.97] - 2026-08-26
+
+The Stop hook now recognizes background Agent/Task work per session, so a conductor can end its turn to await a still-running worker without weakening another session's forwarding loop. **Upgrade:** refresh your `dist/<harness>/` shell so dispatch, completion, Stop, and doctor hooks share the new in-flight ledger.
+
+* Accepted background dispatches with `run_in_background: true` add a session-scoped in-flight entry only after rule delivery passes validation; rejected and oversized dispatches leave no entry.
+* Subagent completion removes one entry for its own session, preserving overlapping workers in the same session and isolating concurrent sessions.
+* A fresh matching entry lets an interactive Stop end cleanly. Autonomous Construction remains enforced, while entries older than two hours are ignored and cleaned up before pending-step enforcement resumes.
+* `/aidlc --doctor` reports fresh background-subagent entries as advisory and stale entries as failures with `rm aidlc/.aidlc-subagent-inflight` remediation.
+
 ## [2.6.96] - 2026-08-26
 
 Type-check sensor incremental state now stays in the project record and uses a distinct cache per tsconfig, preventing package-local `aidlc/` trees in monorepos. **Upgrade:** refresh your `dist/<harness>/` shell and drop any user-side workaround ignore rules; legacy package-local cache directories may be removed individually after confirming they contain only sensor cache data.
