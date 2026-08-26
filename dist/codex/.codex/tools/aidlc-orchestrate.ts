@@ -3682,6 +3682,7 @@ function applySettledSwarmShape(
   directive: RunStageDirective,
 ): RunStageDirective {
   delete directive.reviewer;
+  delete directive.review_artifact;
   delete directive.review_class;
   delete directive.reviewer_max_iterations;
   directive.protocol_modules = ["construction", "swarm"];
