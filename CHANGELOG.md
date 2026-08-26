@@ -1,6 +1,12 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.112] - 2026-08-27
+
+Structured questions must now be self-explanatory, closing a top field-feedback gap where teams found questions too abstract and bare shorthand like `FR3`/`url1` unanswerable without asking the agent to rephrase. **Upgrade:** refresh your `dist/<harness>/` shell.
+
+* Depth-aware question generation gains a "questions must be self-explanatory" rule: expand every identifier in each question that uses it (write what it names, then tag it in parentheses), give each question one line of context when the reason is not obvious, and prefer concrete domain phrasing over the framework's internal vocabulary.
+
 ## [2.6.111] - 2026-08-26
 
 Plugin composition now keeps co-located tests and fixtures out of the installed engine tools tree and reports every rejected payload. **Upgrade:** refresh your `dist/<harness>/` shell and each plugin projection, then re-compose plugins; remove any already-installed file named by the new advisory and re-run compose.
