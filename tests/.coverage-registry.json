@@ -2885,6 +2885,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t244-scope-matrix-doc-sync.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/unit/t257-default-scope-resolver.test.ts",
           "mechanism": "none"
         }
