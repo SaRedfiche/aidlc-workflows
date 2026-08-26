@@ -1366,7 +1366,7 @@ function copyTreeNoClobber(
   precheck?: CopyPrecheck,
   transform?: CopyTransform,
   existingHandler?: ExistingCopyHandler,
-  writtenPaths?: Set<string>,
+  composedPaths?: Set<string>,
 ): boolean {
   if (!existsSync(src)) return false;
   let wrote = false;
@@ -1391,7 +1391,7 @@ function copyTreeNoClobber(
         installed,
       }) ?? "compare";
       if (existingAction === "written") {
-        writtenPaths?.add(rel.replace(/\\/g, "/"));
+        composedPaths?.add(rel.replace(/\\/g, "/"));
         wrote = true;
         continue;
       }
@@ -1404,7 +1404,9 @@ function copyTreeNoClobber(
           current = null;
         }
       }
-      if (current === null || !installed.equals(current)) {
+      if (current !== null && installed.equals(current)) {
+        composedPaths?.add(rel.replace(/\\/g, "/"));
+      } else {
         recordDrop(`${kind} "${rel}" collides with an existing file (core or another plugin); not overwritten — rename it to a plugin-namespaced path`);
       }
       continue;
@@ -1421,7 +1423,7 @@ function copyTreeNoClobber(
     }
     mkdirSync(join(dest, ".."), { recursive: true });
     writeComposeFile(dest, buf);
-    writtenPaths?.add(rel.replace(/\\/g, "/"));
+    composedPaths?.add(rel.replace(/\\/g, "/"));
     wrote = true;
   }
   return wrote;
@@ -1689,7 +1691,7 @@ try {
       return new Set<string>();
     }
   })();
-  const knowledgeWritten = new Set<string>();
+  const composedKnowledge = new Set<string>();
 
   // 1. Copy NEW primitives (no-clobber, token-substituted).
   // Plugin scopes and agents use the plugin prefix in place of core's `aidlc-`
@@ -1761,16 +1763,18 @@ try {
     undefined,
     undefined,
     undefined,
-    knowledgeWritten,
+    composedKnowledge,
   ) || changed;
   // Composition is no-clobber: source removal does not remove an installed
   // file, so retain its prior provenance until the installed file is gone.
+  // Byte-identical installed files also establish ownership for upgrades from
+  // compose hooks that predated the ownership sidecar.
   const ownedKnowledge = new Set(
     [...priorKnowledgeOwnership].filter((rel) =>
       existsSync(join(knowledgeTarget, rel))
     ),
   );
-  for (const rel of knowledgeWritten) ownedKnowledge.add(rel);
+  for (const rel of composedKnowledge) ownedKnowledge.add(rel);
   const pluginFilesManifest = `${
     JSON.stringify({
       schema_version: 1,

@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 681,
+    "total": 679,
     "enumeratedByClass": {
-      "function": 416,
+      "function": 414,
       "audit": 87,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 225,
+      "function": 223,
       "audit": 46,
       "scope": 11,
       "stage": 11,
@@ -3554,30 +3554,6 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:readRegularFileNoFollowOrThrow",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t286-read-write-boundary.test.ts",
-          "mechanism": "none"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:readRegularFileNoFollowOrThrow",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t286-read-write-boundary.test.ts",
-          "mechanism": "none"
-        }
-      ],
-      "status": "covered"
     },
     {
       "unitClass": "function",
