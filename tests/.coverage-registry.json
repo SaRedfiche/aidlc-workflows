@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 755,
+    "total": 757,
     "enumeratedByClass": {
-      "function": 462,
+      "function": 464,
       "audit": 90,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 269,
+      "function": 271,
       "audit": 49,
       "scope": 11,
       "stage": 11,
@@ -2616,6 +2616,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:humanTurnMintAllowed",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:idSuffix",
       "minMechanism": "none",
       "coveredBy": [],
@@ -5106,6 +5118,18 @@
         {
           "file": "tests/unit/t259-turn-markers.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:unattendedHumanPresenceHint",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
