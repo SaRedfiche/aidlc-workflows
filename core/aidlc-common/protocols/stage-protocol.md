@@ -349,6 +349,7 @@ Stage files list **topic areas and example questions** — they are guidance, no
 - A Minimal bugfix with a vague one-line description warrants more questions — don't blindly cap at 2.
 - A Comprehensive enterprise feature with crystal-clear requirements warrants fewer — don't pad with noise.
 - Prior stage outputs reduce what needs asking. If requirements-analysis already captured NFR targets, construction stages shouldn't re-ask.
+- **Never re-ask an answered question.** Before adding any question to the file, check whether the current record already answers it: scan the filled `[Answer]:` tags in this record's `<record>/*-questions.md` files and the `QUESTION_ANSWERED` rows in `<record>/audit/<host>-<clone>.md`. If a prior answer resolves the topic, do not re-emit the question — proceed on the recorded answer, or ask a narrow follow-up that names the prior answer ("Earlier you set auth to mTLS — does that also cover the Kafka listener?") rather than re-opening the whole question. A user who has answered, especially one who stated an answer is final, must not see the same question again.
 - Follow-up questions are always justified regardless of depth — ambiguity must be resolved.
 - Contradiction detection and resolution remains MANDATORY at all depth levels.
 

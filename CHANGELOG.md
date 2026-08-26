@@ -1,6 +1,12 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.116] - 2026-08-27
+
+The question protocol now forbids re-asking a question the current record already answers, closing a top field-feedback gap where teams saw the same question resurface after they had answered it (sometimes after stating an answer was final). **Upgrade:** refresh your `dist/<harness>/` shell.
+
+* Depth-aware question generation gains a "never re-ask an answered question" rule: before emitting a question the orchestrator must scan filled `[Answer]:` tags in the record's `*-questions.md` files and `QUESTION_ANSWERED` audit rows, and proceed on the recorded answer or ask a narrow, prior-answer-naming follow-up instead of re-opening the question.
+
 ## [2.6.115] - 2026-08-27
 
 Existing vision documents, PRDs, requirements briefs, and other referenced files now feed the workflow through a deterministic, trust-marked read boundary. Multiline initial requests persist outside the line-oriented state grammar, and ambiguous, missing, redirected, out-of-workspace, non-text, or oversized document references stop for clarification instead of being guessed. **Upgrade:** refresh your `dist/<harness>/` shell so the updated utility, stage instructions, and description sidecar are installed together.
