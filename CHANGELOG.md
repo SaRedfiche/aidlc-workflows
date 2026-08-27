@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 
 The question protocol now reuses answers already captured in the current record, closing a top field-feedback gap where teams saw the same question resurface after they had answered it, sometimes after stating that the answer was final. **Upgrade:** refresh your `dist/<harness>/` shell.
 
-* Before emitting a question, the orchestrator recursively reads the record's question files and correlates prompts with answers across every audit shard; it proceeds on the latest applicable answer or asks a narrow, prior-answer-naming follow-up instead of reopening the topic.
+* Before emitting a question, the orchestrator recursively reads the record's question files and correlates scope-compatible prompts and answers across every audit shard; ambiguous cross-shard ordering requires a narrow, prior-answer-naming follow-up instead of an inferred answer or a reopened topic.
 
 ## [2.6.115] - 2026-08-27
 

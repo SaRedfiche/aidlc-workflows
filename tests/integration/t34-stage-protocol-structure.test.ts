@@ -242,6 +242,9 @@ describe("t34 stage-protocol.md structure + cross-references (migrated from t34-
     expect(protocolHas("<record>/audit/*.md")).toBe(true);
     expect(protocolHas("DECISION_RECORDED")).toBe(true);
     expect(protocolHas("QUESTION_ANSWERED")).toBe(true);
+    expect(protocolHas("Stage`, `Unit`, `Attempt Generation`, and `Workflow`")).toBe(true);
+    expect(protocolHas("equal timestamps are causally unordered")).toBe(true);
+    expect(protocolHas("do not infer an answer")).toBe(true);
     expect(protocolHas("Details` alone does not identify the question")).toBe(true);
   });
 
