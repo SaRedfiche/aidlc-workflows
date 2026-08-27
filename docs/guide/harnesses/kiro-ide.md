@@ -57,6 +57,10 @@ rm -f \
 cp -R dist/kiro-ide/.kiro/. your-project/.kiro/
 cp -R dist/kiro-ide/aidlc/. your-project/aidlc/     # the workspace shell (spaces/default/memory) — a sibling of .kiro/, not inside it
 cp dist/kiro-ide/AGENTS.md your-project/AGENTS.md   # merge if you already have one
+# Existing .gitignore: preserve it and merge only the section beginning "# AI-DLC".
+if [ ! -e your-project/.gitignore ]; then
+  cp dist/kiro-ide/.gitignore your-project/.gitignore
+fi
 ```
 
 The first removal loop is the v2.5.57 hook-name migration. The second removes
@@ -72,6 +76,18 @@ The `aidlc/` directory is the workspace shell — it ships the pre-built
 `aidlc/spaces/default/memory/` method tree the engine reads. It is a **sibling**
 of `.kiro/`, so copy it separately (or copy the whole `dist/kiro-ide/` tree at
 once). `/aidlc --doctor` fails its "workspace shell ready" check if it is missing.
+
+The shipped `.gitignore` carries the workspace's commit/ignore split: the
+per-user cursors (`aidlc/active-space`, `aidlc/spaces/*/intents/active-intent`)
+and machine-local runtime (`aidlc/.aidlc-clone-id`, `runtime-graph.json`, sensor
+caches, `spaces/*/knowledge/.sources.local.json`) stay untracked, while the
+shared records — method memory, state, audit shards, artifacts — travel with
+git. The guarded command copies the complete starter file only when the project
+has no `.gitignore`. If one exists, preserve every project-owned rule and merge
+only the section from `# AI-DLC` through the end of the shipped file; do not
+copy its generic starter rules. The `## Git Integration` section of the
+installed `AGENTS.md` assumes the AI-DLC rules are in place before your first
+workflow.
 
 Open `your-project/` in Kiro IDE. The install ships:
 
