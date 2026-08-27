@@ -365,6 +365,14 @@ describe("t34 stage-protocol.md structure + cross-references (migrated from t34-
     expect(protocolHas("~8-12")).toBe(true);
   });
 
+  test("§8: every generated question must be self-explanatory", () => {
+    expect(protocolHas("Questions must be self-explanatory")).toBe(true);
+    expect(protocolHas("Every question MUST stand on its own")).toBe(true);
+    expect(
+      protocolHas("Expand every identifier in each question that uses it"),
+    ).toBe(true);
+  });
+
   // =========================================================================
   // §8 — Test Strategy section (.sh 138-140).
   // =========================================================================
