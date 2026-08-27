@@ -1,6 +1,12 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.116] - 2026-08-27
+
+The question protocol now reuses answers already captured in the current record, closing a top field-feedback gap where teams saw the same question resurface after they had answered it, sometimes after stating that the answer was final. **Upgrade:** refresh your `dist/<harness>/` shell.
+
+* Before emitting a question, the orchestrator recursively reads the record's question files and correlates scope-compatible prompts and answers across every audit shard; ambiguous cross-shard ordering requires a narrow, prior-answer-naming follow-up instead of an inferred answer or a reopened topic.
+
 ## [2.6.115] - 2026-08-27
 
 Existing vision documents, PRDs, requirements briefs, and other referenced files now feed the workflow through a deterministic, trust-marked read boundary. Multiline initial requests persist outside the line-oriented state grammar, and ambiguous, missing, redirected, out-of-workspace, non-text, or oversized document references stop for clarification instead of being guessed. **Upgrade:** refresh your `dist/<harness>/` shell so the updated utility, stage instructions, and description sidecar are installed together.
