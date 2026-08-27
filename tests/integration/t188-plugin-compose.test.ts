@@ -924,6 +924,174 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(drops).toContain('foreign plugin "beta"');
   });
 
+  test("tool composition drops co-located tests and fixtures", () => {
+    const payloads = [
+      "tests/run.test.ts",
+      "__tests__/nested.ts",
+      "fixtures/sample.json",
+      "alpha-check.test.ts",
+      "alpha-check.spec.ts",
+    ];
+    const files = Object.fromEntries([
+      ...payloads.map((rel) => [`tools/${rel}`, `// ${rel}\n`]),
+      ["tools/alpha-run.ts", 'process.stdout.write("ok");\n'],
+    ]);
+    const { drops, proj } = composeSynthetic("alpha", files);
+    const installedTools = join(proj, ".claude", "tools");
+
+    expect(readFileSync(join(installedTools, "alpha-run.ts"), "utf-8"))
+      .toContain('process.stdout.write("ok")');
+    for (const rel of payloads) {
+      expect(existsSync(join(installedTools, rel))).toBe(false);
+      expect(drops.split("\n").some((line) =>
+        line.includes("[advisory]") &&
+        line.includes(`plugin "alpha" tool file "${rel}"`)
+      )).toBe(true);
+    }
+    expect(drops).toContain('plugin tests and fixtures live in top-level "tests/"');
+  });
+
+  test("tool composition audits a stale installed payload absent from the corrected projection", () => {
+    const body = "// already landed by an older compose\n";
+    const { drops, proj } = composeSynthetic(
+      "alpha",
+      { "tools/alpha-run.ts": 'process.stdout.write("ok");\n' },
+      ".claude",
+      (_proj, harnessDir) => {
+        const installed = join(harnessDir, "tools", "tests", "run.test.ts");
+        mkdirSync(dirname(installed), { recursive: true });
+        writeFileSync(installed, body);
+      },
+    );
+    const installed = join(proj, ".claude", "tools", "tests", "run.test.ts");
+
+    expect(readFileSync(installed, "utf-8")).toBe(body);
+    expect(existsSync(join(proj, ".claude", "tools", "alpha-run.ts"))).toBe(true);
+    expect(drops).toContain("[advisory]");
+    expect(drops).toContain(
+      'installed tool file "tests/run.test.ts" is a test/fixture payload',
+    );
+    expect(drops).toContain("originating plugin is not recorded");
+    expect(drops).not.toContain('plugin "alpha" tool file "tests/run.test.ts"');
+    expect(drops).toContain("remove the file and re-run compose");
+
+    rmSync(installed, { force: true });
+    const rerun = spawnSync(
+      BUN,
+      [join(proj, "_plugin-alpha", "hooks", "compose.ts")],
+      {
+        cwd: proj,
+        encoding: "utf-8",
+        timeout: TIMEOUT_MS - 5_000,
+        env: {
+          ...process.env,
+          CLAUDE_PLUGIN_ROOT: join(proj, "_plugin-alpha"),
+          CLAUDE_PROJECT_DIR: proj,
+          AIDLC_HARNESS_DIR: ".claude",
+        },
+      },
+    );
+    expect(rerun.status).toBe(0);
+    expect(existsSync(join(
+      proj,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      ".aidlc-hooks-health",
+      "plugin-compose-installed-tool-payloads-claude.drops",
+    ))).toBe(false);
+  });
+
+  test("a clean compose on a second harness keeps the first harness's installed-payload advisory", () => {
+    // The installed-payload record is keyed by harness leaf. Before that, one
+    // project-shared record meant each compose's flush (which REMOVES the file
+    // on a clean scan) could erase another harness's still-valid advisory: a
+    // stale payload under .claude/tools survived while a clean .codex compose
+    // deleted the only diagnostic pointing at it.
+    const proj = mkdtempSync(join(tmp, "syn-cross-harness-"));
+    cpSync(CLAUDE_DIST, join(proj, ".claude"), { recursive: true });
+    cpSync(CODEX_DIST, join(proj, ".codex"), { recursive: true });
+    const stale = join(proj, ".claude", "tools", "tests", "run.test.ts");
+    mkdirSync(dirname(stale), { recursive: true });
+    writeFileSync(stale, "// landed by an older compose\n");
+    const root = prepareSyntheticPlugin(proj, "alpha", {
+      "tools/alpha-run.ts": 'process.stdout.write("ok");\n',
+    });
+    const runCompose = (leaf: string) =>
+      spawnSync(BUN, [join(root, "hooks", "compose.ts")], {
+        cwd: proj,
+        encoding: "utf-8",
+        timeout: TIMEOUT_MS - 5_000,
+        env: {
+          ...process.env,
+          CLAUDE_PLUGIN_ROOT: root,
+          CLAUDE_PROJECT_DIR: proj,
+          AIDLC_HARNESS_DIR: leaf,
+        },
+      });
+    const hd = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-hooks-health");
+    const claudeRecord = join(hd, "plugin-compose-installed-tool-payloads-claude.drops");
+    const codexRecord = join(hd, "plugin-compose-installed-tool-payloads-codex.drops");
+
+    expect(runCompose(".claude").status).toBe(0);
+    expect(readFileSync(claudeRecord, "utf-8"))
+      .toContain('installed tool file "tests/run.test.ts" is a test/fixture payload');
+
+    // The codex tree carries no stale payload: its compose must scan ONLY its
+    // own tools tree, record nothing, and leave the claude advisory alone.
+    expect(runCompose(".codex").status).toBe(0);
+    expect(existsSync(join(proj, ".codex", "tools", "alpha-run.ts"))).toBe(true);
+    expect(existsSync(codexRecord)).toBe(false);
+    expect(existsSync(stale)).toBe(true);
+    expect(readFileSync(claudeRecord, "utf-8"))
+      .toContain('installed tool file "tests/run.test.ts" is a test/fixture payload');
+  });
+
+  test("installed-tools audit never follows symlinks and cannot abort composition", () => {
+    // The installed tools tree is user-writable and can contain legacy junk. A
+    // stat-following walk ELOOPed on a circular directory link (aborting the
+    // whole tools install) and pulled external trees into the audit through an
+    // escaping link. The audit must treat every symlink as a leaf: bounded
+    // traversal, no escape, and name-based matching still fires on the link.
+    const { drops, proj } = composeSynthetic(
+      "alpha",
+      { "tools/alpha-run.ts": 'process.stdout.write("ok");\n' },
+      ".claude",
+      (p, harnessDir) => {
+        const tools = join(harnessDir, "tools");
+        mkdirSync(tools, { recursive: true });
+        // Circular directory link back into the tools root itself.
+        symlinkSync(tools, join(tools, "loop"), process.platform === "win32" ? "junction" : "dir");
+        // Directory link escaping the tools root to an external payload tree.
+        const external = join(p, "external-tree");
+        mkdirSync(join(external, "tests"), { recursive: true });
+        writeFileSync(join(external, "tests", "run.test.ts"), "// external payload\n");
+        symlinkSync(external, join(tools, "escape"), process.platform === "win32" ? "junction" : "dir");
+        if (process.platform !== "win32") {
+          // A self-referencing link is a pure ELOOP mine for stat-following walks.
+          symlinkSync(join(tools, "self-loop"), join(tools, "self-loop"));
+          // A payload-NAMED link must still be flagged as a leaf.
+          writeFileSync(join(p, "elsewhere.ts"), "");
+          symlinkSync(join(p, "elsewhere.ts"), join(tools, "stale.test.ts"));
+        }
+      },
+    );
+
+    // Composition completed: the plugin tool landed despite the symlink mines
+    // (composeSynthetic already asserted exit 0), and the audit did not degrade.
+    expect(existsSync(join(proj, ".claude", "tools", "alpha-run.ts"))).toBe(true);
+    expect(drops).not.toContain("installed tools audit");
+    // No escape: the external payload behind the link is never attributed.
+    expect(drops).not.toContain("escape/tests/run.test.ts");
+    if (process.platform !== "win32") {
+      expect(drops.split("\n").some((line) =>
+        line.includes("[advisory]") &&
+        line.includes('installed tool file "stale.test.ts"')
+      )).toBe(true);
+    }
+  });
+
   test("duplicate incoming scope identities are rejected within one plugin tree", () => {
     const scope = (label: string) => [
       "---", "name: duplicate-scope", "plugin: syn-duplicate-scope",

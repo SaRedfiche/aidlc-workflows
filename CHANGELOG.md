@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.111] - 2026-08-26
+
+Plugin composition now keeps co-located tests and fixtures out of the installed engine tools tree and reports every rejected payload. **Upgrade:** refresh your `dist/<harness>/` shell and each plugin projection, then re-compose plugins; remove any already-installed file named by the new advisory and re-run compose.
+
+* Files under a plugin's `tools/tests/`, `tools/__tests__/`, or `tools/fixtures/` directories, plus `*.test.ts` and `*.spec.ts` tool files, are skipped with an advisory drop that points authors to the top-level `tests/` convention.
+* Installed test payloads remain untouched by no-clobber composition but are audited from the destination tree even after they disappear from a corrected plugin projection; legacy files without provenance are reported without attributing them to the plugin currently composing.
+* The installed-payload audit record is per harness (`plugin-compose-installed-tool-payloads-<harness>.drops`), so a clean compose on one harness never erases the advisory another harness's stale payload still needs, and the destination scan never follows symlinks - a circular or external directory link in the installed tools tree can no longer abort composition or pull unrelated trees into the audit.
+
 ## [2.6.110] - 2026-08-26
 
 Plugin composition lost to an engine reinstall is now detected and documented instead of leaving plugin stages or contributions silently absent. **Upgrade:** refresh your `dist/<harness>/` shell, then run `/aidlc plugin sync` for every installed plugin; Claude, Codex, Cursor, and Kiro IDE can also re-compose on the next session start.
