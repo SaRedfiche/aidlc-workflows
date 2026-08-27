@@ -3,9 +3,9 @@ All notable changes to this project will be documented in this file.
 
 ## [2.6.116] - 2026-08-27
 
-The question protocol now forbids re-asking a question the current record already answers, closing a top field-feedback gap where teams saw the same question resurface after they had answered it (sometimes after stating an answer was final). **Upgrade:** refresh your `dist/<harness>/` shell.
+The question protocol now reuses answers already captured in the current record, closing a top field-feedback gap where teams saw the same question resurface after they had answered it, sometimes after stating that the answer was final. **Upgrade:** refresh your `dist/<harness>/` shell.
 
-* Depth-aware question generation gains a "never re-ask an answered question" rule: before emitting a question the orchestrator must scan filled `[Answer]:` tags in the record's `*-questions.md` files and `QUESTION_ANSWERED` audit rows, and proceed on the recorded answer or ask a narrow, prior-answer-naming follow-up instead of re-opening the question.
+* Before emitting a question, the orchestrator recursively reads the record's question files and correlates prompts with answers across every audit shard; it proceeds on the latest applicable answer or asks a narrow, prior-answer-naming follow-up instead of reopening the topic.
 
 ## [2.6.115] - 2026-08-27
 
