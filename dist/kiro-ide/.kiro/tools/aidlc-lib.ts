@@ -4,6 +4,7 @@ import { accessSync, appendFileSync, closeSync, constants as fsConstants, cpSync
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
+import { TextDecoder } from "node:util";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import {
   resolveHarnessPath,
@@ -44,6 +45,7 @@ export interface StageEntry {
   plugin?: string;
   condition?: string;
   reviewer?: string;
+  review_artifact?: string;
   reviewer_max_iterations?: number;
   review_class?: "adversarial" | "advisory";
   // Summary-confirmation policy for stages using the unified question flow.
@@ -7984,6 +7986,7 @@ export function producesArtifactUnit(
 }
 
 export type ReviewVerdict = "READY" | "NOT-READY";
+export type ReviewRecoveryCause = "artifact" | "source" | "artifact+source";
 
 export function terminalReviewVerdict(
   verdict: string | null,
@@ -8009,6 +8012,7 @@ export interface PendingReviewProgress {
   iteration: number;
   recovery: boolean;
   suspensionActive: boolean;
+  recoveryCause?: ReviewRecoveryCause | null;
 }
 
 export interface StaleReviewProgress {
@@ -8082,6 +8086,8 @@ export interface ReviewFingerprintStage {
   phase: string;
   for_each?: string;
   reviewer?: string;
+  review_artifact?: string;
+  workspace_requires?: boolean;
   produces?: string[];
   optional_produces?: string[];
   produces_kinds?: Record<string, string[]>;
@@ -8090,17 +8096,19 @@ export interface ReviewFingerprintStage {
 export interface ReviewArtifactEntry {
   logicalPath: string;
   path: string | null;
+  boundary: string;
   required: boolean;
+  reviewAppendixTarget: boolean;
 }
 
-export interface ReviewArtifactSnapshotEntry extends ReviewArtifactEntry {
+export interface ReviewArtifactBytesEntry extends ReviewArtifactEntry {
   state: "file" | "missing" | "not-file";
   bytes?: Buffer;
 }
 
-export interface ReviewArtifactSnapshot {
+export interface ReviewArtifactBytesSnapshot {
   fingerprint: string;
-  entries: ReviewArtifactSnapshotEntry[];
+  entries: ReviewArtifactBytesEntry[];
 }
 
 export function reviewArtifactEntries(
@@ -8113,16 +8121,29 @@ export function reviewArtifactEntries(
     mergedBoltUnits?: ReadonlySet<string>;
   } = {},
 ): ReviewArtifactEntry[] | null {
-  const artifactsForKind = (kind: string | null) => [
-    ...filterProducesByKind(stage.produces_kinds, stage.produces ?? [], kind).map(
-      (name) => ({ name, required: true }),
-    ),
-    ...filterProducesByKind(
+  const artifactsForKind = (kind: string | null) => {
+    const required = filterProducesByKind(
       stage.produces_kinds,
-      stage.optional_produces ?? [],
+      stage.produces ?? [],
       kind,
-    ).map((name) => ({ name, required: false })),
-  ];
+    );
+    return [
+      ...required.map((name) => ({
+        name,
+        required: true,
+        reviewAppendixTarget: name === stage.review_artifact,
+      })),
+      ...filterProducesByKind(
+        stage.produces_kinds,
+        stage.optional_produces ?? [],
+        kind,
+      ).map((name) => ({
+        name,
+        required: false,
+        reviewAppendixTarget: false,
+      })),
+    ];
+  };
   const allArtifacts = artifactsForKind(null);
 
   if (KNOWN_CODEKB_STAGES.has(stage.slug)) {
@@ -8141,14 +8162,18 @@ export function reviewArtifactEntries(
       return allArtifacts.map((artifact) => ({
         logicalPath: `codekb/*/${artifactFilename(artifact.name)}`,
         path: null,
+        boundary: root,
         required: artifact.required,
+        reviewAppendixTarget: artifact.reviewAppendixTarget,
       }));
     }
     return repos.flatMap((repo) =>
       allArtifacts.map((artifact) => ({
         logicalPath: `codekb/${repo}/${artifactFilename(artifact.name)}`,
         path: join(codekbDir(projectDir, repo), artifactFilename(artifact.name)),
+        boundary: root,
         required: artifact.required,
+        reviewAppendixTarget: artifact.reviewAppendixTarget,
       })),
     );
   }
@@ -8159,9 +8184,38 @@ export function reviewArtifactEntries(
     return allArtifacts.map((artifact) => ({
       logicalPath: `${stage.phase}/${stage.slug}/${artifactFilename(artifact.name)}`,
       path: join(record, stage.phase, stage.slug, artifactFilename(artifact.name)),
+      boundary: record,
       required: artifact.required,
+      reviewAppendixTarget: artifact.reviewAppendixTarget,
     }));
   }
+
+  const stageLevelEntries = (): ReviewArtifactEntry[] =>
+    allArtifacts.map((artifact) => ({
+      logicalPath: `${stage.phase}/${stage.slug}/${artifactFilename(artifact.name)}`,
+      path: join(record, stage.phase, stage.slug, artifactFilename(artifact.name)),
+      boundary: record,
+      required: artifact.required,
+      reviewAppendixTarget: artifact.reviewAppendixTarget,
+    }));
+  const stageLevelPresent = allArtifacts.some((artifact) =>
+    existsSync(
+      join(record, stage.phase, stage.slug, artifactFilename(artifact.name)),
+    )
+  );
+  const construction = join(record, "construction");
+  const discoveredUnits = existsSync(construction)
+    ? readdirSync(construction).filter((name) => {
+        try {
+          return (
+            statSync(join(construction, name)).isDirectory() &&
+            existsSync(join(construction, name, stage.slug))
+          );
+        } catch {
+          return false;
+        }
+      })
+    : [];
 
   let stateContent = options.stateContent;
   if (stateContent === undefined) {
@@ -8177,13 +8231,10 @@ export function reviewArtifactEntries(
     usesStageLevelPerUnitArtifacts(
       getField(stateContent, "Scope"),
       stateContent,
-    )
+    ) &&
+    (stageLevelPresent || discoveredUnits.length === 0)
   ) {
-    return allArtifacts.map((artifact) => ({
-      logicalPath: `${stage.phase}/${stage.slug}/${artifactFilename(artifact.name)}`,
-      path: join(record, stage.phase, stage.slug, artifactFilename(artifact.name)),
-      required: artifact.required,
-    }));
+    return stageLevelEntries();
   }
 
   let units: string[];
@@ -8197,50 +8248,476 @@ export function reviewArtifactEntries(
   } else if (resolution.state === "ok") {
     units = resolution.units;
     unitKinds = resolution.unitKinds ?? new Map();
-  } else if (resolution.state === "none") {
+  } else {
     if (
       options.mergedBoltUnits !== undefined &&
       options.mergedBoltUnits.size > 0
     ) {
       units = [...options.mergedBoltUnits].sort();
     } else {
-      return allArtifacts.map((artifact) => ({
-        logicalPath: `construction/${stage.slug}/${artifactFilename(artifact.name)}`,
-        path: join(
-          record,
-          "construction",
-          stage.slug,
-          artifactFilename(artifact.name),
-        ),
-        required: artifact.required,
-      }));
+      if (stageLevelPresent) return stageLevelEntries();
+      units = discoveredUnits;
     }
-  } else {
-    const construction = join(record, "construction");
-    units = existsSync(construction)
-      ? readdirSync(construction).filter((name) => {
-          try {
-            return statSync(join(construction, name)).isDirectory();
-          } catch {
-            return false;
-          }
-        })
-      : [];
   }
   if (units.length === 0) {
     return allArtifacts.map((artifact) => ({
       logicalPath: `construction/*/${stage.slug}/${artifactFilename(artifact.name)}`,
       path: null,
+      boundary: record,
       required: artifact.required,
+      reviewAppendixTarget: artifact.reviewAppendixTarget,
     }));
   }
   return units.flatMap((name) =>
     artifactsForKind(unitKinds.get(name) ?? null).map((artifact) => ({
       logicalPath: `construction/${name}/${stage.slug}/${artifactFilename(artifact.name)}`,
       path: join(record, "construction", name, stage.slug, artifactFilename(artifact.name)),
+      boundary: record,
       required: artifact.required,
+      reviewAppendixTarget: artifact.reviewAppendixTarget,
     })),
   );
+}
+
+type StableArtifactStat = {
+  dev: bigint;
+  ino: bigint;
+  mode: bigint;
+  nlink: bigint;
+  size: bigint;
+  mtimeNs: bigint;
+  ctimeNs: bigint;
+  isFile(): boolean;
+};
+
+type ReviewArtifactContent =
+  | (ReviewArtifactEntry & { state: "missing" })
+  | (ReviewArtifactEntry & {
+      state: "not-file";
+      identity: StableArtifactStat;
+    })
+  | (ReviewArtifactEntry & {
+      state: "file";
+      body: Buffer;
+      identity: StableArtifactStat;
+      fd: number;
+    });
+
+function artifactFdStat(fd: number): StableArtifactStat {
+  return fstatSync(fd, { bigint: true }) as unknown as StableArtifactStat;
+}
+
+function sameArtifactIdentity(
+  left: StableArtifactStat,
+  right: StableArtifactStat,
+): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.mode === right.mode &&
+    left.nlink === right.nlink &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
+}
+
+function pathContainedBy(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel === "" || (
+    rel !== ".." &&
+    !rel.startsWith(`..${sep}`) &&
+    !isAbsolute(rel)
+  );
+}
+
+function inspectArtifactPath(
+  boundary: string,
+  path: string,
+): { state: "missing" } | { state: "present"; boundaryReal: string } | null {
+  const lexicalBoundary = resolvePath(boundary);
+  const lexicalPath = resolvePath(path);
+  if (!pathContainedBy(lexicalBoundary, lexicalPath)) return null;
+
+  let boundaryReal: string;
+  try {
+    boundaryReal = realpathSync(lexicalBoundary);
+  } catch {
+    return null;
+  }
+
+  const rel = relative(lexicalBoundary, lexicalPath);
+  let cursor = lexicalBoundary;
+  for (const segment of rel.split(sep).filter(Boolean)) {
+    cursor = join(cursor, segment);
+    try {
+      if (lstatSync(cursor).isSymbolicLink()) return null;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return { state: "missing" };
+      }
+      return null;
+    }
+  }
+  return { state: "present", boundaryReal };
+}
+
+function readStableReviewArtifacts(
+  entries: ReviewArtifactEntry[],
+  observer?: (event: {
+    phase: "after-read";
+    logicalPath: string;
+    path: string;
+  }) => void,
+): ReviewArtifactContent[] | null {
+  const contents: ReviewArtifactContent[] = [];
+  const opened: number[] = [];
+  try {
+    for (const entry of [...entries].sort((a, b) =>
+      a.logicalPath.localeCompare(b.logicalPath),
+    )) {
+      if (entry.path === null) {
+        contents.push({ ...entry, state: "missing" });
+        continue;
+      }
+
+      const inspected = inspectArtifactPath(entry.boundary, entry.path);
+      if (inspected === null) return null;
+      if (inspected.state === "missing") {
+        contents.push({ ...entry, state: "missing" });
+        continue;
+      }
+      const before = lstatSync(entry.path, {
+        bigint: true,
+      }) as unknown as StableArtifactStat;
+      if (!before.isFile()) {
+        contents.push({ ...entry, state: "not-file", identity: before });
+        continue;
+      }
+      if (before.nlink !== 1n) return null;
+
+      const noFollow =
+        typeof fsConstants.O_NOFOLLOW === "number"
+          ? fsConstants.O_NOFOLLOW
+          : 0;
+      const nonBlock =
+        typeof fsConstants.O_NONBLOCK === "number"
+          ? fsConstants.O_NONBLOCK
+          : 0;
+      const fd = openSync(
+        entry.path,
+        fsConstants.O_RDONLY | noFollow | nonBlock,
+      );
+      opened.push(fd);
+      const openedIdentity = artifactFdStat(fd);
+      if (
+        !openedIdentity.isFile() ||
+        openedIdentity.nlink !== 1n ||
+        !sameArtifactIdentity(before, openedIdentity)
+      ) return null;
+      const openedReal = realpathSync(entry.path);
+      if (!pathContainedBy(inspected.boundaryReal, openedReal)) return null;
+      const body = readFileSync(fd);
+      const afterReadIdentity = artifactFdStat(fd);
+      if (!sameArtifactIdentity(openedIdentity, afterReadIdentity)) return null;
+      contents.push({
+        ...entry,
+        state: "file",
+        body,
+        identity: openedIdentity,
+        fd,
+      });
+      observer?.({
+        phase: "after-read",
+        logicalPath: entry.logicalPath,
+        path: entry.path,
+      });
+    }
+
+    for (const entry of contents) {
+      if (entry.path === null) continue;
+      if (entry.state === "missing") {
+        if (inspectArtifactPath(entry.boundary, entry.path)?.state !== "missing") {
+          return null;
+        }
+        continue;
+      }
+      const inspected = inspectArtifactPath(entry.boundary, entry.path);
+      if (inspected?.state !== "present") return null;
+      const currentPath = lstatSync(entry.path, {
+        bigint: true,
+      }) as unknown as StableArtifactStat;
+      if (!sameArtifactIdentity(entry.identity, currentPath)) return null;
+      if (
+        !pathContainedBy(inspected.boundaryReal, realpathSync(entry.path))
+      ) return null;
+      if (
+        entry.state === "file" &&
+        !sameArtifactIdentity(entry.identity, artifactFdStat(entry.fd))
+      ) {
+        return null;
+      }
+    }
+    return contents;
+  } catch {
+    return null;
+  } finally {
+    for (const fd of opened) {
+      try {
+        closeSync(fd);
+      } catch {
+        // The snapshot has already failed closed if a descriptor is unusable.
+      }
+    }
+  }
+}
+
+function reviewArtifactContentsFingerprint(
+  contents: ReviewArtifactContent[],
+  options: {
+    requireRequiredArtifacts?: boolean;
+    appendixArtifact?: string;
+    appendixOffset?: number;
+  } = {},
+): string | null {
+  const manifest: Array<[string, string]> = [];
+  let matchedAppendix = options.appendixArtifact === undefined;
+  for (const entry of contents) {
+    if (entry.state === "missing") {
+      if (entry.required && options.requireRequiredArtifacts === true) return null;
+      manifest.push([entry.logicalPath, "missing"]);
+      continue;
+    }
+    if (entry.state === "not-file") {
+      if (entry.required && options.requireRequiredArtifacts === true) return null;
+      manifest.push([entry.logicalPath, "not-file"]);
+      continue;
+    }
+
+    let fingerprintedBody = entry.body;
+    if (entry.logicalPath === options.appendixArtifact) {
+      if (
+        !entry.reviewAppendixTarget ||
+        options.appendixOffset === undefined ||
+        options.appendixOffset < 0 ||
+        options.appendixOffset > entry.body.length
+      ) {
+        return null;
+      }
+      fingerprintedBody = entry.body.subarray(0, options.appendixOffset);
+      matchedAppendix = true;
+    }
+    const digest = createHash("sha256").update(fingerprintedBody).digest("hex");
+    manifest.push([entry.logicalPath, `sha256:${digest}`]);
+  }
+  if (!matchedAppendix) return null;
+  return `sha256:${createHash("sha256").update(JSON.stringify(manifest)).digest("hex")}`;
+}
+
+export interface ReviewArtifactSnapshot {
+  fingerprint: string;
+  requestFingerprint: string;
+  appendixArtifact: string;
+  appendixOffset: number;
+  appendix: Buffer;
+}
+
+/**
+ * Exclude permitted blank separator lines from the reviewer-owned evidence.
+ * This keeps the stale-appendix binding anchored at the canonical
+ * `## Review` heading instead of letting an extra blank line shift old
+ * authority past the request-time prefix check.
+ */
+export function reviewAppendixEvidenceBytes(appendix: Buffer): Buffer {
+  let offset = 0;
+  while (offset < appendix.length) {
+    const lineStart = offset;
+    while (appendix[offset] === 0x20 || appendix[offset] === 0x09) offset++;
+    if (appendix[offset] === 0x0d) {
+      offset++;
+      if (appendix[offset] === 0x0a) offset++;
+      continue;
+    }
+    if (appendix[offset] === 0x0a) {
+      offset++;
+      continue;
+    }
+    return appendix.subarray(lineStart);
+  }
+  return appendix.subarray(offset);
+}
+
+/**
+ * Canonical audit binding for the reviewer evidence after an appendix offset.
+ * `none` pins the verified absence of any pre-request appendix; a sha256
+ * digest pins the exact section that already existed when REVIEW_REQUESTED
+ * was recorded. Its recorded byte length lets completion reject both an
+ * unchanged section and one that merely extends those same pre-request bytes,
+ * so a `## Review` section that predates the request (for example one
+ * surviving an attempt reset) cannot be replayed as fresh reviewer evidence.
+ */
+export function reviewAppendixDigest(appendix: Buffer): string {
+  const evidence = reviewAppendixEvidenceBytes(appendix);
+  return evidence.length === 0
+    ? "none"
+    : `sha256:${createHash("sha256").update(evidence).digest("hex")}`;
+}
+
+function existingReviewAppendixOffset(body: Buffer): number | null {
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(body);
+  } catch {
+    return null;
+  }
+  const lineStarts = [0];
+  for (let offset = 0; offset < text.length; offset++) {
+    if (text[offset] === "\r") {
+      if (text[offset + 1] === "\n") offset++;
+      lineStarts.push(offset + 1);
+    } else if (text[offset] === "\n") {
+      lineStarts.push(offset + 1);
+    }
+  }
+
+  const candidates: Array<{ start: number; end: number }> = [];
+  for (let line = 0; line < lineStarts.length; line++) {
+    const start = lineStarts[line];
+    const lineEnd = lineStarts[line + 1] ?? text.length;
+    const rawLine = text
+      .slice(start, lineEnd)
+      .replace(/(?:\r\n|\n|\r)$/, "");
+    if (/^## Review[ \t]*$/.test(rawLine)) {
+      candidates.push({ start, end: start + rawLine.length });
+    }
+  }
+  if (candidates.length === 0 || typeof Bun.markdown?.render !== "function") {
+    return null;
+  }
+
+  let marker = "AIDLCREVIEWAPPENDIXBOUNDARY";
+  while (text.includes(marker)) marker += "X";
+  let marked = text;
+  for (let index = candidates.length - 1; index >= 0; index--) {
+    const candidate = candidates[index];
+    const rawLine = marked.slice(candidate.start, candidate.end);
+    marked =
+      marked.slice(0, candidate.start) +
+      `## ${marker}${index}${rawLine.slice("## Review".length)}` +
+      marked.slice(candidate.end);
+  }
+
+  let sawRenderedH1H2 = false;
+  let terminalCandidate: number | null = null;
+  try {
+    Bun.markdown.render(marked, {
+      heading: (children, { level }) => {
+        if (level <= 2) {
+          sawRenderedH1H2 = true;
+          const match =
+            level === 2
+              ? new RegExp(`^${marker}([0-9]+)$`).exec(children)
+              : null;
+          terminalCandidate = match ? Number(match[1]) : null;
+        }
+        return "";
+      },
+      html: (children) => {
+        if (renderedHtmlCarriesH1H2(children)) {
+          sawRenderedH1H2 = true;
+          terminalCandidate = null;
+        }
+        return "";
+      },
+    });
+  } catch {
+    return null;
+  }
+  if (!sawRenderedH1H2 || terminalCandidate === null) return null;
+
+  const headingStart = candidates[terminalCandidate]?.start;
+  if (headingStart === undefined) return null;
+
+  const prefix = text.slice(0, headingStart);
+  const trailing = /\s+$/.exec(prefix);
+  if (!trailing) return Buffer.byteLength(prefix, "utf-8");
+  const contentEnd = prefix.length - trailing[0].length;
+  const retainedLineEnd = /^[ \t]*(?:\r\n|\n|\r)/.exec(
+    prefix.slice(contentEnd),
+  );
+  const offset =
+    contentEnd + (retainedLineEnd?.[0].length ?? 0);
+  return Buffer.byteLength(text.slice(0, offset), "utf-8");
+}
+
+/**
+ * Snapshot the exact review input and the explicit review_artifact byte
+ * boundary after which the reviewer may append `## Review`.
+ */
+export function reviewArtifactSnapshot(
+  projectDir: string,
+  stage: ReviewFingerprintStage,
+  unit?: string,
+  options: {
+    requireRequiredArtifacts?: boolean;
+    boltDag?: BoltDagResolution;
+    mergedBoltUnits?: ReadonlySet<string>;
+    appendixBinding?: {
+      artifact: string;
+      offset: number;
+    };
+    snapshotObserver?: (event: {
+      phase: "after-read";
+      logicalPath: string;
+      path: string;
+    }) => void;
+  } = {},
+): ReviewArtifactSnapshot | null {
+  let entries: ReviewArtifactEntry[] | null;
+  try {
+    entries = reviewArtifactEntries(projectDir, stage, unit, {
+      boltDag: options.boltDag,
+      mergedBoltUnits: options.mergedBoltUnits,
+    });
+  } catch {
+    return null;
+  }
+  if (entries === null) return null;
+  const contents = readStableReviewArtifacts(entries, options.snapshotObserver);
+  if (contents === null) return null;
+  const fingerprint = reviewArtifactContentsFingerprint(contents, options);
+  if (fingerprint === null) return null;
+
+  const target = contents
+    .filter((entry) => entry.reviewAppendixTarget)
+    .sort((a, b) => a.logicalPath.localeCompare(b.logicalPath))[0];
+  if (target?.state !== "file") return null;
+
+  const binding = options.appendixBinding ?? {
+    artifact: target.logicalPath,
+    offset: existingReviewAppendixOffset(target.body) ?? target.body.length,
+  };
+  if (
+    binding.artifact !== target.logicalPath ||
+    !Number.isSafeInteger(binding.offset) ||
+    binding.offset < 0 ||
+    binding.offset > target.body.length
+  ) {
+    return null;
+  }
+  const requestFingerprint = reviewArtifactContentsFingerprint(contents, {
+    ...options,
+    appendixArtifact: binding.artifact,
+    appendixOffset: binding.offset,
+  });
+  if (requestFingerprint === null) return null;
+  return {
+    fingerprint,
+    requestFingerprint,
+    appendixArtifact: binding.artifact,
+    appendixOffset: binding.offset,
+    appendix: target.body.subarray(binding.offset),
+  };
 }
 
 /**
@@ -8249,7 +8726,440 @@ export function reviewArtifactEntries(
  * missing declared artifacts are explicit manifest entries, so creating one
  * after review also invalidates the receipt.
  */
-export function reviewArtifactSnapshot(
+export function reviewArtifactFingerprint(
+  projectDir: string,
+  stage: ReviewFingerprintStage,
+  unit?: string,
+  options: {
+    requireRequiredArtifacts?: boolean;
+    boltDag?: BoltDagResolution;
+    stateContent?: string | null;
+    mergedBoltUnits?: ReadonlySet<string>;
+  } = {},
+): string | null {
+  let entries: ReviewArtifactEntry[] | null;
+  try {
+    entries = reviewArtifactEntries(projectDir, stage, unit, {
+      boltDag: options.boltDag,
+      stateContent: options.stateContent,
+      mergedBoltUnits: options.mergedBoltUnits,
+    });
+  } catch {
+    return null;
+  }
+  if (entries === null) return null;
+  const contents = readStableReviewArtifacts(entries);
+  if (contents === null) return null;
+  return reviewArtifactContentsFingerprint(contents, options);
+}
+
+export function validateReviewAppendix(
+  appendix: Buffer,
+  expected: {
+    verdict: ReviewVerdict;
+    reviewer: string;
+    iteration: number;
+    reviewChallenge: string | null;
+  },
+): { valid: true } | { valid: false; reason: string } {
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(appendix);
+  } catch {
+    return { valid: false, reason: "the reviewer appendix is not valid UTF-8" };
+  }
+  const normalized = text.replace(/\r\n?/g, "\n");
+  const opening = /^(?:[ \t]*\n)*## Review[ \t]*\n/.exec(normalized);
+  if (!opening) {
+    return {
+      valid: false,
+      reason:
+        "the appended bytes must begin with only blank lines followed by an exact `## Review` heading",
+    };
+  }
+  const section = normalized.slice(opening[0].length);
+  const authority = renderReviewMarkdownAuthority(section);
+  if (authority === null) {
+    return {
+      valid: false,
+      reason: "the reviewer appendix could not be parsed as Markdown",
+    };
+  }
+  if (authority.markdownH1H2) {
+    return {
+      valid: false,
+      reason:
+        "the reviewer appendix must be terminal and contain no later rendered H1 or H2 heading",
+    };
+  }
+  if (authority.htmlH1H2) {
+    return {
+      valid: false,
+      reason:
+        "the reviewer appendix must be terminal and contain no rendered HTML H1 or H2 heading",
+    };
+  }
+
+  if (
+    authority.verdicts.length !== 1 ||
+    authority.verdicts[0] !== expected.verdict
+  ) {
+    return {
+      valid: false,
+      reason:
+        "the reviewer appendix must contain exactly one canonical verdict line matching --verdict",
+    };
+  }
+  if (
+    authority.reviewers.length !== 1 ||
+    authority.reviewers[0] !== expected.reviewer
+  ) {
+    return {
+      valid: false,
+      reason:
+        "the reviewer appendix must contain exactly one Reviewer line matching the requested reviewer",
+    };
+  }
+  if (
+    authority.iterations.length !== 1 ||
+    authority.iterations[0] !== String(expected.iteration)
+  ) {
+    return {
+      valid: false,
+      reason:
+        "the reviewer appendix must contain exactly one Iteration line matching the request",
+    };
+  }
+  if (
+    expected.reviewChallenge === null
+      ? authority.requestChallenges.length !== 0
+      : authority.requestChallenges.length !== 1 ||
+        authority.requestChallenges[0] !== expected.reviewChallenge
+  ) {
+    return {
+      valid: false,
+      reason:
+        expected.reviewChallenge === null
+          ? "the reviewer appendix must omit Request Challenge when the request did not issue one"
+          : "the reviewer appendix must contain exactly one Request Challenge line matching the request",
+    };
+  }
+  return { valid: true };
+}
+
+type RenderedReviewAuthority = {
+  markdownH1H2: boolean;
+  htmlH1H2: boolean;
+  verdicts: string[];
+  reviewers: string[];
+  iterations: string[];
+  requestChallenges: string[];
+};
+
+const REVIEW_MARK_OPEN = "\u0001";
+const REVIEW_MARK_CLOSE = "\u0002";
+const REVIEW_NON_AUTHORITY = "\u0003";
+
+function renderedReviewFields(rendered: string, label: string): string[] {
+  const pattern = new RegExp(
+    `^${REVIEW_MARK_OPEN}${label}:${REVIEW_MARK_CLOSE}[ \\t]+(.+?)[ \\t]*$`,
+    "gm",
+  );
+  return [...rendered.matchAll(pattern)].map((match) => match[1]);
+}
+
+function renderedHtmlCarriesH1H2(html: string): boolean {
+  const visible = html
+    .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
+    .replace(
+      /<(script|style|textarea|title|xmp|iframe|noembed|noframes|plaintext|template)\b[\s\S]*?(?:<\/\1\s*>|$)/gi,
+      "",
+    );
+  return /<h[12](?=[\s/>]|$)/i.test(visible);
+}
+
+function escapeReviewRendererText(text: string): string {
+  let escaped = "";
+  for (const character of text) {
+    const code = character.charCodeAt(0);
+    escaped +=
+      code >= 1 && code <= 3
+        ? `\\u${code.toString(16).padStart(4, "0")}`
+        : character;
+  }
+  return escaped;
+}
+
+function renderReviewMarkdownAuthority(
+  section: string,
+): RenderedReviewAuthority | null {
+  if (typeof Bun.markdown?.render !== "function") return null;
+  let markdownH1H2 = false;
+  let htmlH1H2 = false;
+  let rendered: string;
+  try {
+    rendered = Bun.markdown.render(section, {
+      heading: (_children, { level }) => {
+        if (level <= 2) markdownH1H2 = true;
+        return `${REVIEW_NON_AUTHORITY}\n`;
+      },
+      html: (children) => {
+        if (renderedHtmlCarriesH1H2(children)) htmlH1H2 = true;
+        return children.endsWith("\n")
+          ? `${REVIEW_NON_AUTHORITY}\n`
+          : REVIEW_NON_AUTHORITY;
+      },
+      code: () => `${REVIEW_NON_AUTHORITY}\n`,
+      codespan: () => REVIEW_NON_AUTHORITY,
+      text: escapeReviewRendererText,
+      strong: (children) =>
+        `${REVIEW_MARK_OPEN}${children}${REVIEW_MARK_CLOSE}`,
+      paragraph: (children) => `${children}\n`,
+      blockquote: () => "",
+      list: () => "",
+      table: () => "",
+      emphasis: (children) =>
+        `${REVIEW_NON_AUTHORITY}${children}${REVIEW_NON_AUTHORITY}`,
+      strikethrough: (children) =>
+        `${REVIEW_NON_AUTHORITY}${children}${REVIEW_NON_AUTHORITY}`,
+      link: (children) =>
+        `${REVIEW_NON_AUTHORITY}${children}${REVIEW_NON_AUTHORITY}`,
+      image: () => REVIEW_NON_AUTHORITY,
+      hr: () => `${REVIEW_NON_AUTHORITY}\n`,
+    });
+  } catch {
+    return null;
+  }
+  return {
+    markdownH1H2,
+    htmlH1H2,
+    verdicts: renderedReviewFields(rendered, "Verdict"),
+    reviewers: renderedReviewFields(rendered, "Reviewer"),
+    iterations: renderedReviewFields(rendered, "Iteration"),
+    requestChallenges: renderedReviewFields(rendered, "Request Challenge"),
+  };
+}
+
+const REVIEW_FINGERPRINT_RE = /^sha256:[0-9a-f]{64}$/;
+const REVIEW_APPENDIX_DIGEST_RE = /^(?:none|sha256:[0-9a-f]{64})$/;
+const REVIEW_CHALLENGE_RE = /^review:[0-9a-f]{32}$/;
+const SOURCE_FINGERPRINT_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64}|unbindable)$/;
+const UNIT_SOURCE_FINGERPRINT_RE = /^(?:sha256:[0-9a-f]{64}|unbindable)$/;
+
+export interface ReviewRequestBinding {
+  artifactFingerprint: string;
+  appendixArtifact: string | null;
+  appendixOffset: number | null;
+  priorAppendixDigest: string | null;
+  priorAppendixLength: number | null;
+  reviewChallenge: string | null;
+  sourceFingerprint: string | null;
+  unitSourceFingerprint: string | null;
+  recoveryCause: ReviewRecoveryCause | null;
+}
+
+export function reviewRequestBindingFromBlock(
+  block: string,
+): ReviewRequestBinding | null {
+  const artifactFingerprint = auditBlockField(block, "Artifact Fingerprint");
+  if (
+    artifactFingerprint === null ||
+    !REVIEW_FINGERPRINT_RE.test(artifactFingerprint)
+  ) {
+    return null;
+  }
+  const appendixArtifact = auditBlockField(
+    block,
+    "Review Appendix Artifact",
+  );
+  const rawOffset = auditBlockField(block, "Review Appendix Offset");
+  if ((appendixArtifact === null) !== (rawOffset === null)) return null;
+  let appendixOffset: number | null = null;
+  if (rawOffset !== null) {
+    if (!/^[0-9]+$/.test(rawOffset)) return null;
+    appendixOffset = Number(rawOffset);
+    if (!Number.isSafeInteger(appendixOffset)) return null;
+  }
+  const priorAppendixDigest = auditBlockField(
+    block,
+    "Review Appendix Prior Digest",
+  );
+  if (
+    priorAppendixDigest !== null &&
+    (appendixArtifact === null ||
+      !REVIEW_APPENDIX_DIGEST_RE.test(priorAppendixDigest))
+  ) {
+    return null;
+  }
+  const rawPriorAppendixLength = auditBlockField(
+    block,
+    "Review Appendix Prior Length",
+  );
+  let priorAppendixLength: number | null = null;
+  if (rawPriorAppendixLength !== null) {
+    if (!/^[0-9]+$/.test(rawPriorAppendixLength)) return null;
+    priorAppendixLength = Number(rawPriorAppendixLength);
+    if (!Number.isSafeInteger(priorAppendixLength)) return null;
+    if (
+      appendixArtifact === null ||
+      priorAppendixDigest === null ||
+      (priorAppendixDigest === "none") !== (priorAppendixLength === 0)
+    ) {
+      return null;
+    }
+  }
+  const reviewChallenge = auditBlockField(block, "Review Challenge");
+  if (
+    reviewChallenge !== null &&
+    (!REVIEW_CHALLENGE_RE.test(reviewChallenge) ||
+      priorAppendixLength === null ||
+      priorAppendixLength === 0)
+  ) {
+    return null;
+  }
+  const sourceFingerprint = auditBlockField(block, "Source Fingerprint");
+  if (
+    sourceFingerprint !== null &&
+    !SOURCE_FINGERPRINT_RE.test(sourceFingerprint)
+  ) {
+    return null;
+  }
+  const unitSourceFingerprint = auditBlockField(
+    block,
+    "Unit Source Fingerprint",
+  );
+  if (
+    unitSourceFingerprint !== null &&
+    !UNIT_SOURCE_FINGERPRINT_RE.test(unitSourceFingerprint)
+  ) {
+    return null;
+  }
+  const rawRecoveryCause = auditBlockField(block, "Recovery Cause");
+  const recoveryCause =
+    rawRecoveryCause === "artifact" ||
+      rawRecoveryCause === "source" ||
+      rawRecoveryCause === "artifact+source"
+      ? rawRecoveryCause
+      : null;
+  if (rawRecoveryCause !== null && recoveryCause === null) return null;
+  return {
+    artifactFingerprint,
+    appendixArtifact,
+    appendixOffset,
+    priorAppendixDigest,
+    priorAppendixLength,
+    reviewChallenge,
+    sourceFingerprint,
+    unitSourceFingerprint,
+    recoveryCause,
+  };
+}
+
+export function reviewCompletionMatchesRequest(
+  request: ReviewRequestBinding,
+  completionBlock: string,
+): boolean {
+  const verdict = auditBlockField(completionBlock, "Verdict");
+  if (verdict !== "READY" && verdict !== "NOT-READY") return false;
+  const recordedFingerprint = auditBlockField(
+    completionBlock,
+    "Artifact Fingerprint",
+  );
+  if (
+    recordedFingerprint === null ||
+    !REVIEW_FINGERPRINT_RE.test(recordedFingerprint)
+  ) {
+    return false;
+  }
+  const completedRequestFingerprint =
+    auditBlockField(completionBlock, "Request Fingerprint") ??
+    recordedFingerprint;
+  if (completedRequestFingerprint !== request.artifactFingerprint) return false;
+
+  const completionAppendixArtifact = auditBlockField(
+    completionBlock,
+    "Review Appendix Artifact",
+  );
+  const completionAppendixOffset = auditBlockField(
+    completionBlock,
+    "Review Appendix Offset",
+  );
+  if (
+    completionAppendixArtifact !== request.appendixArtifact ||
+    (completionAppendixOffset === null
+      ? request.appendixOffset !== null
+      : !/^[0-9]+$/.test(completionAppendixOffset) ||
+        Number(completionAppendixOffset) !== request.appendixOffset)
+  ) {
+    return false;
+  }
+
+  if (
+    request.priorAppendixDigest !== null &&
+    auditBlockField(completionBlock, "Review Appendix Prior Digest") !==
+      request.priorAppendixDigest
+  ) {
+    return false;
+  }
+  if (
+    request.priorAppendixDigest !== null &&
+    request.priorAppendixLength === null
+  ) {
+    return false;
+  }
+  if (request.priorAppendixLength !== null) {
+    const completionPriorLength = auditBlockField(
+      completionBlock,
+      "Review Appendix Prior Length",
+    );
+    if (
+      completionPriorLength === null ||
+      !/^[0-9]+$/.test(completionPriorLength) ||
+      Number(completionPriorLength) !== request.priorAppendixLength
+    ) {
+      return false;
+    }
+  }
+  if (
+    auditBlockField(completionBlock, "Review Challenge") !==
+    request.reviewChallenge
+  ) {
+    return false;
+  }
+
+  if (request.sourceFingerprint !== null) {
+    const requestSource = auditBlockField(
+      completionBlock,
+      "Request Source Fingerprint",
+    );
+    const completedSource = auditBlockField(
+      completionBlock,
+      "Source Fingerprint",
+    );
+    if (
+      requestSource !== request.sourceFingerprint ||
+      completedSource !== request.sourceFingerprint
+    ) {
+      return false;
+    }
+  }
+  if (
+    request.unitSourceFingerprint !== null &&
+    auditBlockField(completionBlock, "Unit Source Fingerprint") !==
+      request.unitSourceFingerprint
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Byte-capture snapshot of the declared artifact set, sharing the sorted
+ * logical-path manifest fingerprint scheme review receipts record. Swarm
+ * finalize reads converged Bolt worktree records through it and merges the
+ * exact reviewed bytes into main.
+ */
+export function reviewArtifactBytesSnapshot(
   projectDir: string,
   stage: ReviewFingerprintStage,
   unit?: string,
@@ -8260,7 +9170,7 @@ export function reviewArtifactSnapshot(
     captureBytes?: boolean;
     mergedBoltUnits?: ReadonlySet<string>;
   } = {},
-): ReviewArtifactSnapshot | null {
+): ReviewArtifactBytesSnapshot | null {
   let entries: ReviewArtifactEntry[] | null;
   try {
     entries = reviewArtifactEntries(projectDir, stage, unit, {
@@ -8274,7 +9184,7 @@ export function reviewArtifactSnapshot(
   if (entries === null) return null;
 
   const manifest: Array<[string, string]> = [];
-  const snapshot: ReviewArtifactSnapshotEntry[] = [];
+  const snapshot: ReviewArtifactBytesEntry[] = [];
   let anchorReal: string;
   try {
     anchorReal = realpathSync(projectDir);
@@ -8342,19 +9252,6 @@ function swarmConvergenceSourceKind(block: string): SwarmConvergenceSourceKind {
   return "invalid";
 }
 
-export function reviewArtifactFingerprint(
-  projectDir: string,
-  stage: ReviewFingerprintStage,
-  unit?: string,
-  options: {
-    requireRequiredArtifacts?: boolean;
-    boltDag?: BoltDagResolution;
-    stateContent?: string | null;
-    mergedBoltUnits?: ReadonlySet<string>;
-  } = {},
-): string | null {
-  return reviewArtifactSnapshot(projectDir, stage, unit, options)?.fingerprint ?? null;
-}
 
 // Collect the fresh terminal review receipts for a stage from the audit
 // ledger. Builds ONE position-tiebroken event stream (the same interleave
@@ -8794,6 +9691,7 @@ export function freshReviewReceipts(
     phase: string;
     for_each?: string;
     reviewer?: string;
+    review_artifact?: string;
     reviewer_max_iterations?: number;
     review_class?: "adversarial" | "advisory";
     workspace_requires?: boolean;
@@ -8935,7 +9833,7 @@ export function freshReviewReceipts(
       unit: string | undefined;
       iteration: number;
       recovery: boolean;
-      fingerprint: string | null;
+      binding: ReviewRequestBinding | null;
       timestamp: string;
       shard: string;
       suspensionActive: boolean;
@@ -9142,6 +10040,8 @@ export function freshReviewReceipts(
         !sessionBoundaryOnlyTie &&
         teamOwnership
       ) continue;
+      const binding = reviewRequestBindingFromBlock(e.block);
+      if (binding === null) continue;
       const previous = pendingRequests.get(requestKey);
       const recovery =
         previous?.recovery === true ||
@@ -9151,15 +10051,13 @@ export function freshReviewReceipts(
         unit,
         iteration,
         recovery,
-        fingerprint: auditBlockField(e.block, "Artifact Fingerprint"),
+        binding,
         timestamp: e.timestamp,
         shard: e.shard,
         suspensionActive:
           recovery &&
           !sessionBoundaryOnlyTie &&
-          /^sha256:[0-9a-f]{64}$/.test(
-            auditBlockField(e.block, "Artifact Fingerprint") ?? "",
-          ),
+          /^sha256:[0-9a-f]{64}$/.test(binding.artifactFingerprint),
       });
       continue;
     }
@@ -9173,16 +10071,14 @@ export function freshReviewReceipts(
     if (
       !request ||
       (request.timestamp === e.timestamp && request.shard !== e.shard) ||
-      !pendingRequests.delete(requestKey)
-    ) continue;
+      !request.binding ||
+      !reviewCompletionMatchesRequest(request.binding, e.block)
+    ) {
+      continue;
+    }
+    pendingRequests.delete(requestKey);
     const recordedFingerprint = auditBlockField(e.block, "Artifact Fingerprint");
-    const requestedFingerprint = request.fingerprint;
-    const artifactFingerprintUsable =
-      requestedFingerprint !== null &&
-      /^sha256:[0-9a-f]{64}$/.test(requestedFingerprint) &&
-      recordedFingerprint !== null &&
-      /^sha256:[0-9a-f]{64}$/.test(recordedFingerprint) &&
-      recordedFingerprint === requestedFingerprint;
+    const artifactFingerprintUsable = recordedFingerprint !== null;
     const currentFingerprint = reviewArtifactFingerprint(
       projectDir,
       stage,
@@ -9196,7 +10092,7 @@ export function freshReviewReceipts(
     const fingerprintUsable =
       artifactFingerprintUsable && currentFingerprint !== null;
     const fingerprintMatches =
-      fingerprintUsable && requestedFingerprint === currentFingerprint;
+      fingerprintUsable && recordedFingerprint === currentFingerprint;
     const terminalVerdict = request.recovery
       ? verdict
       : terminalReviewVerdict(
@@ -9228,12 +10124,14 @@ export function freshReviewReceipts(
             iteration,
             recovery: request.recovery,
             suspensionActive: false,
+            recoveryCause: request.binding?.recoveryCause ?? null,
           }
         : {
             state: "outstanding",
             iteration: iteration + 1,
             recovery: request.recovery,
             suspensionActive: false,
+            recoveryCause: request.binding?.recoveryCause ?? null,
           };
       if (unit) {
         unitVerdicts.delete(unit);
@@ -9297,6 +10195,7 @@ export function freshReviewReceipts(
       iteration: request.iteration,
       recovery: request.recovery,
       suspensionActive: request.suspensionActive,
+      recoveryCause: request.binding?.recoveryCause ?? null,
     };
     if (request.unit) {
       if (!request.recovery) unitVerdicts.delete(request.unit);
@@ -18637,6 +19536,7 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
     "mode",
     "summary_confirmation",
     "reviewer",
+    "review_artifact",
     "reviewer_max_iterations",
     "review_class",
     "for_each",

@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.121] - 2026-08-27
+
+Reviewer receipts now bind one explicit review artifact, every dispatched artifact byte, and workspace source before dispatch, then validate the complete reviewer-owned appendix from one stable completion snapshot. Artifact snapshots reject filesystem aliases outside the workflow record or CodeKB boundary. **Upgrade:** refresh your complete `dist/<harness>/` shell. For every custom or plugin stage declaring `reviewer:`, add `review_artifact:` selecting one required Markdown entry from `produces[]`; for per-Unit stages it must apply to every relevant Unit kind. Composition and graph compilation reject reviewer stages that are not migrated.
+
+* Reviewer-bearing stages declare `review_artifact`, a required Markdown output that remains applicable across the stage's Unit kinds; plugin-added outputs and no-DAG directory order cannot silently redefine ownership.
+* `REVIEW_REQUESTED` captures stable single-link file identities, exact artifact bytes, the append boundary, and request-time workspace source. When an old review appendix exists, it also returns a per-request challenge for the replacement review. Symlinks, hardlinks, and paths escaping the active record or CodeKB root fail closed.
+* `--retry-pending` reuses the original artifact, source binding, and request challenge instead of rebaselining current bytes. Recovery requests record whether artifact, source, or both kinds of staleness opened the scoped write suspension, so restoring that cause closes the window. Valid field-light legacy chains get one audited `Upgrade: legacy-request`; malformed request or completion rows carry no authority.
+* `REVIEW_COMPLETED` accepts only blank separators plus one terminal canonical `## Review` section whose rendered Verdict, Reviewer, Iteration, and conditional Request Challenge fields match the request. A section whose bytes already existed when `REVIEW_REQUESTED` was recorded — including one surviving an attempt reset with the same reviewer, iteration, and verdict — must be removed and replaced; neither unrelated prose nor a one-byte mutation can mint fresh reviewer authority.
+
 ## [2.6.120] - 2026-08-27
 
 Focused Reverse Engineering rescans now merge their newly analyzed area into the shared CodeKB instead of replacing unrelated knowledge, with generation-checked all-artifact publication so concurrent intents cannot silently lose each other's scans or label preserved stale prose as current. Full rescans still replace all nine artifacts; stale or unverified prior coverage is preserved as prose and demoted to shallow when it cannot be reverified. **Upgrade:** re-copy your `dist/<harness>/` shell so the updated utility, stage, and artifact guidance are installed.
@@ -167,6 +176,7 @@ Kind-vacuous Construction units no longer deadlock summary-confirmation routing 
 
 * Unit-major iteration now advances past kind-vacuous units to the next applicable stage and unit instead of emitting `Refusing to complete`.
 * Stage-major per-unit approval now presents the normal gate when all units are kind-vacuous, without requiring nonexistent questions or summary confirmation.
+
 ## [2.6.102] - 2026-08-26
 
 Rule files can now carry validated lifecycle metadata, and doctor separates stale team/project overlaps from live contradiction-review candidates without changing runtime rule delivery. **Upgrade:** refresh your `dist/<harness>/` shell; add lifecycle fields only where you want file-level drift triage.

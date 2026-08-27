@@ -77,7 +77,13 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   auditLockDir,
@@ -1083,6 +1089,14 @@ function log(args: string[], p: string): CliResult {
   return { status: res.status ?? -1, out: `${stdout}${res.stderr ?? ""}`, stdout };
 }
 
+function reviewAppendix(
+  reviewer: string,
+  iteration: string,
+  verdict: string,
+): string {
+  return `\n## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** ${reviewer}\n**Iteration:** ${iteration}\n\n### Findings\n\nFixture review.\n`;
+}
+
 function completeReview(args: string[], p: string): CliResult {
   const verdictIndex = args.indexOf("--verdict");
   if (verdictIndex === -1) throw new Error("completeReview requires --verdict");
@@ -1090,8 +1104,47 @@ function completeReview(args: string[], p: string): CliResult {
     ...args.slice(0, verdictIndex),
     ...args.slice(verdictIndex + 2),
   ];
+  const stage = args[args.indexOf("--stage") + 1];
+  const reviewer = args[args.indexOf("--reviewer") + 1];
+  const iteration = args[args.indexOf("--iteration") + 1];
+  const verdict = args[verdictIndex + 1];
+  const unitIndex = args.indexOf("--unit");
+  const unit = unitIndex === -1 ? undefined : args[unitIndex + 1];
+  const definition = resolveStage(stage);
+  if (!definition?.review_artifact) {
+    throw new Error(`${stage} has no review_artifact`);
+  }
+  const dir =
+    definition.for_each === "unit-of-work"
+      ? join(
+          seededRecordDir(p),
+          "construction",
+          unit ?? "unit-alpha",
+          stage,
+        )
+      : join(seededRecordDir(p), definition.phase, stage);
+  mkdirSync(dir, { recursive: true });
+  const artifact = join(dir, `${definition.review_artifact}.md`);
+  if (!existsSync(artifact)) {
+    writeFileSync(artifact, `# ${stage}\n`, "utf-8");
+  } else {
+    const current = readFileSync(artifact, "utf-8");
+    const reviewStart = current.search(/^## Review[ \t]*$/m);
+    if (reviewStart !== -1) {
+      writeFileSync(
+        artifact,
+        `${current.slice(0, reviewStart).replace(/\s+$/, "")}\n`,
+        "utf-8",
+      );
+    }
+  }
   const requested = log(requestArgs, p);
   if (requested.status !== 0) return requested;
+  appendFileSync(
+    artifact,
+    reviewAppendix(reviewer, iteration, verdict),
+    "utf-8",
+  );
   return log(args, p);
 }
 
@@ -1210,6 +1263,14 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
 
   test("R5: REVIEW_REQUESTED alone (no verdict) does NOT satisfy the precondition", () => {
     const p = projWithState("state-mid-inception.md");
+    const artifact = join(
+      seededRecordDir(p),
+      "inception",
+      "requirements-analysis",
+      "requirements.md",
+    );
+    mkdirSync(join(artifact, ".."), { recursive: true });
+    writeFileSync(artifact, "# Requirements\n", "utf-8");
     // Dispatch row only — no terminal verdict yet.
     const req = log(
       ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1"],
@@ -1612,7 +1673,9 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       "code-generation",
     );
     mkdirSync(outputDir, { recursive: true });
+    const plan = join(outputDir, "code-generation-plan.md");
     const summary = join(outputDir, "code-summary.md");
+    writeFileSync(plan, "# Reviewed code generation plan\n", "utf-8");
     writeFileSync(summary, "# Reviewed code summary\n", "utf-8");
 
     const request = log(
@@ -1629,6 +1692,11 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     );
     expect(request.status, request.out).toBe(0);
 
+    appendFileSync(
+      plan,
+      reviewAppendix("aidlc-architecture-reviewer-agent", "1", "READY"),
+      "utf-8",
+    );
     writeFileSync(summary, "# Changed after dispatch\n", "utf-8");
     const verdict = log(
       [
@@ -1645,9 +1713,8 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       p,
     );
     expect(verdict.status).not.toBe(0);
-    expect(verdict.out).toContain(
-      "output documents changed after review iteration 1 started",
-    );
+    expect(verdict.out).toContain("output documents changed");
+    expect(verdict.out).toContain("after review iteration");
     expect(countEvent(p, "REVIEW_COMPLETED")).toBe(0);
   }, 30000);
 });

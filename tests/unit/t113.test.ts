@@ -130,6 +130,7 @@ function invokeSwarm(): Record<string, unknown> {
     stage: "code-generation",
     stage_file: ".claude/aidlc-common/stages/construction/code-generation.md",
     reviewer: "aidlc-architecture-reviewer-agent",
+    review_artifact: "code-generation-plan",
     reviewer_max_iterations: 2,
   };
 }
@@ -538,6 +539,7 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
       errs({
         ...runStage(),
         reviewer: "aidlc-product-lead-agent",
+        review_artifact: "decisions",
         reviewer_max_iterations: 1,
         review_class: "advisory",
       }),
@@ -700,6 +702,7 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
       errs({
         ...runStage(),
         reviewer: "aidlc-architecture-reviewer-agent",
+        review_artifact: "decisions",
         reviewer_max_iterations: 3,
       }),
     ).toBe("VALID");
@@ -716,6 +719,7 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
       errs({
         ...runStage(),
         reviewer: "aidlc-architecture-reviewer-agent",
+        review_artifact: "decisions",
         reviewer_max_iterations: "two",
       }),
     ).toContain(

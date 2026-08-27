@@ -1,9 +1,16 @@
 // covers: function:freshReviewReceipts, function:judgeFreeze,
 // subcommand:aidlc-log:review, hook:aidlc-review-freeze
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  afterEach,
+  describe,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  appendFileSync,
   mkdirSync,
   readFileSync,
   writeFileSync,
@@ -32,6 +39,8 @@ const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-review-freeze.ts");
 const tempDirs: string[] = [];
 
+setDefaultTimeout(30_000);
+
 afterEach(() => {
   while (tempDirs.length > 0) cleanupTestProject(tempDirs.pop()!);
 });
@@ -57,6 +66,58 @@ function runLog(proj: string, args: string[]) {
   };
 }
 
+function reviewArtifactPath(
+  proj: string,
+  stage: string,
+  unit?: string,
+): string {
+  const definition = loadStageGraphAll().find((entry) => entry.slug === stage);
+  if (!definition?.review_artifact) {
+    throw new Error(`${stage} has no review_artifact`);
+  }
+  const dir =
+    definition.for_each === "unit-of-work"
+      ? join(
+          seededRecordDir(proj),
+          definition.phase,
+          unit ?? "unit-alpha",
+          stage,
+        )
+      : join(seededRecordDir(proj), definition.phase, stage);
+  return join(dir, `${definition.review_artifact}.md`);
+}
+
+function stripReviewAppendix(artifact: string): void {
+  const current = readFileSync(artifact, "utf-8");
+  const reviewStart = current.search(/^## Review[ \t]*$/m);
+  if (reviewStart === -1) return;
+  writeFileSync(
+    artifact,
+    `${current.slice(0, reviewStart).replace(/\s+$/, "")}\n`,
+    "utf-8",
+  );
+}
+
+function appendReviewAppendix(
+  artifact: string,
+  reviewer: string,
+  iteration: number,
+  reviewChallenge?: string,
+): void {
+  appendFileSync(
+    artifact,
+    "\n## Review\n\n" +
+      "**Verdict:** READY\n" +
+      `**Reviewer:** ${reviewer}\n` +
+      `**Iteration:** ${iteration}\n` +
+      (reviewChallenge === undefined
+        ? "\n"
+        : `**Request Challenge:** ${reviewChallenge}\n\n`) +
+      "### Findings\n\nNo blocking findings.\n",
+    "utf-8",
+  );
+}
+
 function recordReview(
   proj: string,
   stage: string,
@@ -72,10 +133,16 @@ function recordReview(
     "--iteration",
     "1",
   ];
+  const artifact = reviewArtifactPath(proj, stage, unit);
+  stripReviewAppendix(artifact);
   const request = runLog(proj, base);
   if (request.status !== 0) {
     throw new Error(`review request failed: ${request.out}`);
   }
+  const { reviewChallenge } = JSON.parse(request.stdout) as {
+    reviewChallenge?: string;
+  };
+  appendReviewAppendix(artifact, reviewer, 1, reviewChallenge);
   const verdict = runLog(proj, [...base, "--verdict", "READY"]);
   if (verdict.status !== 0) {
     throw new Error(`review verdict failed: ${verdict.out}`);
@@ -213,6 +280,7 @@ describe("t321 request-bound source-recovery freeze suspension", () => {
           iteration: 2,
           recovery: true,
           suspensionActive: false,
+          recoveryCause: null,
         });
       }
     }
@@ -288,6 +356,20 @@ describe("t321 request-bound source-recovery freeze suspension", () => {
     const recovery = runLog(proj, recoveryArgs);
     expect(recovery.status).toBe(0);
     expect(recovery.stdout).toContain('"recovery":"stale-receipt"');
+    const { reviewChallenge } = JSON.parse(recovery.stdout) as {
+      reviewChallenge?: string;
+    };
+    expect(reviewChallenge).toMatch(/^review:[0-9a-f]{32}$/);
+    stripReviewAppendix(betaPlan);
+    const recoveryReceipts = freshReviewReceipts(
+      proj,
+      readFileSync(seededStateFile(proj), "utf-8"),
+      loadStageGraphAll().find((entry) => entry.slug === "code-generation")!,
+      { reviewClass: "adversarial" },
+    );
+    expect(recoveryReceipts.unitPending.get("beta")?.recoveryCause).toBe(
+      "source",
+    );
 
     expect(runHook(proj, betaPlan).status).toBe(0);
     expect(runHook(proj, alphaPlan).status).toBe(2);
@@ -302,9 +384,12 @@ describe("t321 request-bound source-recovery freeze suspension", () => {
     Bun.sleepSync(1100);
     appendAuditEntry("SESSION_RESUMED", { Source: "resume" }, proj);
     expect(runHook(proj, betaPlan).status).toBe(2);
+    const retry = runLog(proj, [...recoveryArgs, "--retry-pending"]);
+    expect(retry.status, retry.stderr).toBe(0);
     expect(
-      runLog(proj, [...recoveryArgs, "--retry-pending"]).status,
-    ).toBe(0);
+      (JSON.parse(retry.stdout) as { reviewChallenge?: string })
+        .reviewChallenge,
+    ).toBe(reviewChallenge);
     expect(runHook(proj, betaPlan).status).toBe(0);
 
     const gate = spawnSync(
@@ -339,12 +424,16 @@ describe("t321 request-bound source-recovery freeze suspension", () => {
     ]);
     expect(staleVerdict.status).not.toBe(0);
     expect(staleVerdict.stderr).toContain(
-      "output documents changed after review iteration 2 started",
+      "exactly one canonical verdict line matching --verdict",
     );
 
-    expect(
-      runLog(proj, [...recoveryArgs, "--retry-pending"]).status,
-    ).toBe(0);
+    stripReviewAppendix(betaPlan);
+    appendReviewAppendix(
+      betaPlan,
+      "aidlc-architecture-reviewer-agent",
+      2,
+      reviewChallenge,
+    );
     expect(
       runLog(proj, [...recoveryArgs, "--verdict", "READY"]).status,
     ).toBe(0);

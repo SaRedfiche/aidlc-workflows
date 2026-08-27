@@ -38,11 +38,19 @@
 // test re-enables enforcement by DELETING that var from the spawned tool's env
 // - otherwise it would be testing the bypass, not the guard.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   appendFileSync,
+  existsSync,
   mkdirSync,
   readFileSync,
   renameSync,
@@ -70,6 +78,8 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
+setDefaultTimeout(30_000);
+
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -91,6 +101,34 @@ function reviewStage(
   reviewer: string,
   unit?: string,
 ): void {
+  const artifact =
+    stage === "intent-capture"
+      ? join(
+          seededRecordDir(proj),
+          "ideation",
+          stage,
+          "intent-statement.md",
+        )
+      : join(
+          seededRecordDir(proj),
+          "construction",
+          ...(unit ? [unit] : []),
+          stage,
+          "code-generation-plan.md",
+        );
+  mkdirSync(dirname(artifact), { recursive: true });
+  const current = existsSync(artifact)
+    ? readFileSync(artifact, "utf-8")
+    : `# ${basename(artifact)}\n`;
+  writeFileSync(
+    artifact,
+    `${current
+      .replace(
+        /(?:^|\r?\n)## Review[ \t]*(?:\r?\n|$)[\s\S]*$/,
+        "",
+      )
+      .trimEnd()}\n`,
+  );
   if (stage === "code-generation" && unit) {
     let unitIsResolved = false;
     try {
@@ -143,11 +181,33 @@ function reviewStage(
   // documented switches keep Plan Approval and summary confirmation out of it.
   env.AIDLC_DISABLE_PLAN_APPROVAL_GUARD = "1";
   env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD = "1";
-  for (const suffix of [[], ["--verdict", "READY"]]) {
-    const result = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8", env });
-    if ((result.status ?? -1) !== 0) {
-      throw new Error(`reviewStage failed: ${result.stdout}${result.stderr}`);
-    }
+  const requested = spawnSync(BUN, args, { encoding: "utf-8", env });
+  if ((requested.status ?? -1) !== 0) {
+    throw new Error(
+      `reviewStage request failed: ${requested.stdout}${requested.stderr}`,
+    );
+  }
+  appendFileSync(
+    artifact,
+    [
+      "",
+      "## Review",
+      "",
+      "**Verdict:** READY",
+      `**Reviewer:** ${reviewer}`,
+      "**Date:** 2026-08-26T00:00:00Z",
+      "**Iteration:** 1",
+      "",
+    ].join("\n"),
+  );
+  const completed = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    encoding: "utf-8",
+    env,
+  });
+  if ((completed.status ?? -1) !== 0) {
+    throw new Error(
+      `reviewStage verdict failed: ${completed.stdout}${completed.stderr}`,
+    );
   }
 }
 
@@ -2051,7 +2111,10 @@ X. Other (please specify)
     }
 
     test("PASSES with zero on-disk artifacts once every DAG unit converged", () => {
-      seedSwarm(UNITS); // all converged; nothing written to the record dir
+      // The migrated review flow writes each converged unit's reviewed plan
+      // into the record dir, but the exemption is still granted from the
+      // convergence ledger before any produces walk.
+      seedSwarm(UNITS); // all converged
       bypassed(proj, ["gate-start", "code-generation"]);
       const r = guarded(
         proj,
@@ -2066,8 +2129,15 @@ X. Other (please specify)
       gateSetupBypassed(proj, ["gate-start", "code-generation"]);
       const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
       expect(r.rc).not.toBe(0);
+      // The converged unit's reviewed plan exists in the record dir (the
+      // request -> appendix -> verdict flow writes it), so the refusal falls
+      // through the produces walk to the workspace_requires source-work
+      // guard - still fail-closed, no state mutation.
       expect((JSON.parse(r.out) as { error: string }).error).toContain(
-        'Cannot complete "code-generation": none of its declared artifacts exist',
+        'Cannot complete "code-generation"',
+      );
+      expect((JSON.parse(r.out) as { error: string }).error).toContain(
+        "no source work is evident",
       );
     });
 

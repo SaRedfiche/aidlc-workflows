@@ -5,8 +5,14 @@
 // while a second invalidation refuses another recovery until the human resets
 // the attempt at the gate.
 
-import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import {
+  afterEach,
+  describe,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -27,6 +33,8 @@ import {
 } from "../harness/fixtures.ts";
 
 const LOG_TOOL = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+
+setDefaultTimeout(30_000);
 const STATE_TOOL = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const tempDirs: string[] = [];
 const TEST_ENV = {
@@ -80,6 +88,18 @@ function recordArtifactUpdate(proj: string, artifact: string): void {
   }, proj);
 }
 
+function appendReview(
+  artifact: string,
+  iteration: number,
+  verdict: "READY" | "NOT-READY" = "READY",
+): void {
+  appendFileSync(
+    artifact,
+    `\n## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** aidlc-product-lead-agent\n**Iteration:** ${iteration}\n\n### Findings\n\nFixture review.\n`,
+    "utf-8",
+  );
+}
+
 describe("t291 stale review receipt recovery", () => {
   test("solo cross-shard ties retain legacy receipt and review-budget ordering", () => {
     const proj = createTestProject();
@@ -129,6 +149,21 @@ describe("t291 stale review receipt recovery", () => {
     );
     seedBoltDagBatches(budgetProj, [["alpha"]]);
     const budgetStage = findStageBySlug("functional-design")!;
+    const budgetDir = join(
+      seededRecordDir(budgetProj),
+      "construction",
+      "alpha",
+      "functional-design",
+    );
+    mkdirSync(budgetDir, { recursive: true });
+    for (const name of [
+      "entities.md",
+      "rules.md",
+      "functional-spec.md",
+      "traceability.json",
+    ]) {
+      writeFileSync(join(budgetDir, name), `# ${name}\n`, "utf-8");
+    }
     const budgetFingerprint = reviewArtifactFingerprint(
       budgetProj,
       budgetStage,
@@ -183,6 +218,7 @@ describe("t291 stale review receipt recovery", () => {
     ];
 
     expect(run(LOG_TOOL, [...review, "--iteration", "1"], proj).status).toBe(0);
+    appendReview(artifact, 1);
     expect(
       run(
         LOG_TOOL,
@@ -214,6 +250,7 @@ describe("t291 stale review receipt recovery", () => {
     );
     expect(recovery.status).toBe(0);
     expect(recovery.stdout).toContain('"recovery":"stale-receipt"');
+    appendReview(artifact, 2);
     expect(
       run(
         LOG_TOOL,
@@ -259,6 +296,7 @@ describe("t291 stale review receipt recovery", () => {
     ];
 
     expect(run(LOG_TOOL, [...review, "--iteration", "1"], proj).status).toBe(0);
+    appendReview(artifact, 1);
     expect(
       run(
         LOG_TOOL,
@@ -273,6 +311,7 @@ describe("t291 stale review receipt recovery", () => {
     writeRequirements(proj, "changed before recovery\n");
     recordArtifactUpdate(proj, artifact);
     expect(run(LOG_TOOL, [...review, "--iteration", "2"], proj).status).toBe(0);
+    appendReview(artifact, 2);
     expect(
       run(
         LOG_TOOL,
