@@ -11669,7 +11669,76 @@ export function hasUnsafeSingleLineCharacter(value: string): boolean {
       return true;
     }
   }
-  return false;
+	return false;
+}
+
+export function authoritativeProjectDescription(raw: string): {
+  description: string;
+  pastedDocumentPresent: boolean;
+  error?: string;
+} {
+  const open = "<document>";
+  const close = "</document>";
+  const start = raw.indexOf(open);
+  const strayClose = raw.indexOf(close);
+  if (start < 0) {
+    if (strayClose >= 0) {
+      return {
+        description: "",
+        pastedDocumentPresent: false,
+        error: `project description has ${close} without a matching ${open}`,
+      };
+    }
+    return {
+      description: raw.trim(),
+      pastedDocumentPresent: false,
+    };
+  }
+  if (strayClose >= 0 && strayClose < start) {
+    return {
+      description: "",
+      pastedDocumentPresent: false,
+      error: `project description has ${close} before the next ${open}`,
+    };
+  }
+
+  const end = raw.indexOf(close, start + open.length);
+  if (end < 0) {
+    return {
+      description: "",
+      pastedDocumentPresent: false,
+      error: `project description has ${open} without a matching ${close}`,
+    };
+  }
+  const nested = raw.indexOf(open, start + open.length);
+  if (nested >= 0 && nested < end) {
+    return {
+      description: "",
+      pastedDocumentPresent: false,
+      error: "project description has nested <document> blocks",
+    };
+  }
+
+  const trailing = raw.slice(end + close.length);
+  if (trailing.includes(open) || trailing.includes(close)) {
+    return {
+      description: "",
+      pastedDocumentPresent: true,
+      error: "project description has repeated or additional <document> markers",
+    };
+  }
+  if (trailing.trim().length > 0) {
+    return {
+      description: "",
+      pastedDocumentPresent: true,
+      error: `project description has content after terminal ${close}`,
+    };
+  }
+
+  return {
+    description: raw.slice(0, start).trim(),
+    pastedDocumentPresent: true,
+  };
 }
 
 // --- State file I/O ---
@@ -11680,6 +11749,79 @@ export function readStateFile(projectDir: string, intent?: string, space?: strin
     throw new Error(`State file not found: ${path}`);
   }
   return readFileSync(path, "utf-8");
+}
+
+export const PROJECT_DESCRIPTION_FILE = "project-description.json";
+export const DOCUMENT_INPUT_REQUEST_FILE = ".aidlc-document-input-path";
+const LEGACY_PROJECT_DESCRIPTION_SOURCE = "aidlc-state.md#Project";
+
+export interface ProjectDescriptionAuthority {
+  description: string;
+  source: typeof PROJECT_DESCRIPTION_FILE | typeof LEGACY_PROJECT_DESCRIPTION_SOURCE;
+}
+
+/**
+ * Load the exact initial description for one workflow record.
+ *
+ * A source marker makes the JSON sidecar mandatory. Records without the marker
+ * retain the pre-sidecar Project-field fallback; a malformed marked record never
+ * silently degrades to the preview.
+ */
+export function readProjectDescriptionAuthority(
+  recordRoot: string,
+  stateContent?: string,
+): ProjectDescriptionAuthority {
+  const state =
+    stateContent ?? readFileSync(join(recordRoot, "aidlc-state.md"), "utf-8");
+  const source = getField(state, "Project Description Source") ?? "";
+  if (source === "") {
+    const description = getField(state, "Project");
+    if (description === null) {
+      throw new Error("legacy aidlc-state.md is missing the Project field");
+    }
+    return { description, source: LEGACY_PROJECT_DESCRIPTION_SOURCE };
+  }
+  if (source !== PROJECT_DESCRIPTION_FILE) {
+    throw new Error(`unsupported Project Description Source ${source}`);
+  }
+
+  const path = join(recordRoot, PROJECT_DESCRIPTION_FILE);
+  if (!existsSync(path)) {
+    throw new Error(
+      `${PROJECT_DESCRIPTION_FILE} is required by aidlc-state.md but missing`,
+    );
+  }
+  try {
+    const parsed: unknown = JSON.parse(
+      readRegularFileNoFollowOrThrow(path, "project description").toString(
+        "utf-8",
+      ),
+    );
+    if (typeof parsed !== "string") {
+      throw new Error("project description JSON must contain one string");
+    }
+    return { description: parsed, source: PROJECT_DESCRIPTION_FILE };
+  } catch (error) {
+    throw new Error(
+      `failed to read ${PROJECT_DESCRIPTION_FILE}: ${errorMessage(error)}`,
+    );
+  }
+}
+
+export function projectDescriptionFilePath(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): string {
+  return join(dirname(stateFilePath(projectDir, intent, space)), PROJECT_DESCRIPTION_FILE);
+}
+
+export function documentInputRequestFilePath(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): string {
+  return join(dirname(stateFilePath(projectDir, intent, space)), DOCUMENT_INPUT_REQUEST_FILE);
 }
 
 export function writeStateFile(projectDir: string, content: string, intent?: string, space?: string): void {
@@ -13542,6 +13684,18 @@ export function assertNoSymlinkInChainOrThrow(anchorReal: string, rel: string): 
   return current;
 }
 
+export interface FileIdentity {
+  readonly dev: number;
+  readonly ino: number;
+}
+
+function sameFileIdentity(
+  left: FileIdentity,
+  right: FileIdentity,
+): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
 // THE read boundary for any path that came from OUTSIDE the workspace — a CLI
 // flag, a value-transport file, a committed ledger row. Returns the contents of a
 // REGULAR file or throws; it never blocks indefinitely and never follows a link.
@@ -13559,7 +13713,9 @@ export function assertNoSymlinkInChainOrThrow(anchorReal: string, rel: string): 
 //   another if something swapped the name in between — and readFileSync follows
 //   symlinks, so the swap can redirect the read to any file this process can
 //   read. Opening ONCE with O_NOFOLLOW and fstat-ing THAT descriptor makes the
-//   identity checked the identity read; there is no second resolution to race.
+//   final-component identity checked the identity read. A caller that validated
+//   parent-chain containment first passes expectedIdentity as well, binding the
+//   opened descriptor to the file observed while that containment held.
 //
 // Throws (does not exit) so each caller can attach its own flag name and exit
 // code. `what` names the thing in the message: "--text-file", "source", ….
@@ -13567,6 +13723,7 @@ export function readRegularFileNoFollowOrThrow(
   path: string,
   what: string,
   maxBytes?: number,
+  expectedIdentity?: FileIdentity,
 ): Buffer {
   let fd: number;
   try {
@@ -13592,6 +13749,14 @@ export function readRegularFileNoFollowOrThrow(
   }
   try {
     const st = fstatSync(fd);
+    if (
+      expectedIdentity !== undefined &&
+      !sameFileIdentity(st, expectedIdentity)
+    ) {
+      throw changedDuringReadError(
+        `${what} changed after project-containment validation: ${path}`,
+      );
+    }
     if (!st.isFile()) {
       const kind = st.isFIFO()
         ? "a FIFO / named pipe"
@@ -13633,7 +13798,35 @@ export function readRegularFileNoFollowOrThrow(
     if (current.dev !== st.dev || current.ino !== st.ino) {
       throw changedDuringReadError(`${what} changed while opening: ${path}`);
     }
-    const bytes = readFileSync(fd);
+    let bytes: Buffer;
+    if (maxBytes === undefined) {
+      bytes = readFileSync(fd);
+    } else {
+      // The stat check rejects files already over the cap. Bound the descriptor
+      // read as well so a file that grows concurrently cannot force an
+      // allocation beyond its original size plus one detection byte.
+      const bounded = Buffer.alloc(Math.min(maxBytes + 1, st.size + 1));
+      let length = 0;
+      while (length < bounded.length) {
+        const count = readSync(
+          fd,
+          bounded,
+          length,
+          bounded.length - length,
+          length,
+        );
+        if (count === 0) break;
+        length += count;
+      }
+      if (length > maxBytes) {
+        const currentSize = fstatSync(fd).size;
+        throw new Error(
+          `${what} is ${currentSize} bytes, above the ${maxBytes}-byte limit: ${path}. ` +
+            "Reduce the file before retrying.",
+        );
+      }
+      bytes = bounded.subarray(0, length);
+    }
     const after = statSync(realpathSync(path));
     const afterFd = fstatSync(fd);
     if (after.dev !== st.dev || after.ino !== st.ino ||

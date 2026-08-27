@@ -57,6 +57,7 @@ import {
 import {
   activeIntent,
   activeSpace,
+  authoritativeProjectDescription,
   auditBlockField,
   auditFilePath,
   auditShards,
@@ -66,6 +67,8 @@ import {
   DEFAULT_SCOPE,
   DEFAULT_SPACE,
   detectLeakedLocks,
+  documentInputRequestFilePath,
+  DOCUMENT_INPUT_REQUEST_FILE,
   docsDir,
   envDefaultScope,
   knowledgeDir,
@@ -77,6 +80,7 @@ import {
   findStageBySlug,
   frontmatterBlock,
   getField,
+  hasUnsafeSingleLineCharacter,
   holdsAuditLock,
   hooksHealthDir,
   isAutonomousMode,
@@ -117,6 +121,7 @@ import {
   readUnitScopeStamp,
   recordHookDrop,
   readCurrentSessionId,
+  readProjectDescriptionAuthority,
   resolveWorkflowSelection,
   readStateFile,
   refreshActiveDirectiveMarker,
@@ -139,6 +144,8 @@ import {
   pluginsEnabled,
   selectionAwareDefaultScope,
   resolveDefaultScope,
+  projectDescriptionFilePath,
+  PROJECT_DESCRIPTION_FILE,
   scalarField,
   stageEnabledBySelection,
   stagesInScope,
@@ -152,6 +159,7 @@ import {
   worktreeAuditFilePath,
   worktreePath,
   worktreeStateFilePath,
+  writeFileAtomic,
   writeSessionIntentUuid,
   writeSessionBinding,
   writeStateFile,
@@ -5451,6 +5459,26 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     );
   }
 
+  if (flags.arguments !== undefined) {
+    const description = authoritativeProjectDescription(flags.arguments);
+    if (description.error) {
+      die(
+        `intent-create refused: ${description.error}. Use exact, non-nested ` +
+          "<document>...</document> markers and clarify the request before retrying.",
+      );
+    }
+    if (
+      description.pastedDocumentPresent &&
+      description.description.length === 0
+    ) {
+      die(
+        "intent-create refused: pasted document content has no authoritative user " +
+          "directions outside <document>...</document>. State what to do with the " +
+          "document before retrying.",
+      );
+    }
+  }
+
   const depthOverride = flags.depth;
   if (depthOverride && !VALID_DEPTHS[depthOverride.toLowerCase()]) {
     die(`Unknown depth: "${depthOverride}". Valid depths: minimal, standard, comprehensive.`);
@@ -5824,7 +5852,27 @@ function handleIntentCreateStateBuild(
   const nextAfterFirst = nextInScopeStage(firstPostInit, scope);
   const nextStageName = nextAfterFirst ? nextAfterFirst.slug : "none";
 
-  const projectDesc = flags.arguments || "[Project description]";
+  const rawProjectDesc = flags.arguments || "[Project description]";
+  const descriptionAuthority = authoritativeProjectDescription(rawProjectDesc);
+  const previewSource = descriptionAuthority.error
+    ? "[Pasted document boundary needs clarification]"
+    : descriptionAuthority.pastedDocumentPresent
+      ? descriptionAuthority.description || "[Pasted document provided]"
+      : rawProjectDesc;
+  const projectDesc = hasUnsafeSingleLineCharacter(previewSource)
+    ? Array.from(previewSource, (char) => {
+        const codePoint = char.codePointAt(0) ?? 0;
+        return codePoint <= 0x1f ||
+            codePoint === 0x7f ||
+            codePoint === 0x2028 ||
+            codePoint === 0x2029
+          ? " "
+          : char;
+      })
+        .join("")
+        .replace(/ {2,}/g, " ")
+        .trim() || "[Project description]"
+    : previewSource;
 
   // Phase Progress - per-phase status. Creation completes every initialization
   // stage ([x]) and hands off to the first post-init stage ([-]), emitting the
@@ -5855,6 +5903,7 @@ function handleIntentCreateStateBuild(
 
 ## Project Information
 - **Project**: ${projectDesc}
+- **Project Description Source**: ${PROJECT_DESCRIPTION_FILE}
 - **Project Type**: ${scan.projectType}
 - **Scope**: ${scope}
 - **Start Date**: ${ts}
@@ -5906,6 +5955,10 @@ ${stageProgress}
 - **Pending Artifacts**: none
 `;
 
+  writeFileAtomic(
+    projectDescriptionFilePath(projectDir),
+    `${JSON.stringify(rawProjectDesc)}\n`,
+  );
   writeStateFile(projectDir, stateContent);
 
   appendAuditEvent(projectDir, "WORKSPACE_INITIALISED", {
@@ -6237,6 +6290,145 @@ function handleCodekbPath(projectDir: string, flags: Record<string, string>): vo
     return;
   }
   process.stdout.write(`${dir}/\n`);
+}
+
+// `aidlc-utility.ts document-input` - read-only. Reads one selected path from
+// the active record's fixed DOCUMENT_INPUT_REQUEST_FILE, so customer-controlled
+// filename bytes never enter a shell command. Resolves that path from the
+// project root and refuses search/fallback, symlinks, non-regular files,
+// out-of-project targets, binary input, and content beyond the same
+// 200k-character delivery cap used by DocumentKB. Successful output carries
+// DocumentKB's path/content trust notices in the same JSON object as the bytes
+// they govern. No mkdir, state write, or audit event.
+function handleProjectDescription(projectDir: string): void {
+  const recordRoot = dirname(stateFilePath(projectDir));
+  process.stdout.write(
+    `${JSON.stringify(readProjectDescriptionAuthority(recordRoot))}\n`,
+  );
+}
+
+async function handleDocumentInput(projectDir: string): Promise<void> {
+  const {
+    detectMimeType,
+    EXTRACT_OUTPUT_CHAR_CAP,
+    readDocumentBytes,
+    resolveContainedFile,
+    UNTRUSTED_CONTENT_NOTICE,
+    UNTRUSTED_PATH_NOTICE,
+  } = await import("./aidlc-knowledge.ts");
+  const documentInputByteCap = EXTRACT_OUTPUT_CHAR_CAP * 4;
+  // The transport file carries ONE path line, so it gets a path-sized cap, not
+  // the document cap. Without an explicit bound the whole file is allocated and
+  // UTF-8 decoded BEFORE the one-line check, so a sparse multi-megabyte
+  // .aidlc-document-input-path kills the process with an out-of-memory error
+  // before any validation runs. 4096 bytes covers PATH_MAX on every supported
+  // platform, plus the trailing newline.
+  const requestFileByteCap = 4096;
+
+  const refuse = (message: string): never =>
+    die(`${UNTRUSTED_PATH_NOTICE} ${message}`);
+  const requestFile = documentInputRequestFilePath(projectDir);
+  const requested = (() => {
+    let raw: string;
+    try {
+      raw = new TextDecoder("utf-8", { fatal: true }).decode(
+        readDocumentBytes(
+          requestFile,
+          DOCUMENT_INPUT_REQUEST_FILE,
+          undefined,
+          requestFileByteCap,
+        ),
+      );
+    } catch (error) {
+      return refuse(
+        `cannot read ${DOCUMENT_INPUT_REQUEST_FILE}: ${errorMessage(error)}. ` +
+          "Write one exact path to that active-record file with the native file-write tool.",
+      );
+    }
+    const value = raw.replace(/\r?\n$/, "");
+    if (value === "" || /[\r\n]/.test(value)) {
+      return refuse(
+        `${DOCUMENT_INPUT_REQUEST_FILE} must contain exactly one non-empty path line.`,
+      );
+    }
+    return value;
+  })();
+
+  const projectRoot = (() => {
+    try {
+      return realpathSync(projectDir);
+    } catch (error) {
+      return refuse(`cannot resolve the project root: ${errorMessage(error)}`);
+    }
+  })();
+
+  const requestedAbs = isAbsolute(requested)
+    ? resolve(requested)
+    : resolve(projectRoot, requested);
+  const rel = relative(projectRoot, requestedAbs);
+  if (
+    rel === "" ||
+    rel === ".." ||
+    rel.startsWith(`..${sep}`) ||
+    isAbsolute(rel)
+  ) {
+    refuse(
+      `document path must resolve to a file inside the project root: ${JSON.stringify(requested)}`,
+    );
+  }
+  const portablePath = rel.split(sep).join("/");
+
+  const { absPath, bytes } = (() => {
+    try {
+      const resolved = resolveContainedFile(projectRoot, portablePath);
+      return {
+        absPath: resolved.absPath,
+        bytes: readDocumentBytes(
+          resolved.absPath,
+          `document input ${JSON.stringify(portablePath)}`,
+          undefined,
+          documentInputByteCap,
+          resolved.identity,
+        ),
+      };
+    } catch (error) {
+      return refuse(
+        `cannot read ${JSON.stringify(portablePath)} directly: ${errorMessage(error)} ` +
+          "The path is resolved from the project root and filenames are not searched " +
+          "recursively. Provide one accessible regular file inside the project, or use DocumentKB.",
+      );
+    }
+  })();
+
+  const mime = detectMimeType(absPath, bytes);
+  if (mime !== "text/plain" && mime !== "text/markdown") {
+    refuse(
+      `${JSON.stringify(portablePath)} is ${mime}, not direct UTF-8 text or Markdown. ` +
+        "Place it under aidlc/spaces/<space>/knowledge/documents/, run " +
+        "`/aidlc knowledge onboard <path>`, then read it with `/aidlc knowledge show <id>`.",
+    );
+  }
+
+  const content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  if (content.length > EXTRACT_OUTPUT_CHAR_CAP) {
+    refuse(
+      `${JSON.stringify(portablePath)} contains ${content.length} characters; direct input is ` +
+        `limited to ${EXTRACT_OUTPUT_CHAR_CAP}. Use DocumentKB so extraction and truncation ` +
+        "are explicit.",
+    );
+  }
+
+  process.stdout.write(
+    `${JSON.stringify({
+      path_notice: UNTRUSTED_PATH_NOTICE,
+      content_notice: UNTRUSTED_CONTENT_NOTICE,
+      path: portablePath,
+      bytes: bytes.length,
+      content_trust: "untrusted",
+      content_handling: "data-not-instructions",
+      content,
+    })}\n`,
+  );
 }
 
 // `aidlc-utility.ts codekb-scope-diff [--repo <name>] [--compare <timestamp.md>]
@@ -7694,6 +7886,18 @@ export async function main(argv: string[]): Promise<void> {
     case "codekb-path":
       handleCodekbPath(projectDir, flags);
       break;
+    // project-description - read-only exact-description authority boundary.
+    // Marked records must load the JSON sidecar; only unmarked legacy records
+    // fall back to the state preview.
+    case "project-description":
+      handleProjectDescription(projectDir);
+      break;
+    // document-input - read-only direct-document boundary used by Intent Capture
+    // and Requirements Analysis. One exact path in, one trust-marked JSON object
+    // out; no search, mutation, or audit.
+    case "document-input":
+      await handleDocumentInput(projectDir);
+      break;
     // codekb-scope-diff - read-only query verb. Compares the codekb store's
     // recorded scope of analysis against the live tree (status) or an
     // incoming run's timestamp (--compare). The RE stage's rerun guard.
@@ -7778,7 +7982,7 @@ export async function main(argv: string[]): Promise<void> {
       die(
         `Unknown command "${subcommand}". Run \`aidlc-utility help\` for what this tool can do.\n\n` +
           "Available commands: help, version, status, doctor, intent-create, intent, space, " +
-          "space-create, codekb-path, codekb-scope-diff, detect, select-plugins, plugin-list, plugin-sync, plugin-validate, plugin-build, " +
+          "space-create, codekb-path, project-description, document-input, codekb-scope-diff, detect, select-plugins, plugin-list, plugin-sync, plugin-validate, plugin-build, " +
           "recompose, scope-change, config-change, config-get, config-list, set-status, " +
           "detect-scope, resolve-env-scope, scope-table, stage-table, upgrade\n" +
           "Common options: [--project-dir <path>] [--scope <scope>] [--json]"
