@@ -47,6 +47,9 @@ import {
   judgeFreeze,
   REVIEW_FREEZE_FALLBACK_GUIDANCE,
   reviewFreezeRecoveryGuidance,
+  shellCommandAltersExecutableResolution,
+  shellCommandInvocationDetails,
+  shellCommandInvocations,
   writeTargets,
 } from "../../dist/claude/.claude/hooks/aidlc-review-freeze.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -88,6 +91,155 @@ const NFR = {
   reviewer: "aidlc-architecture-reviewer-agent",
   produces: ["nfr-requirements"],
 };
+
+test("wrapper value options retain the nested executable and arguments", () => {
+  for (const command of [
+    "env -a git HOME=/alternate git pwn",
+    "env --argv0 git HOME=/alternate git pwn",
+    "env --argv0=git HOME=/alternate git pwn",
+    "command env -a git HOME=/alternate git pwn",
+    "exec -a ignored env HOME=/alternate git pwn",
+    "command exec -a ignored env HOME=/alternate git pwn",
+    "xargs -d : env HOME=/alternate git pwn",
+    "xargs --delimiter : env HOME=/alternate git pwn",
+    "xargs --delimiter=: env HOME=/alternate git pwn",
+    "xargs --eof env HOME=/alternate git pwn",
+    "xargs --eof=STOP env HOME=/alternate git pwn",
+    "xargs --replace env HOME=/alternate git pwn",
+    "xargs --replace=TOKEN env HOME=/alternate git pwn",
+    "xargs --max-lines env HOME=/alternate git pwn",
+    "xargs --max-lines=1 env HOME=/alternate git pwn",
+    "xargs -L 1 env HOME=/alternate git pwn",
+    "xargs --process-slot-var SLOT env HOME=/alternate git pwn",
+    "xargs -J REPL env HOME=/alternate git pwn",
+    "xargs -rt --max-lines env HOME=/alternate git pwn",
+    "ENV.EXE HOME=/alternate GIT.EXE pwn",
+    "\"C:/Program Files/Git/usr/bin/env.exe\" HOME=/alternate \"C:/Program Files/Git/cmd/git.exe\" pwn",
+    String.raw`"C:\Program Files\Git\usr\bin\env.exe" HOME=/alternate "C:\Program Files\Git\cmd\git.exe" pwn`,
+    "env -uHOME HOME=/alternate git pwn",
+    "env -C/tmp git pwn",
+    "env -agit HOME=/alternate git pwn",
+    "env -i0 HOME=/alternate git pwn",
+  ]) {
+    expect(shellCommandInvocations(command), command).toEqual([
+      { name: "git", args: ["pwn"] },
+    ]);
+  }
+});
+
+test("unknown wrapper options remain explicitly ambiguous", () => {
+  expect(
+    shellCommandInvocations(
+      "xargs --future-value SLOT env HOME=/alternate git pwn",
+    ),
+  ).toEqual([{ name: "", args: [], ambiguous: true }]);
+});
+
+test("builtin wrappers recursively expose evaluators", () => {
+  for (const command of [
+    "builtin eval 'printf harmless'",
+    "builtin -- eval 'printf harmless'",
+    "builtin builtin -- eval 'printf harmless'",
+  ]) {
+    expect(shellCommandInvocations(command), command).toEqual([
+      { name: "eval", args: ["printf harmless"] },
+    ]);
+  }
+  expect(shellCommandInvocations("builtin -p eval")).toEqual([
+    { name: "", args: [], ambiguous: true },
+  ]);
+});
+
+test("inspection preserves executable provenance and unwraps multiplexer applets", () => {
+  expect(
+    shellCommandInvocationDetails(
+      "command ./scratch/echo.cmd harmless",
+    ),
+  ).toEqual([
+    {
+      name: "echo",
+      args: ["harmless"],
+      executable: "./scratch/echo.cmd",
+      launchers: ["command"],
+    },
+  ]);
+  expect(
+    shellCommandInvocationDetails("busybox env HOME=/tmp sh -c harmless"),
+  ).toEqual([
+    {
+      name: "sh",
+      args: ["-c", "harmless"],
+      executable: "sh",
+      launchers: ["busybox", "env"],
+    },
+  ]);
+  expect(shellCommandInvocations("toybox rm -rf aidlc")).toEqual([
+    { name: "rm", args: ["-rf", "aidlc"] },
+  ]);
+});
+
+test("inspection marks altered executable lookup and data-driven mutations", () => {
+  for (const command of [
+    "PATH=/tmp rg",
+    "env PATH=/tmp rg",
+    "env PaTh=/tmp rg",
+    "env PATHEXT=.CMD rg",
+    "env -uPATH rg",
+    "env --unset=PATH rg",
+    "env -i rg",
+    "env --ignore-environment rg",
+  ]) {
+    expect(shellCommandInvocationDetails(command), command).toEqual([
+      expect.objectContaining({
+        name: "rg",
+        executableResolutionChanged: true,
+      }),
+    ]);
+  }
+  for (const command of [
+    "PATH=/tmp; rg",
+    "env -S 'PATH=/tmp rg'",
+    "env --split-string='PATHEXT=.CMD rg'",
+  ]) {
+    expect(shellCommandAltersExecutableResolution(command), command).toBe(true);
+  }
+  for (const command of [
+    "HOME=/tmp rg",
+    "MYPATH=/tmp rg",
+    "echo PATH=/tmp",
+    "env --argv0 PATH rg",
+  ]) {
+    expect(shellCommandAltersExecutableResolution(command), command).toBe(false);
+  }
+  expect(shellCommandInvocationDetails("env HOME=/tmp rg")).toEqual([
+    {
+      name: "rg",
+      args: [],
+      executable: "rg",
+      launchers: ["env"],
+    },
+  ]);
+  expect(shellCommandInvocationDetails("xargs rm -rf")).toEqual([
+    {
+      name: "rm",
+      args: ["-rf"],
+      executable: "rm",
+      launchers: ["xargs"],
+      dataDriven: true,
+      dataDrivenMutation: true,
+    },
+  ]);
+  expect(shellCommandInvocationDetails("xargs printf '%s\\n'")).toEqual([
+    {
+      name: "printf",
+      args: ["%s\\n"],
+      executable: "printf",
+      launchers: ["xargs"],
+      dataDriven: true,
+    },
+  ]);
+});
+
 const NONE: ReadonlySet<string> = new Set();
 const ready = { stageVerdict: "READY", unitVerdicts: new Map<string, string>() };
 const notReady = { stageVerdict: "NOT-READY", unitVerdicts: new Map<string, string>() };
@@ -285,6 +437,39 @@ describe("t264 (a) judgeFreeze decision table", () => {
     expect(
       writeTargets("Bash", { command: "perl -pi -e 's/x/y/' /a/b.md /tmp/c.md" }),
     ).toEqual([hostPath("/a/b.md"), hostPath("/tmp/c.md")]);
+    expect(
+      writeTargets("Bash", { command: "find aidlc -depth -delete" }, "/p"),
+    ).toEqual([hostPath("/p/aidlc")]);
+    expect(
+      writeTargets("Bash", { command: "find -H -delete" }, "/p"),
+    ).toEqual([hostPath("/p")]);
+    expect(
+      writeTargets("Bash", { command: "find scratch -fprint /a/b.md" }, "/p"),
+    ).toEqual([hostPath("/a/b.md")]);
+    expect(
+      writeTargets("Bash", { command: "find scratch -fprintf /tmp/list '%p\\n'" }, "/p"),
+    ).toEqual([hostPath("/tmp/list")]);
+    expect(
+      writeTargets("Bash", { command: "find scratch -name '*.tmp'" }, "/p"),
+    ).toEqual([]);
+    expect(
+      writeTargets("Bash", { command: "Remove-Item aidlc -Recurse -Force" }, "/p"),
+    ).toContain(hostPath("/p/aidlc"));
+    expect(
+      writeTargets("Bash", { command: "Remove-Item -Path:aidlc -Recurse" }, "/p"),
+    ).toContain(hostPath("/p/aidlc"));
+    expect(
+      writeTargets("Bash", { command: "Move-Item aidlc scratch" }, "/p"),
+    ).toEqual(expect.arrayContaining([hostPath("/p/aidlc"), hostPath("/p/scratch")]));
+    expect(
+      writeTargets("Bash", { command: "rd /s /q aidlc" }, "/p"),
+    ).toContain(hostPath("/p/aidlc"));
+    expect(
+      writeTargets("Bash", { command: "rsync --delete scratch/ aidlc" }, "/p"),
+    ).toContain(hostPath("/p/aidlc"));
+    expect(
+      writeTargets("Bash", { command: "find aidlc -print0 | xargs -0 rm -rf" }, "/p"),
+    ).toContain(hostPath("/p"));
     expect(writeTargets("Bash", { command: "sed -n '1p' /a/b.md" })).toEqual([]);
     expect(
       writeTargets("Bash", { command: "sed --version; cat /a/b.md" }),
