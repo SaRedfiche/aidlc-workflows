@@ -349,10 +349,42 @@ re-checked.`).
 > `aidlc-swarm.ts prepare` step for that Unit with the original batch/base/repo
 > arguments. The fresh worktree and `BOLT_STARTED` boundary reset review
 > accounting without claiming convergence. Never synthesize `GATE_REJECTED`.
-> The discard parks tracked files, non-ignored untracked files, and reviewed
-> source refs before removing the live checkout and branch. Recover the parked
-> work with `{{INVOKE}} engine worktree restore --slug <slug>`; restoration uses
-> a separate checkout and does not reinstate the old review authority.
+> The discard parks tracked files and non-ignored untracked files (or the
+> remaining branch tip when the checkout is gone) plus reviewed source refs
+> before removing the live checkout and branch. When present, the returned
+> `restore_operation` recovers the parked work in a separate checkout without
+> reinstating the old review authority. If only review evidence remained, there
+> are no saved working files to restore, so neither `restore_operation` nor
+> `restore_hint` is returned.
+>
+> **After a successful retry discard.** After the `--discard` abort succeeds and
+> confirms the old attempt was parked, but before rerunning `prepare`, use this
+> SAY line. Use `On your go-ahead I` only when the human selected Retry; otherwise
+> use `I`, never implying a human remedy choice that did not happen. Do not
+> announce a saved snapshot if the abort failed or did not park an attempt.
+>
+> Select `[saved-files text]` from the returned `parked_mode`:
+>
+> - `snapshot`: "I saved a snapshot of its tracked files and non-ignored untracked files. Ignored files are not saved, and the snapshot may normalize line endings."
+> - `branch-tip`: "I kept its committed work; there were no uncommitted files to save."
+> - `evidence-only`: "Nothing of its working files remained to save; only its review evidence was kept."
+> - `null`: omit `[saved-files text]`; the fallback descriptor does not establish what was saved.
+>
+> **SAY:** "[On your go-ahead I|I] set aside the previous attempt at [Unit] because the work changed again after its re-check, and I'm starting a new attempt. [saved-files text] If you want the previous attempt back, ask me to restore it."
+>
+> When `restore_operation` is absent, omit the final offer: "If you want the previous attempt back, ask me to restore it." Do not invent a restore operation for an evidence-only attempt.
+>
+> If the human later asks for that attempt back, use the saved abort result's
+> `restore_operation`: invoke its `worktree` route through
+> `{{INVOKE}} engine worktree <args...>`, passing each listed `args` element exactly
+> as a separate argv argument. Never join those arguments into a shell command or
+> rebuild a slug-only selection. `restore_hint` is human display text only, never
+> an execution input. If safe rendering fails (for example, an invalid harness
+> directory), the hint is omitted and `restore_hint_error` explains why; the
+> operation remains available and the restoration offer still applies.
+> After restoration succeeds, announce the returned restored path plainly:
+> **SAY:** "I restored the previous attempt at [returned restored path]."
+> Restoration does not resume the old attempt or make its review current.
 
 ### What the reviewer does NOT do
 

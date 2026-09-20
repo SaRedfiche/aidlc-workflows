@@ -582,17 +582,32 @@ Conductor-prose-obtained abort consent remains the trust boundary: it is require
 by the protocol, not authenticated by this Plan Approval exception. A direct
 review refusal prints its ask without publishing a selection marker; requiring
 that absent marker here would prevent the offered abort. The unchanged
-`--discard` command now parks the working-tree snapshot and reviewed source refs
-before removing the live checkout and branch. A mistaken abort is recoverable
-with `aidlc engine worktree restore --slug <slug>` in a separate restored
-checkout, not by reviving the live Bolt. A mechanical selection receipt remains
-a candidate for later hardening, not a check added by this recovery behavior.
+`--discard` command now parks the working-tree snapshot or remaining branch tip
+and reviewed source refs before removing the live checkout and branch. With
+a restorable descriptor, the abort result supplies `restore_operation` with route
+`worktree` and exact argv args, including `--parked <stamp>` and
+`--repo <name>` or `--repo .`. On a human restore request, the conductor invokes
+`{{INVOKE}} engine worktree <args...>` with each listed arg passed exactly as a
+separate argv argument, never joined into a shell command. This recovers files
+in a separate restored checkout, not by reviving the live Bolt. The optional
+`restore_hint` is human display text only, safely rendered by
+`renderEngineInvocation` using the same native/source selection, harness
+validation, and shell quoting as guard remedies. A rendering failure omits the
+hint and supplies `restore_hint_error`, but keeps the operation and restoration
+offer. If only reviewed source refs remained, the `evidence-only` descriptor
+has `parked_commit: "-"` in discard; abort retains the ref, stamp, mode, and
+repository but omits `restore_operation`, `restore_hint`, `restore_hint_error`,
+and `parked_excludes`. Restore refuses that selection; doctor offers purge only.
+A mechanical selection receipt remains a candidate for later hardening, not a
+check added by this recovery behavior.
 The native restart continuation has a recorded ask and separately verifies its
 human selection. Other Bolt commands gain no exemption, and abort admission
 never approves generation or a review verdict.
 Directive validation binds each command to its structured operation and target.
 For interaction, exact feedback, and failure handling, see
 [Guard admission and recovery asks](12-state-machine.md#guard-admission-and-recovery-asks).
+For the user-facing set-aside explanation, file recovery, exclusions, and
+doctor/purge commands, see [getting the files back](../guide/15-troubleshooting.md#a-bolt-attempt-was-set-aside-getting-the-files-back).
 
 This is one of the framework's flow-altering hooks and `PreToolUse` controls. The stage prose says generation never begins before the human answers "Approve Plan" - a field report showed a conductor generating the code first and backfilling `code-generation-plan.md` beside `code-summary.md`, turning the plan into a retroactive summary. The stage-completion artifact guard cannot catch that inversion (it fires at completion, when the backfilled plan already exists), so this hook refuses both delegated and inline generation before it starts. A second field report showed the opposite failure: a valid approval was destroyed between the turn that offered it and the turn that recorded the answer, because the question path republished the directive and the republication deleted the plan-approval runtime state. Approval now binds to content and attempt, so re-asking the engine cannot withdraw it.
 
