@@ -153,6 +153,49 @@ const engineMain = sliceBetween(
 const engineCommands = [...engineMain.matchAll(/case "([^"]+)":/g)].map((match) => match[1]);
 
 describe("documentation parity derives current behavior from authored implementation", () => {
+  test("provider docs use the interactive keep-current label", () => {
+    const guides = [
+      read("docs", "guide", "01-getting-started.md"),
+      read("docs", "guide", "15-troubleshooting.md"),
+      read("docs", "guide", "18-install-and-lifecycle.md"),
+    ];
+    for (const guide of guides) {
+      expect(guide).toContain("keep current");
+      expect(guide).not.toContain("Keep current provider and model");
+    }
+  });
+
+  test("reviewer-tier prose matches the harness projections", () => {
+    expect(TIER_PROJECTIONS.balanced.claude).toEqual({
+      model: "sonnet",
+      effort: "medium",
+    });
+    expect(TIER_PROJECTIONS.balanced.codex).toEqual({
+      model: null,
+      effort: "medium",
+    });
+    expect(TIER_PROJECTIONS.balanced.opencode).toEqual({
+      model: null,
+      variant: "medium",
+    });
+    for (const path of [
+      ["docs", "guide", "06-agents.md"],
+      ["docs", "guide", "agents", "architect-agent.md"],
+      ["docs", "harness-engineering", "03-adding-an-agent.md"],
+      ["docs", "reference", "agents", "README.md"],
+      ["harness", "codex", "emit.ts"],
+    ]) {
+      const text = normalized(read(...path));
+      expect(text, path.join("/")).not.toContain(
+        "pins a mid-size model at medium effort on claude code, codex, and opencode",
+      );
+      expect(text, path.join("/")).not.toContain(
+        "a mid-size model at reduced effort on claude code, codex, and opencode",
+      );
+      expect(text, path.join("/")).not.toContain("balanced pins both");
+    }
+  });
+
   test("event count and user-guide taxonomy match VALID_EVENT_TYPES", () => {
     expect(eventTypes.length).toBe(102);
 
@@ -589,14 +632,24 @@ describe("documentation parity derives current behavior from authored implementa
     };
     const codexCell = (tier: Tier): string => {
       const { model, effort } = TIER_PROJECTIONS[tier].codex;
-      return model === null && effort === null
-        ? "no `model`/`model_reasoning_effort` keys"
+      if (model === null && effort === null) {
+        return "no `model`/`model_reasoning_effort` keys";
+      }
+      if (model === null) {
+        return `model omitted, \`model_reasoning_effort = "${effort}"\``;
+      }
+      return effort === null
+        ? `\`model = "${model}"\`, reasoning effort omitted`
         : `\`model = "${model}"\`, \`model_reasoning_effort = "${effort}"\``;
     };
     const opencodeCell = (tier: Tier): string => {
       const { model, variant } = TIER_PROJECTIONS[tier].opencode;
-      return model === null && variant === null
-        ? "no `model:`/`variant:` keys"
+      if (model === null && variant === null) {
+        return "no `model:`/`variant:` keys";
+      }
+      if (model === null) return `model omitted, \`variant: ${variant}\``;
+      return variant === null
+        ? `\`model: ${model}\`, variant omitted`
         : `\`model: ${model}\`, \`variant: ${variant}\``;
     };
 

@@ -101,22 +101,10 @@ function emitConfigToml(onboarding: string): string {
 developer_instructions = '''
 ${onboarding}'''
 
-# Model: these session defaults are what judgment-tier agent roles inherit
-# (their TOMLs omit model/model_reasoning_effort by design - see the tier
-# projection); balanced roles pin gpt-5.6-terra/medium, while templated roles inherit.
-# D-9: Amazon Bedrock is the shipped default provider (web_search is
-# unavailable there; the market-research stage degrades gracefully). For
-# OpenAI-auth setups, comment out model_provider and the [model_providers]
-# block.
-model = "openai.gpt-5.5"
-model_provider = "amazon-bedrock"
-model_context_window = 1000000
-model_reasoning_effort = "high"
-
-[model_providers.amazon-bedrock.aws]
-# Set to your AWS profile/region with Bedrock model access.
-profile = "default"
-region = "us-east-1"
+# Model/provider: intentionally omitted. The project inherits the provider,
+# authentication, model, context window, and reasoning effort selected in the
+# user's Codex configuration. Agent roles also inherit that model; balanced
+# reviewers retain only their medium reasoning-effort cap.
 
 # The AIDLC method (the markdown rule layers: org/team/project + phases/) now
 # lives at the workspace root under aidlc/spaces/<space>/memory/ — the single
@@ -299,10 +287,9 @@ export function emitTrustSeed(
 // The old D7 model map is DERIVED from the tier projection module. Codex reads
 // `tier:` from the core agent .md (authoritative source of truth) and looks up
 // {model, effort} via projectTier. A null projected value means the TOML key
-// is OMITTED: the spawned role then falls back to the shipped config.toml
-// session defaults (live-verified on codex-cli 0.139.0 and 0.142.5: a role
-// TOML without `model` spawns on the config.toml model + effort). Judgment
-// and templated omit both keys; balanced pins both.
+// is OMITTED: the spawned role inherits the session value. Judgment and
+// templated omit both keys; balanced omits the model and pins medium reasoning
+// effort.
 
 function parseAgentMd(raw: string): { fm: Record<string, string>; body: string } {
   // BOM tolerance, matching the packager's agent reader and the rule parser.
