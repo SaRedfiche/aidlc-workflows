@@ -55,7 +55,7 @@ import {
 } from "./aidlc-install-paths.ts";
 import { defaultHarnessPath } from "./aidlc-machine-config.ts";
 import { configureChannel, configureProjectPin } from "./aidlc-lifecycle.ts";
-import { RELEASE_CHANNELS } from "./aidlc-channel.ts";
+import { compareVersions, RELEASE_CHANNELS } from "./aidlc-channel.ts";
 import {
   type TransactionOperation,
   type TransactionPlan,
@@ -3186,6 +3186,15 @@ function siblingDescriptor(sibling: ProjectHarness): Pick<ProjectionDescriptor, 
   }
 }
 
+function predatesFrameworkVersion(version: string | undefined, incoming: string): boolean {
+  if (version === undefined) return true;
+  try {
+    return compareVersions(version, incoming) < 0;
+  } catch {
+    return true;
+  }
+}
+
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   if (value && typeof value === "object") {
@@ -4046,6 +4055,24 @@ function mergeBlock(
     value: `${prefix}${prefix ? newline : ""}${block}${newline}`,
     nextHash: sha256Bytes(block),
   };
+}
+
+function unchangedManagedBlockHash(
+  projectDir: string,
+  sourceRoot: string,
+  integration: ProjectionDescriptor["rootIntegrations"][number],
+): string | undefined {
+  const targetPath = join(projectDir, integration.path);
+  const merged = mergeBlock(
+    integration.path,
+    regularFile(targetPath) ? readFileSync(targetPath, "utf-8") : "",
+    readFileSync(join(sourceRoot, integration.path), "utf-8"),
+    integration.marker || basename(integration.path),
+    integration.legacySignatures?.wholeFileHashes,
+  );
+  return !merged.error && merged.currentHash && merged.currentHash === merged.nextHash
+    ? merged.currentHash
+    : undefined;
 }
 
 function addRuntimeDistributions(roots: string[], root: string): boolean {
@@ -5507,8 +5534,16 @@ function planRootIntegrations(
           const contribution = siblingBaseline(sibling)?.rootContributions?.[integration.path];
           return contribution?.policy === "managed-block" && contribution.hash === merged.currentHash;
         });
-        if (owner) {
-          if (integration.shared === "union" && contributingSiblings?.has(owner)) {
+        if (owner && integration.shared) {
+          if (integration.shared === "identical") {
+            actions.push({
+              path: integration.path,
+              action: "conflict",
+              detail: `shared block is owned by ${owner.distribution} from a different release; refresh ${descriptor.distribution} from the same release as ${owner.distribution}, or refresh ${owner.distribution} from this release first`,
+            });
+            continue;
+          }
+          if (contributingSiblings?.has(owner)) {
             combinedWith = owner.distribution;
           } else {
             actions.push({ path: integration.path, action: "preserve", detail: `owned by ${owner.distribution}` });
@@ -6511,8 +6546,8 @@ export async function main(
     if (existing.distribution && existing.distribution !== stamp.distribution) {
       throw new Error(`project uses ${existing.distribution}; refusing ${stamp.distribution}`);
     }
+    const installed = discoverProjectHarnesses(projectDir);
     if (!existing.distribution) {
-      const installed = discoverProjectHarnesses(projectDir);
       const collision = installed.find(
         (candidate) => candidate.harnessDir === descriptor.harnessDir,
       );
@@ -6521,24 +6556,62 @@ export async function main(
           `harness ${stamp.distribution} shares directory ${descriptor.harnessDir} with installed ${collision.distribution}; they cannot coexist in one project`,
         );
       }
-      for (const sibling of installed) {
-        const siblingProjection = siblingDescriptor(sibling);
-        if (!siblingProjection) {
-          throw new Error(
-            `harness ${stamp.distribution} cannot be added while installed ${sibling.distribution} has no readable projection descriptor (${sibling.harnessDir}/tools/data/aidlc-projection.json); run aidlc config --harness ${sibling.distribution} first`,
-          );
+    }
+    for (const sibling of installed) {
+      if (sibling.harnessDir === descriptor.harnessDir) continue;
+      const siblingProjection = siblingDescriptor(sibling);
+      if (!siblingProjection) {
+        if (existing.distribution) {
+          const baseline = siblingBaseline(sibling);
+          for (const integration of descriptor.rootIntegrations) {
+            if (integration.policy !== "managed-block" || integration.shared === "union") continue;
+            const contribution = baseline?.rootContributions?.[integration.path];
+            if (contribution?.policy === "managed-block") {
+              if (integration.shared === "identical") {
+                const currentHash = unchangedManagedBlockHash(projectDir, selected.root, integration);
+                if (currentHash && contribution.hash === currentHash) continue;
+              }
+              throw new Error(
+                `refusing to refresh ${stamp.distribution} while installed ${sibling.distribution} co-owns ${integration.path} but has no readable projection descriptor (${sibling.harnessDir}/tools/data/aidlc-projection.json); run aidlc config --harness ${sibling.distribution} first`,
+              );
+            } else if (
+              sibling.frameworkVersion !== undefined && baseline === null &&
+              !unchangedManagedBlockHash(projectDir, selected.root, integration)
+            ) {
+              throw new Error(
+                `refusing to refresh ${stamp.distribution} while installed ${sibling.distribution} has lost its projection descriptor and ownership baseline; run aidlc config --harness ${sibling.distribution} first`,
+              );
+            }
+          }
+          continue;
         }
-        for (const integration of descriptor.rootIntegrations) {
-          if (integration.policy !== "managed-block") continue;
-          const collision = siblingProjection.rootIntegrations.find((candidate) =>
-            candidate.path === integration.path && candidate.policy === "managed-block" &&
-            integration.shared !== "union"
-          );
-          if (collision) {
+        throw new Error(
+          `harness ${stamp.distribution} cannot be added while installed ${sibling.distribution} has no readable projection descriptor (${sibling.harnessDir}/tools/data/aidlc-projection.json); run aidlc config --harness ${sibling.distribution} first`,
+        );
+      }
+      for (const integration of descriptor.rootIntegrations) {
+        if (integration.policy !== "managed-block" || integration.shared === "union") continue;
+        const collision = siblingProjection.rootIntegrations.find((candidate) =>
+          candidate.path === integration.path && candidate.policy === "managed-block" &&
+          !(integration.shared === "identical" && candidate.shared === "identical")
+        );
+        if (collision) {
+          if (existing.distribution && !integration.shared && collision.shared === "identical") {
             throw new Error(
-              `harness ${stamp.distribution} shares ${integration.path} with installed ${sibling.distribution}; they cannot coexist in one project`,
+              `refusing to refresh ${stamp.distribution} from a release whose ${integration.path} is not shared while installed ${sibling.distribution} shares it; use a release that declares it shared`,
             );
           }
+          if (
+            integration.shared === "identical" &&
+            predatesFrameworkVersion(sibling.frameworkVersion, stamp.frameworkVersion)
+          ) {
+            throw new Error(
+              `harness ${stamp.distribution} shares ${integration.path} with installed ${sibling.distribution}, whose install predates shared onboarding; run aidlc config --harness ${sibling.distribution} first — if it still refuses afterwards, its ${integration.path} is exclusive and they cannot coexist in one project`,
+            );
+          }
+          throw new Error(
+            `harness ${stamp.distribution} shares ${integration.path} with installed ${sibling.distribution}; they cannot coexist in one project`,
+          );
         }
       }
     }

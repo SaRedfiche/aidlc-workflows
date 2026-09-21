@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -992,6 +993,95 @@ describe("t294 post-apply outstanding actions", () => {
 });
 
 describe("t294 instruction-file doctor row", () => {
+  test("copied Codex instructions require both root guidance and onboarding without config", () => {
+    const project = temp("aidlc-t294-copy-instructions-");
+    cpSync(join(DIST, "codex", "AGENTS.md"), join(project, "AGENTS.md"));
+    cpSync(join(DIST, "codex", ".codex"), join(project, ".codex"), { recursive: true });
+    cpSync(join(DIST, "codex", "aidlc"), join(project, "aidlc"), { recursive: true });
+    expect(existsSync(join(project, ".codex", "tools", "data", "aidlc-manifest.json")))
+      .toBe(false);
+
+    const intact = instructionFileDoctorCheck(project, ".codex");
+    expect(intact.pass).toBe(true);
+    expect(intact.label).toContain("framework-owned file intact");
+
+    const agentsPath = join(project, "AGENTS.md");
+    rmSync(agentsPath);
+    const missingRoot = instructionFileDoctorCheck(project, ".codex");
+    expect(missingRoot.pass).toBe(false);
+    expect(missingRoot.label).toContain("missing (AGENTS.md)");
+
+    mkdirSync(agentsPath);
+    const directoryRoot = instructionFileDoctorCheck(project, ".codex");
+    expect(directoryRoot.pass).toBe(false);
+    expect(directoryRoot.label).toContain("missing (AGENTS.md)");
+
+    rmSync(agentsPath, { recursive: true });
+    cpSync(join(DIST, "codex", "AGENTS.md"), agentsPath);
+    rmSync(join(project, ".codex", "onboarding.md"));
+    const missingOnboarding = instructionFileDoctorCheck(project, ".codex");
+    expect(missingOnboarding.pass).toBe(false);
+    expect(missingOnboarding.label).toContain("missing (.codex/onboarding.md)");
+  });
+
+  test("an unsafe onboarding path is ignored like an absent descriptor field", () => {
+    const project = install("codex");
+    const descriptorPath = join(project, ".codex", "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8"));
+    delete descriptor.onboarding;
+    writeFileSync(descriptorPath, JSON.stringify(descriptor, null, 2) + "\n");
+    const absent = instructionFileDoctorCheck(project, ".codex");
+    expect(absent.pass).toBe(true);
+
+    descriptor.onboarding = "../../x\n";
+    writeFileSync(descriptorPath, JSON.stringify(descriptor, null, 2) + "\n");
+    expect(instructionFileDoctorCheck(project, ".codex")).toEqual(absent);
+  }, 60_000);
+
+  test("onboarding behind a symlinked parent is a conflict even when its hash matches", () => {
+    const project = install("codex");
+    const outside = temp("aidlc-t294-onboarding-outside-");
+    cpSync(join(project, ".codex", "onboarding.md"), join(outside, "onboarding.md"));
+    symlinkSync(outside, join(project, ".codex", "etc"), process.platform === "win32" ? "junction" : "dir");
+    const onboarding = ".codex/etc/onboarding.md";
+    const descriptorPath = join(project, ".codex", "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8"));
+    descriptor.onboarding = onboarding;
+    writeFileSync(descriptorPath, JSON.stringify(descriptor, null, 2) + "\n");
+    const baselinePath = join(project, ".codex", "tools", "data", "aidlc-manifest.json");
+    const baseline = JSON.parse(readFileSync(baselinePath, "utf-8"));
+    baseline.files[onboarding] = baseline.files[".codex/onboarding.md"];
+    writeFileSync(baselinePath, JSON.stringify(baseline, null, 2) + "\n");
+
+    const conflict = instructionFileDoctorCheck(project, ".codex");
+    expect(conflict.pass).toBe(false);
+    expect(conflict.label).toContain(`conflict (${onboarding})`);
+
+    delete baseline.files[onboarding];
+    writeFileSync(baselinePath, JSON.stringify(baseline, null, 2) + "\n");
+    expect(instructionFileDoctorCheck(project, ".codex")).toEqual(conflict);
+    rmSync(baselinePath);
+    expect(instructionFileDoctorCheck(project, ".codex")).toEqual(conflict);
+  }, 60_000);
+
+  test("declared onboarding absent from the baseline remains a missing instruction", () => {
+    const project = install("codex");
+    const baselinePath = join(project, ".codex", "tools", "data", "aidlc-manifest.json");
+    const baseline = JSON.parse(readFileSync(baselinePath, "utf-8"));
+    delete baseline.files[".codex/onboarding.md"];
+    writeFileSync(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`);
+
+    const missingBaseline = instructionFileDoctorCheck(project, ".codex");
+    expect(missingBaseline.pass).toBe(false);
+    expect(missingBaseline.label).toContain("missing (.codex/onboarding.md)");
+
+    rmSync(join(project, "AGENTS.md"));
+    const missingBoth = instructionFileDoctorCheck(project, ".codex");
+    expect(missingBoth.pass).toBe(false);
+    expect(missingBoth.label).toContain("AGENTS.md");
+    expect(missingBoth.label).toContain(".codex/onboarding.md");
+  }, 60_000);
+
   test("marker-managed instruction block reports intact, missing, and modified", async () => {
     const project = install("kiro");
     const path = join(project, "AGENTS.md");
@@ -1044,15 +1134,33 @@ describe("t294 instruction-file doctor row", () => {
 
   test("instruction row selects the invoking harness in a dual-harness project", () => {
     const project = install("claude");
-    const codex = install("codex");
-    cpSync(join(codex, ".codex"), join(project, ".codex"), { recursive: true });
-    cpSync(join(codex, ".agents"), join(project, ".agents"), { recursive: true });
-    cpSync(join(codex, "AGENTS.md"), join(project, "AGENTS.md"));
+    const kiro = install("kiro");
+    cpSync(join(kiro, ".kiro"), join(project, ".kiro"), { recursive: true });
+    cpSync(join(kiro, "AGENTS.md"), join(project, "AGENTS.md"));
+    const onboardingPath = join(project, ".kiro", "steering", "aidlc-onboarding.md");
+    const onboarding = readFileSync(onboardingPath, "utf-8");
+    const claudePath = join(project, ".claude", "CLAUDE.md");
     expect(instructionFileDoctorCheck(project, ".claude").pass).toBe(true);
-    expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(true);
+    const intact = instructionFileDoctorCheck(project, ".kiro");
+    expect(intact.pass).toBe(true);
+    expect(intact.label).toContain("framework-owned file intact");
+
+    writeFileSync(onboardingPath, onboarding + "\nLocal onboarding change\n");
+    const modified = instructionFileDoctorCheck(project, ".kiro");
+    expect(modified.pass).toBe(false);
+    expect(modified.label).toContain("hand-modified - conflict (.kiro/steering/aidlc-onboarding.md)");
+    expect(instructionFileDoctorCheck(project, ".claude").pass).toBe(true);
+
+    writeFileSync(onboardingPath, onboarding);
     rmSync(join(project, "AGENTS.md"));
     expect(instructionFileDoctorCheck(project, ".claude").pass).toBe(true);
-    expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(false);
+    expect(instructionFileDoctorCheck(project, ".kiro").label)
+      .toContain("block or file missing (AGENTS.md)");
+
+    writeFileSync(claudePath, readFileSync(claudePath, "utf-8") + "\nLocal Claude change\n");
+    const claudeModified = instructionFileDoctorCheck(project, ".claude");
+    expect(claudeModified.pass).toBe(false);
+    expect(claudeModified.label).toContain("hand-modified - conflict (.claude/CLAUDE.md)");
   }, 60_000);
 });
 
