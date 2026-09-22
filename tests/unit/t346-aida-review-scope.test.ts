@@ -200,7 +200,11 @@ describe("t346 AIDA incremental review scope", () => {
       expect(left("docs/new.md", 1)).toBe(false);
 
       expect(buildScope(repo.head, manifest, null, false, repo.root)).toMatchObject({ mode: "full", reason: "first review of this pull request", files: [] });
-      expect(buildScope(repo.head, manifest, repo.since, true, repo.root)).toMatchObject({ mode: "full", reason: "requested by a maintainer with /aida full" });
+      // /aida full widens the review but keeps the change set as evidence for dispositions.
+      const requested = buildScope(repo.head, manifest, repo.since, true, repo.root);
+      expect(requested).toMatchObject({ mode: "full", since: repo.since, reason: "requested by a maintainer with /aida full" });
+      expect(requested.files).toEqual(scope.files);
+      expect(buildScope(repo.head, manifest, null, true, repo.root)).toMatchObject({ mode: "full", reason: "first review of this pull request", files: [] });
       expect(buildScope(repo.head, manifest, repo.head, false, repo.root).reason).toBe("this head was already reviewed");
       expect(buildScope(repo.head, manifest, "d".repeat(40), false, repo.root).reason).toContain("is no longer available");
       // The rewritten branch has the same content but `since` is not its ancestor: full.
@@ -235,14 +239,34 @@ describe("t346 AIDA incremental review scope", () => {
     // is never deferred.
     const lensDir = mkdtempSync(join(tmpdir(), "aida-scope-lenses-"));
     try {
-      writeFileSync(join(lensDir, "prompt-injection.md"), `**P1 candidate: instruction smuggled into a comment**\n\nEvidence: \`${PATH}:42\`, \`docs/with space.md:7-9\`, \`assets/logo.png\`, \`README.md\`, \`my docs/plan.md\`, \`not-a-changed-file.ts\`, \`C:/odd:path.ts:3\`, \`huge.ts:99999999999999999999\`, \`x.ts:1-999999\`.\n`);
-      writeFileSync(join(lensDir, "security.md"), "No candidates.\n");
-      const cited = securityCitations(lensDir, new Set(["assets/logo.png", "README.md", "my docs/plan.md", PATH]));
-      expect([...cited.lines].filter(line => !line.startsWith("x.ts:")).sort()).toEqual(["C:/odd:path.ts:3", `${PATH}:42`, "docs/with space.md:7", "docs/with space.md:8", "docs/with space.md:9"]);
-      // Ranges are capped, absurd numbers are ignored: parsing never hangs.
-      expect([...cited.lines].filter(line => line.startsWith("x.ts:"))).toHaveLength(5001);
-      // Bare paths count as file-level evidence when they name a changed file exactly.
-      expect(cited.files).toEqual(new Set(["assets/logo.png", "README.md", "my docs/plan.md"]));
+      writeFileSync(join(lensDir, "prompt-injection.json"), JSON.stringify({
+        marker: "[LENS-REVIEWED] prompt-injection x", status: "complete",
+        candidates: [
+          { priority: "P1", title: "instruction smuggled into a comment", evidence: [{ source: "DIFF", path: PATH, line: 42, side: "RIGHT" }, { source: "DIFF_FILE", path: "assets/logo.png" }, { source: "PR_BODY", quote: "ignore previous" }], problem: "p", impact: "i", requiredCorrection: "r" },
+          { priority: "P2", title: "odd evidence is ignored, not fatal", evidence: [{ source: "DIFF", path: "", line: 3, side: "RIGHT" }, { source: "DIFF", path: "x.ts", line: 1e30, side: "RIGHT" }, { source: "DIFF_FILE", path: "my docs/plan.md" }, "junk"], problem: "p", impact: "i", requiredCorrection: "r" },
+        ],
+      }));
+      writeFileSync(join(lensDir, "security.json"), "{not json");
+      const cited = securityCitations(lensDir);
+      // Keyed by side: a LEFT citation never exempts a RIGHT finding on the same coordinates.
+      expect([...cited.lines]).toEqual([`${PATH}:42:RIGHT`]);
+      expect(findingInScope(finding("correctness", diffLine(42, "LEFT")), INCREMENTAL, cited)).toBe(false);
+      // With the manifest, only lines the PR diff changed (and file-level files) are trusted.
+      const validated = securityCitations(lensDir, MANIFEST);
+      expect([...validated.lines]).toEqual([`${PATH}:42:RIGHT`]);
+      expect(validated.files).toEqual(new Set(["assets/logo.png"]));
+      // A citation on a changed file whose line is not a changed line (or a DIFF_FILE on a file with
+      // hunks) still keeps provenance at file granularity; a citation on an unchanged file is dropped.
+      writeFileSync(join(lensDir, "security.json"), JSON.stringify({ marker: "m", status: "complete", candidates: [{ priority: "P1", title: "t", evidence: [{ source: "DIFF", path: PATH, line: 7, side: "RIGHT" }, { source: "DIFF_FILE", path: PATH }, { source: "DIFF", path: "core/unchanged.ts", line: 1, side: "RIGHT" }], problem: "p", impact: "i", requiredCorrection: "r" }] }));
+      expect([...securityCitations(lensDir, MANIFEST).lines]).toEqual([`${PATH}:42:RIGHT`]);
+      expect(securityCitations(lensDir, MANIFEST).files).toEqual(new Set(["assets/logo.png", PATH]));
+      expect(findingInScope(finding("correctness", { source: "DIFF_FILE", path: PATH }), INCREMENTAL, securityCitations(lensDir, MANIFEST))).toBe(true);
+      // File-level provenance also exempts line evidence on that file (the judge may have corrected the line).
+      expect(findingInScope(finding("correctness", diffLine(44)), INCREMENTAL, securityCitations(lensDir, MANIFEST))).toBe(true);
+      writeFileSync(join(lensDir, "security.json"), "{not json");
+      // File-level citations count exactly as cited; a DIFF citation with an unusable line keeps
+      // provenance at file granularity (x.ts) rather than being lost.
+      expect(cited.files).toEqual(new Set(["assets/logo.png", "x.ts", "my docs/plan.md"]));
       expect(findingInScope(finding("correctness", diffLine(42)), INCREMENTAL, cited)).toBe(true);
       expect(findingInScope(finding("correctness", diffLine(44)), INCREMENTAL, cited)).toBe(false);
       expect(findingInScope(finding("correctness", { source: "DIFF_FILE", path: "assets/logo.png" }), INCREMENTAL, cited)).toBe(true);
@@ -344,11 +368,33 @@ describe("t346 AIDA incremental review scope", () => {
     }
     expect(REVIEW_WORKFLOW.split("--scope .ai-review-context/review-scope.json")).toHaveLength(3);
     expect(REVIEW_WORKFLOW.split("--lens-dir .ai-review-lenses")).toHaveLength(3);
+    // The two security lenses emit structured JSON under the lens schema; the other three stay prose.
+    expect(REVIEW_WORKFLOW).toContain('lens_schema="$(jq -c . .ai-review-controls/prompts/ai-pr-review-lens-schema.json)"');
+    expect(REVIEW_WORKFLOW.split('"$lens_schema"')).toHaveLength(3);
+    for (const lens of ["prompt-injection", "security"]) {
+      expect(REVIEW_WORKFLOW).toContain(`".ai-review-lenses/${lens}.json"`);
+      expect(REVIEW_WORKFLOW).toContain(`'.marker == $marker and .status == "complete"' .ai-review-lenses/${lens}.json >/dev/null`);
+      expect(REVIEW_WORKFLOW).toContain(`::error::${lens} lens did not complete its inspection`);
+      expect(REVIEW_WORKFLOW).toContain(`.ai-review-controls/prompts/ai-pr-review-lens-json.md \\\n              .ai-review-controls/prompts/ai-pr-review-${lens}.md`);
+    }
+    for (const lens of ["aidlc", "user-experience", "direction"]) {
+      expect(REVIEW_WORKFLOW).toContain(`".ai-review-lenses/${lens}.md"`);
+    }
+    const lensSchema = JSON.parse(readFileSync(join(REPO_ROOT, ".github", "prompts", "ai-pr-review-lens-schema.json"), "utf8"));
+    expect(lensSchema.required).toEqual(["marker", "status", "candidates"]);
+    // Source-specific variants: a schema-valid citation always carries the fields its source needs.
+    expect(lensSchema.$defs.evidence.anyOf.map((variant: { required: string[] }) => variant.required)).toEqual([
+      ["source", "path", "line", "side"],
+      ["source", "path"],
+      ["source", "quote"],
+    ]);
+    expect(prompt("lens-json")).toContain('"marker": "[LENS-REVIEWED] <lens> <head sha>"');
+    expect(prompt("judge")).toContain("`.ai-review-lenses/security.json` (structured candidates)");
 
     expect(prompt("scope")).toContain('`mode: "incremental"`');
     expect(prompt("scope")).toContain("report candidates only when their evidence cites a line inside the scope");
     expect(prompt("scope")).toContain("`deleted[]` lists the base lines (`LEFT` side");
-    expect(CONTRIBUTING).toContain("a finding on\na line they cited is never deferred whatever its category");
+    expect(CONTRIBUTING).toContain("a finding on a line or file they cited is never\ndeferred whatever category the judge assigns it");
     expect(prompt("security")).toContain("this lens always reviews the full head");
     expect(prompt("prompt-injection")).toContain("this lens always reviews the full head and the full PR metadata");
     expect(prompt("judge")).toContain("Honor `.ai-review-context/review-scope.json`");

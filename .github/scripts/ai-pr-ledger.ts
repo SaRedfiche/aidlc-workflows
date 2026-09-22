@@ -156,7 +156,21 @@ export interface ReconcileResult<T extends ReviewFindingInput> {
   reopenedIds: string[];
   retained: LedgerFinding[];
   resolvedIds: string[];
+  // Subset of resolvedIds closed on the judge's explicit disposition.
+  resolvedByJudgeIds: string[];
+  // Open entries the judge neither restated nor disposed of.
+  undisposedIds: string[];
+  // Blocking entries the judge declared resolved while their cited code and
+  // files are unchanged: kept open and retained until a maintainer accepts.
+  unverifiedResolutionIds: string[];
 }
+
+export type LedgerDispositions = ReadonlyMap<string, "resolved" | "still-open">;
+
+// Files the current head changed since the last review (incremental scope), or
+// null when that set is unknown (a full review: first review, rewritten history,
+// /aida full). Unknown is never evidence of a change.
+export type ChangedFiles = ReadonlySet<string> | null;
 
 export type AnchorPresence = (anchor: LedgerAnchor) => boolean | null;
 
@@ -835,11 +849,13 @@ export function reconcileLedger<T extends ReviewFindingInput>(
   head: string,
   at: string,
   presentAtHead: AnchorPresence,
+  dispositions: LedgerDispositions = new Map(),
+  changedFiles: ChangedFiles = null,
 ): ReconcileResult<T> {
   if (!/^[0-9a-f]{40}$/.test(head)) throw new Error("head must be a 40-character SHA");
   const ledger: Ledger = structuredClone(loaded.ledger);
   const result: ReconcileResult<T> = {
-    ledger, kept: [], restatedAccepted: [], suppressed: [], reopenedIds: [], retained: [], resolvedIds: [],
+    ledger, kept: [], restatedAccepted: [], suppressed: [], reopenedIds: [], retained: [], resolvedIds: [], resolvedByJudgeIds: [], undisposedIds: [], unverifiedResolutionIds: [],
   };
   const matchedIds = new Set<string>();
   const push = (kind: LedgerEventKind, id: string, extra: Partial<LedgerEvent> = {}): void => {
@@ -850,12 +866,24 @@ export function reconcileLedger<T extends ReviewFindingInput>(
   // after the omitted pass, so a head that fixes old findings frees their slots
   // before capacity is enforced.
   const pendingByFingerprint = new Map<string, T>();
-  for (const finding of findings) {
+  // Explicit bindings are matched first so an implicit fingerprint match can
+  // never consume an entry another finding names by id; the published order is
+  // restored to the judge's (P0 through P3) at the end.
+  const order = new Map<T, number>(findings.map((finding, index) => [finding, index]));
+  const keptOrder: number[] = [];
+  const pendingOrder = new Map<string, number>();
+  const ordered = [...findings.filter(finding => finding.ledgerId), ...findings.filter(finding => !finding.ledgerId)];
+  for (const finding of ordered) {
     const hashes = anchorSet(finding.anchors);
     // Model output is influenced by PR content, so it can identify OPEN entries
     // only. Accepted and rejected state is never inherited from a judge-selected
     // id; those decisions persist through omission and rendering, while any
     // reported defect on the same evidence is recorded independently.
+    // An explicit id (a disposition's restatement) binds an open entry outright:
+    // after a partial fix the same defect legitimately moves to new lines and
+    // new wording, and the worst case of a wrong id is a defect that stays
+    // visible under an older id. Without an id, the fingerprint (same category
+    // and a shared exact anchor) must be unambiguous.
     const compatible = (entry: LedgerFinding): boolean =>
       entry.category === finding.category && entry.anchors.some(anchor => hashes.has(anchor.sha256));
     const compatibleOpen = ledger.findings.filter(
@@ -863,18 +891,24 @@ export function reconcileLedger<T extends ReviewFindingInput>(
     );
     const requestedOpenId = finding.ledgerId;
     const explicit = requestedOpenId
-      ? ledger.findings.find(
-          entry =>
-            entry.id === requestedOpenId &&
-            entry.status === "open" &&
-            !matchedIds.has(entry.id) &&
-            compatible(entry),
-        )
+      ? ledger.findings.find(entry => entry.id === requestedOpenId && entry.status === "open" && !matchedIds.has(entry.id))
       : undefined;
     const match = explicit ?? (compatibleOpen.length === 1 ? compatibleOpen[0] : undefined);
+    if (!match && !finding.ledgerId) {
+      // An untagged finding whose fingerprint agrees with an entry another
+      // finding already restated by id is a duplicate restatement: fold its
+      // anchors into that entry instead of allocating a second identity.
+      const bound = ledger.findings.find(entry => entry.status === "open" && matchedIds.has(entry.id) && compatible(entry));
+      if (bound) {
+        const known = anchorSet(bound.anchors);
+        for (const anchor of finding.anchors) if (!known.has(anchor.sha256)) bound.anchors.push(anchor);
+        continue;
+      }
+    }
     if (!match) {
       const fingerprint = findingFingerprint(finding);
       const duplicate = pendingByFingerprint.get(fingerprint);
+      pendingOrder.set(fingerprint, Math.min(pendingOrder.get(fingerprint) ?? Number.MAX_SAFE_INTEGER, order.get(finding) ?? Number.MAX_SAFE_INTEGER));
       if (!duplicate) {
         pendingByFingerprint.set(fingerprint, structuredClone(finding));
       } else {
@@ -898,11 +932,54 @@ export function reconcileLedger<T extends ReviewFindingInput>(
       match.title = finding.title;
     }
     result.kept.push({ ...finding, priority: match.priority, ledgerId: match.id });
+    keptOrder.push(order.get(finding) ?? Number.MAX_SAFE_INTEGER);
   }
 
-  // Pass 2: open findings the judge did not restate.
+  // Pass 2: open findings the judge did not restate. An explicit disposition
+  // decides first: `resolved` closes the entry at this head (auditable, even if
+  // the exact cited lines are unchanged: a fix can live elsewhere); `still-open`
+  // keeps it verdict-bearing. Without a disposition, presence decides as before.
   for (const entry of ledger.findings) {
     if (entry.status !== "open" || matchedIds.has(entry.id)) continue;
+    const disposition = dispositions.get(entry.id);
+    if (disposition === "resolved") {
+      // The judge's word alone never retires a blocker whose cited code and
+      // files the author did not touch: model output is PR-influenced. A
+      // blocker resolves on a disposition only with deterministic evidence that
+      // the author acted — a cited line gone, or a cited file changed since the
+      // last review. Advisory entries follow the judge.
+      const verdicts = entry.anchors.map(anchor => presentAtHead(anchor));
+      const gone = verdicts.some(verdict => verdict === false);
+      const touched = changedFiles !== null && entry.anchors.some(anchor => anchor.path !== undefined && changedFiles.has(anchor.path));
+      if (isBlocking(entry.priority) && !gone && !touched) {
+        entry.lastSeen = { head, at };
+        push("seen", entry.id, { reason: "retained: declared corrected by the judge, but cited code and files are unchanged; a maintainer may accept" });
+        result.retained.push(structuredClone(entry));
+        result.unverifiedResolutionIds.push(entry.id);
+        continue;
+      }
+      entry.status = "resolved";
+      entry.lastSeen = { head, at };
+      push("resolved", entry.id, {
+        reason: gone
+          ? "declared corrected by the judge; a cited line is gone"
+          : touched
+            ? "declared corrected by the judge; cited files changed since the last review"
+            : "declared corrected by the judge (advisory: no change evidence required)",
+      });
+      result.resolvedIds.push(entry.id);
+      result.resolvedByJudgeIds.push(entry.id);
+      continue;
+    }
+    if (disposition === "still-open") {
+      // Retained whatever the priority: the judge said it still holds. Only
+      // blocking entries bear on the verdict.
+      entry.lastSeen = { head, at };
+      push("seen", entry.id, { reason: "retained: still open per the judge, not restated" });
+      result.retained.push(structuredClone(entry));
+      continue;
+    }
+    result.undisposedIds.push(entry.id);
     // An open finding the judge did not restate resolves only when its cited
     // condition is positively gone (every anchor false), or when none of its
     // anchors can ever be evaluated (all legacy: migrated, or written before
@@ -939,7 +1016,7 @@ export function reconcileLedger<T extends ReviewFindingInput>(
   }
 
   // Pass 3: new findings, once the reconciled ledger knows what it can free.
-  for (const finding of pendingByFingerprint.values()) {
+  for (const [fingerprint, finding] of pendingByFingerprint) {
     makeRoom(ledger);
     const id = `F${ledger.nextId}`;
     ledger.nextId += 1;
@@ -950,7 +1027,14 @@ export function reconcileLedger<T extends ReviewFindingInput>(
     push("opened", id);
     matchedIds.add(id);
     result.kept.push({ ...finding, ledgerId: id });
+    keptOrder.push(pendingOrder.get(fingerprint) ?? Number.MAX_SAFE_INTEGER);
   }
+  // Publish P0 through P3 by EFFECTIVE priority (a restatement may have been
+  // raised to the ledger's), with the judge's order as the tie-breaker.
+  result.kept = result.kept
+    .map((entry, index) => ({ entry, position: keptOrder[index] }))
+    .sort((left, right) => rank(left.entry.priority) - rank(right.entry.priority) || left.position - right.position)
+    .map(item => item.entry);
   return result;
 }
 
