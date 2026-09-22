@@ -338,6 +338,7 @@ function sensorListGate(artifact: string): GateResult {
     "required-sections",
     "type-check",
     "upstream-coverage",
+    "xref-links",
   ];
   return commandGate(
     "sensor-list",
