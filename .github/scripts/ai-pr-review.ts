@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -108,6 +109,13 @@ export interface LineRange {
   end: number;
 }
 
+interface DiffHunk {
+  oldStart: number;
+  oldCount: number;
+  newStart: number;
+  newCount: number;
+}
+
 export interface ChangedFile {
   path: string;
   previousPath?: string;
@@ -196,6 +204,41 @@ export interface UserExperienceAssessment {
   assessment: string;
 }
 
+// What the scoped lenses and the judge are asked to review at this head.
+// `full`: the whole PR diff. `incremental`: only the lines of the PR diff that
+// changed since the head AIDA last reviewed; everything else was reviewable
+// then and its findings live in the ledger. Security lenses always see the
+// full head, whatever the mode.
+export interface ReviewScopeFile {
+  path: string;
+  // The base path of a renamed file (LEFT evidence cites it).
+  previousPath?: string;
+  // Head lines of the PR diff changed since the last review.
+  added: LineRange[];
+  // Base lines deleted since the last review, in the PR diff's LEFT coordinates
+  // (a since-line that was itself added after the base has no base line and is
+  // not listed).
+  deleted: LineRange[];
+  // The whole file was deleted since the last review.
+  deletedFile: boolean;
+}
+
+export interface ReviewScope {
+  mode: "full" | "incremental";
+  since: string | null;
+  reason: string;
+  files: ReviewScopeFile[];
+}
+
+// A non-security finding the judge reported outside an incremental scope. It
+// is published for transparency but never bears on the decision.
+export interface DeferredFinding {
+  priority: Priority;
+  category: FindingCategory;
+  title: string;
+  paths: string[];
+}
+
 export interface StructuredReview {
   base: string;
   head: string;
@@ -219,6 +262,8 @@ export interface StructuredReview {
   findings: Finding[];
   residualRisk: string;
   ledger?: ReviewLedgerSummary;
+  scope?: ReviewScope;
+  deferred?: DeferredFinding[];
 }
 
 export interface ReviewLedgerSummary {
@@ -764,7 +809,7 @@ function parseNameStatus(raw: Buffer): Array<{ status: string; path: string; pre
 function rangesFromDiff(
   patch: string,
   expectedFiles: number,
-): Array<{ added: LineRange[]; deleted: LineRange[]; fileLevelEvidence: boolean }> {
+): Array<{ added: LineRange[]; deleted: LineRange[]; fileLevelEvidence: boolean; hunks: DiffHunk[] }> {
   const sections = patch.split(/(?=^diff --git )/m).filter(section => section.startsWith("diff --git "));
   if (sections.length !== expectedFiles) {
     throw new Error(
@@ -774,11 +819,13 @@ function rangesFromDiff(
   return sections.map(section => {
     const added: LineRange[] = [];
     const deleted: LineRange[] = [];
+    const hunks: DiffHunk[] = [];
     for (const match of section.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)) {
       const oldStart = Number(match[1]);
       const oldCount = Number(match[2] ?? "1");
       const newStart = Number(match[3]);
       const newCount = Number(match[4] ?? "1");
+      hunks.push({ oldStart, oldCount, newStart, newCount });
       if (oldCount > 0) deleted.push({ start: oldStart, end: oldStart + oldCount - 1 });
       if (newCount > 0) added.push({ start: newStart, end: newStart + newCount - 1 });
     }
@@ -786,6 +833,7 @@ function rangesFromDiff(
       added,
       deleted,
       fileLevelEvidence: added.length === 0 && deleted.length === 0,
+      hunks,
     };
   });
 }
@@ -857,7 +905,8 @@ export function buildContext(
   const ranges = rangesFromDiff(diff.toString("utf8"), entries.length);
 
   const files = entries.map((entry, index) => {
-    const file: ChangedFile = { ...entry, ...ranges[index] };
+    const { hunks: _hunks, ...range } = ranges[index];
+    const file: ChangedFile = { ...entry, ...range };
     writeSnapshot(outputDir, head, file, repoDir);
     return file;
   });
@@ -866,6 +915,214 @@ export function buildContext(
   const digest = contextDigest(outputDir);
   writeFileSync(join(outputDir, "context-id.txt"), `${digest}\n`);
   return manifest;
+}
+
+function commitAvailable(sha: string, repoDir: string): boolean {
+  try {
+    git(["cat-file", "-e", `${sha}^{commit}`], "utf8", repoDir);
+    return true;
+  } catch {
+    try {
+      git(["fetch", "--no-tags", "--quiet", "origin", sha], "utf8", repoDir);
+      git(["cat-file", "-e", `${sha}^{commit}`], "utf8", repoDir);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+function isAncestor(ancestor: string, descendant: string, repoDir: string): boolean {
+  try {
+    git(["merge-base", "--is-ancestor", ancestor, descendant], "utf8", repoDir);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function mergeRanges(ranges: LineRange[]): LineRange[] {
+  const sorted = [...ranges].sort((a, b) => a.start - b.start);
+  const merged: LineRange[] = [];
+  for (const range of sorted) {
+    const last = merged.at(-1);
+    if (last && range.start <= last.end + 1) last.end = Math.max(last.end, range.end);
+    else merged.push({ ...range });
+  }
+  return merged;
+}
+
+function intersectRanges(left: LineRange[], right: LineRange[]): LineRange[] {
+  const result: LineRange[] = [];
+  for (const a of left) {
+    for (const b of right) {
+      const start = Math.max(a.start, b.start);
+      const end = Math.min(a.end, b.end);
+      if (start <= end) result.push({ start, end });
+    }
+  }
+  return result.sort((x, y) => x.start - y.start);
+}
+
+// Deterministic review scope for a head. Incremental when AIDA already reviewed
+// an ancestor of this head (`since`, from the ledger): the scope is the PR diff
+// restricted to lines that changed between `since` and `head`, in head
+// coordinates. Full on the first review, on a rewritten history (force-push),
+// when the previous head is no longer fetchable, or when a maintainer asked
+// with `/aida full`. Security lenses ignore the scope by contract.
+export function buildScope(
+  head: string,
+  manifest: ChangedFileManifest,
+  since: string | null,
+  forceFull: boolean,
+  repoDir = process.cwd(),
+): ReviewScope {
+  assertSha(head, "head");
+  const full = (reason: string): ReviewScope => ({ mode: "full", since, reason, files: [] });
+  if (forceFull) return full("requested by a maintainer with /aida full");
+  if (since === null) return full("first review of this pull request");
+  assertSha(since, "since");
+  if (since === head) return full("this head was already reviewed");
+  if (!commitAvailable(since, repoDir)) return full(`the previously reviewed head ${since.slice(0, 8)} is no longer available`);
+  if (!isAncestor(since, head, repoDir)) return full(`history was rewritten since the review at ${since.slice(0, 8)}`);
+
+  // Path lineage and line mapping come from the base..since diff: a since-path
+  // is followed back to its base path, and a since-line to its base line.
+  // The manifest is expressed against the merge base of base and head; the
+  // prior diff must use the same coordinates.
+  const priorDiff = git(["diff", "--binary", "--find-renames", "--unified=0", `${manifest.base}...${since}`], undefined, repoDir) as Buffer;
+  const priorEntries = parseNameStatus(
+    git(["diff", "--name-status", "-z", "--find-renames", `${manifest.base}...${since}`], undefined, repoDir) as Buffer,
+  );
+  const priorRanges = rangesFromDiff(priorDiff.toString("utf8"), priorEntries.length);
+  const prior = new Map(priorEntries.map((entry, index) => [entry.path, { entry, ranges: priorRanges[index] }]));
+  const basePathOf = (sincePath: string): string => prior.get(sincePath)?.entry.previousPath ?? sincePath;
+  const sinceLineToBase = (sincePath: string, line: number): number | null => {
+    const record = prior.get(sincePath);
+    if (!record) return line;
+    if (record.entry.status.startsWith("A")) return null;
+    let offset = 0;
+    for (const hunk of record.ranges.hunks) {
+      if (line >= hunk.newStart && line < hunk.newStart + hunk.newCount) return null;
+      if (line >= hunk.newStart + hunk.newCount) offset += hunk.oldCount - hunk.newCount;
+    }
+    return line + offset;
+  };
+
+  const diff = git(["diff", "--binary", "--find-renames", "--unified=0", `${since}..${head}`], undefined, repoDir) as Buffer;
+  const entries = parseNameStatus(
+    git(["diff", "--name-status", "-z", "--find-renames", `${since}..${head}`], undefined, repoDir) as Buffer,
+  );
+  const ranges = rangesFromDiff(diff.toString("utf8"), entries.length);
+  const files: ReviewScopeFile[] = [];
+  entries.forEach((entry, index) => {
+    // The PR diff knows a file by its head path or its base path; a since-path
+    // may differ from both after chained renames.
+    const sincePath = entry.previousPath ?? entry.path;
+    const names = new Set([entry.path, sincePath, basePathOf(sincePath), basePathOf(entry.path)]);
+    const inPullRequest = manifest.files.find(
+      file => names.has(file.path) || (file.previousPath !== undefined && names.has(file.previousPath)),
+    );
+    if (!inPullRequest) return;
+    const range = ranges[index];
+    // A change with no hunks since the review (mode, binary, pure rename) on a
+    // file whose PR diff has hunks cannot be cited at file level: admit the
+    // file's whole PR diff instead.
+    const added = inPullRequest.fileLevelEvidence
+      ? []
+      : range.fileLevelEvidence
+        ? inPullRequest.added
+        : intersectRanges(range.added, inPullRequest.added);
+    const deletedFile = entry.status.startsWith("D");
+    const deleted = deletedFile
+      ? []
+      : mergeRanges(
+          range.deleted.flatMap(hunk => {
+            const lines: LineRange[] = [];
+            for (let line = hunk.start; line <= hunk.end; line++) {
+              const base = sinceLineToBase(sincePath, line);
+              if (base !== null) lines.push({ start: base, end: base });
+            }
+            return lines;
+          }),
+        ).flatMap(candidate => intersectRanges([candidate], inPullRequest.deleted));
+    if (added.length === 0 && deleted.length === 0 && !deletedFile && !range.fileLevelEvidence && !inPullRequest.fileLevelEvidence) return;
+    files.push({
+      path: inPullRequest.path,
+      ...(inPullRequest.previousPath ? { previousPath: inPullRequest.previousPath } : {}),
+      added,
+      deleted,
+      deletedFile,
+    });
+  });
+  return { mode: "incremental", since, reason: `lines of the PR diff changed since the review at ${since.slice(0, 8)}`, files };
+}
+
+// The lines the security and prompt-attack lenses cited, extracted
+// deterministically from their outputs (`path:line` or `path:start-end` in
+// backticks, the candidate format). A finding that cites one of these lines is
+// never deferred, whatever category the judge chose: the exemption rests on the
+// full-head lenses' own evidence, not on a model-selected label.
+export interface SecurityCitations {
+  lines: Set<string>;
+  files: Set<string>;
+}
+
+const MAX_CITED_LINE = 10_000_000;
+
+export function securityCitations(lensDir: string, knownPaths: ReadonlySet<string> = new Set()): SecurityCitations {
+  const cited: SecurityCitations = { lines: new Set(), files: new Set() };
+  for (const name of ["security.md", "prompt-injection.md"]) {
+    const file = join(lensDir, name);
+    if (!existsSync(file)) continue;
+    for (const match of readFileSync(file, "utf8").matchAll(/`([^`]+)`/g)) {
+      const token = match[1].trim();
+      const located = /^(.+):(\d{1,7})(?:-(\d{1,7}))?$/.exec(token);
+      if (!located) {
+        // A bare path in backticks is file-level evidence when it names a
+        // changed file exactly (root-level names and spaces included).
+        if (knownPaths.has(token)) cited.files.add(token);
+        continue;
+      }
+      const start = Number(located[2]);
+      const end = Math.min(Number(located[3] ?? located[2]), start + 5000, MAX_CITED_LINE);
+      if (!Number.isSafeInteger(start) || start < 1 || start > MAX_CITED_LINE) continue;
+      for (let line = start; line <= end; line++) cited.lines.add(`${located[1]}:${line}`);
+    }
+  }
+  return cited;
+}
+
+const NO_CITATIONS: SecurityCitations = { lines: new Set(), files: new Set() };
+
+export function findingInScope(
+  finding: Pick<Finding, "category" | "evidence">,
+  scope: ReviewScope,
+  securityCited: SecurityCitations = NO_CITATIONS,
+): boolean {
+  if (scope.mode === "full" || finding.category === "security") return true;
+  const within = (line: number, ranges: LineRange[]): boolean => ranges.some(range => line >= range.start && line <= range.end);
+  return finding.evidence.some(item => {
+    switch (item.source) {
+      case "PR_TITLE":
+      case "PR_BODY":
+        // Metadata may have changed since the last review; quotes stay in scope.
+        return true;
+      case "DIFF_FILE":
+        return securityCited.files.has(item.path) || scope.files.some(entry => entry.path === item.path);
+      case "DIFF": {
+        if (securityCited.lines.has(`${item.path}:${item.line}`)) return true;
+        if (item.side === "LEFT") {
+          const file = scope.files.find(entry => (entry.previousPath ?? entry.path) === item.path);
+          return file !== undefined && (file.deletedFile || within(item.line, file.deleted));
+        }
+        const file = scope.files.find(entry => entry.path === item.path);
+        return file !== undefined && within(item.line, file.added);
+      }
+      default:
+        return false;
+    }
+  });
 }
 
 function requiredText(value: unknown, field: string, maxLength: number): string {
@@ -950,6 +1207,8 @@ export function parseStructuredReview(
   expectedHead: string,
   manifest: ChangedFileManifest,
   metadata: ReviewMetadata,
+  scope?: ReviewScope,
+  securityCited: SecurityCitations = NO_CITATIONS,
 ): StructuredReview {
   assertSha(expectedBase, "base");
   assertSha(expectedHead, "head");
@@ -1180,7 +1439,7 @@ export function parseStructuredReview(
   }
 
   const residualRisk = requiredText(candidate.residualRisk, "residualRisk", 1000);
-  return {
+  const review: StructuredReview = {
     base: expectedBase,
     head: expectedHead,
     inspection,
@@ -1191,6 +1450,48 @@ export function parseStructuredReview(
     findings,
     residualRisk,
   };
+  if (!scope) return review;
+  // Convergence by construction: in an incremental scope a non-security finding
+  // that cites only lines unchanged since the last review is deferred — shown,
+  // never decisive. The decision is re-derived under the same invariants when
+  // the deferral leaves it without a valid reason.
+  const kept = findings.filter(finding => findingInScope(finding, scope, securityCited));
+  const deferred: DeferredFinding[] = findings
+    .filter(finding => !findingInScope(finding, scope, securityCited))
+    .map(finding => ({
+      priority: finding.priority,
+      category: finding.category,
+      title: finding.title,
+      paths: [...new Set(finding.evidence.flatMap(item => ("path" in item ? [item.path] : [])))],
+    }));
+  review.scope = scope;
+  review.deferred = deferred;
+  if (deferred.length > 0) {
+    review.findings = kept;
+    if (decisionInvariantError(kept, assessment, decision) !== null) {
+      const derived = deriveDecision(
+        decision.action,
+        kept.filter(finding => finding.priority === "P0" || finding.priority === "P1").length,
+        kept.length,
+        assessment.readiness.score,
+        assessment.risk.score,
+      );
+      const plural = deferred.length === 1 ? "" : "s";
+      review.decision =
+        derived === "merge"
+          ? {
+              actor: "maintainer",
+              action: "merge",
+              rationale: `${decision.rationale} Re-derived: ${deferred.length} finding${plural} outside the incremental review scope ${deferred.length === 1 ? "was" : "were"} deferred and no blocking finding remains.`,
+            }
+          : {
+              actor: "author",
+              action: "change",
+              rationale: `${decision.rationale} Re-derived after deferring ${deferred.length} finding${plural} outside the incremental review scope.`,
+            };
+    }
+  }
+  return review;
 }
 
 export function findingAnchors(
@@ -1281,6 +1582,10 @@ export function applyLedgerToReview(
               }: no blocking finding remains and the assessment permits a merge decision.`,
             };
     }
+  }
+  // A full review requested with /aida full is consumed by the review that used it.
+  if (review.scope?.mode === "full" && review.scope.reason.startsWith("requested by a maintainer")) {
+    delete result.ledger.nextReview;
   }
   // Persist this head's verdict so a later /aida command re-derives the decision
   // under the same invariants without rerunning models.
@@ -1383,7 +1688,13 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
     "",
     `Inspection: ${review.inspection.changedFiles.length} changed ${
       review.inspection.changedFiles.length === 1 ? "file" : "files"
-    }.`,
+    }.${
+      review.scope
+        ? review.scope.mode === "incremental"
+          ? ` Scope: **incremental** — ${review.scope.files.length} file${review.scope.files.length === 1 ? "" : "s"} with lines changed since the review at \`${(review.scope.since ?? "").slice(0, 8)}\`; the security lenses reviewed the full head. Findings on lines unchanged since that review are deferred, not decisive.`
+          : ` Scope: **full head** (${markdownText(review.scope.reason)}).`
+        : ""
+    }`,
     "",
     "## Final Assessment",
     "",
@@ -1512,6 +1823,22 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
       );
     }
   }
+  if (review.deferred && review.deferred.length > 0) {
+    lines.push(
+      "",
+      "## Deferred (outside the review scope)",
+      "",
+      `Reported by the judge but citing only lines unchanged since the review at \`${(review.scope?.since ?? "").slice(0, 8)}\`. They do not affect the decision; comment \`/aida full\` to have the next review cover the whole head.`,
+    );
+    for (const entry of review.deferred) {
+      lines.push(
+        "",
+        `**${entry.priority} · ${entry.category}: ${markdownText(entry.title)}**${
+          entry.paths.length > 0 ? ` — ${entry.paths.map(path => `<code>${codeText(path)}</code>`).join(", ")}` : ""
+        }`,
+      );
+    }
+  }
   if (review.ledger && review.ledger.accepted.length > 0) {
     lines.push("", "## Accepted risks");
     for (const entry of review.ledger.accepted) {
@@ -1563,6 +1890,20 @@ function main(): void {
     );
     return;
   }
+  if (command === "build-scope") {
+    const manifest = JSON.parse(readFileSync(argValue(args, "--manifest"), "utf8")) as ChangedFileManifest;
+    const ledgerFile = readLedgerFile(argValue(args, "--ledger"));
+    const scope = buildScope(
+      argValue(args, "--head"),
+      manifest,
+      ledgerFile.ledger.review?.head ?? null,
+      ledgerFile.ledger.nextReview?.scope === "full",
+      args.includes("--repo-dir") ? argValue(args, "--repo-dir") : process.cwd(),
+    );
+    writeFileSync(argValue(args, "--output"), `${JSON.stringify(scope, null, 2)}\n`);
+    process.stdout.write(`${scope.mode}: ${scope.reason}${scope.mode === "incremental" ? ` (${scope.files.length} files)` : ""}\n`);
+    return;
+  }
   if (command === "validate") {
     const base = argValue(args, "--base");
     const head = argValue(args, "--head");
@@ -1574,6 +1915,12 @@ function main(): void {
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as ChangedFileManifest;
     const metadata = JSON.parse(readFileSync(metadataPath, "utf8")) as ReviewMetadata;
     lastValidateInput = readFileSync(input, "utf8");
+    const scope = args.includes("--scope")
+      ? (JSON.parse(readFileSync(argValue(args, "--scope"), "utf8")) as ReviewScope)
+      : undefined;
+    const securityCited = args.includes("--lens-dir")
+      ? securityCitations(argValue(args, "--lens-dir"), new Set(manifest.files.flatMap(file => [file.path, ...(file.previousPath ? [file.previousPath] : [])])))
+      : NO_CITATIONS;
     let review: StructuredReview;
     if (args.includes("--ledger")) {
       const ledgerFile = readLedgerFile(argValue(args, "--ledger"));
@@ -1584,7 +1931,7 @@ function main(): void {
         migrated: ledgerFile.migrated,
       };
       const applied = applyLedgerToReview(
-        parseStructuredReview(lastValidateInput, base, head, manifest, metadata),
+        parseStructuredReview(lastValidateInput, base, head, manifest, metadata, scope, securityCited),
         loaded,
         argValue(args, "--context-dir"),
         args.includes("--repo-dir") ? argValue(args, "--repo-dir") : process.cwd(),
@@ -1596,7 +1943,7 @@ function main(): void {
         writeLedgerFile(argValue(args, "--ledger-output"), applied.ledger, loaded.migrated, loaded.digest);
       }
     } else {
-      review = validateStructuredReview(lastValidateInput, base, head, manifest, metadata);
+      review = enforceDecision(parseStructuredReview(lastValidateInput, base, head, manifest, metadata, scope, securityCited));
     }
     const payload = renderReview(review, contextId);
     writeFileSync(output, `${JSON.stringify(payload, null, 2)}\n`);
@@ -1664,7 +2011,7 @@ function main(): void {
     return;
   }
   throw new Error(
-    "usage: ai-pr-review.ts build-discussion|build-context|validate|label-state|labels|refresh-verdict|converge-verdict (run with --help in repository docs)",
+    "usage: ai-pr-review.ts build-discussion|build-context|build-scope|validate|label-state|labels|refresh-verdict|converge-verdict (run with --help in repository docs)",
   );
 }
 

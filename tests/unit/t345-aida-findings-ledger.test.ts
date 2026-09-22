@@ -220,7 +220,7 @@ describe("t345 AIDA findings ledger", () => {
     // A malformed /aida line anywhere in the leading block fails the whole comment (all-or-nothing).
     expect(() => parseCommands("/aida rejectF1 squashed")).toThrow("line 1: unrecognized command");
     expect(() => parseCommands("/aida delete F1")).toThrow("line 1: unrecognized command");
-    expect(() => parseCommands("/aida full")).toThrow("line 1: unrecognized command");
+    expect(parseCommands("/aida full")).toEqual([{ kind: "full", ids: [] }]);
     expect(() => parseCommands("/aida accept F1 first\n/aida rejct F2 typo")).toThrow("line 2: unrecognized command");
     expect(() => parseCommands(`/aida accept F1 ${"x".repeat(501)}`)).toThrow("line 1: the reason is 501 characters; the limit is 500");
     expect(parseCommands(`/aida accept F1 ${"x".repeat(500)}`)[0].reason).toHaveLength(500);
@@ -270,7 +270,7 @@ describe("t345 AIDA findings ledger", () => {
     expect(body).toContain("| F1 | P2 | ⚪ rejected | Finding F1 |");
     expect(body).toContain("several ids per line allowed");
     expect(body).toContain("Do not edit this comment");
-    expect(body).not.toContain("/aida full");
+    expect(body).toContain("`/aida full` (next review covers the whole head)");
     const parsed = parseLedgerComment(body);
     expect(parsed).toEqual({ ledger, migrated: false, digest: ledgerDigest(ledger) });
 
@@ -289,6 +289,13 @@ describe("t345 AIDA findings ledger", () => {
       `${LEDGER_MARKER} v2 digest=${previousDigest} -->\n\`\`\`json\n${JSON.stringify(previous, null, 2)}\n\`\`\``,
     );
     expect(upgraded).toEqual({ ledger, migrated: false, digest: previousDigest });
+
+    // Version 3 (archived decisions, no /aida full) is verified under its own shape, then upgraded.
+    const v3 = { version: 3, ...previousFields };
+    const v3Digest = sha256(JSON.stringify(v3, null, 2));
+    expect(parseLedgerComment(`${LEDGER_MARKER} v3 digest=${v3Digest} -->\n\`\`\`json\n${JSON.stringify(v3, null, 2)}\n\`\`\``)).toEqual({ ledger, migrated: false, digest: v3Digest });
+    expect(() => parseLedgerComment(`${LEDGER_MARKER} v3 digest=${v3Digest} -->\n\`\`\`json\n${JSON.stringify({ ...v3, nextReview: { scope: "full", by: "x", at: AT } }, null, 2)}\n\`\`\``)).toThrow("version-3 ledger cannot contain a next-review request");
+    expect(LEDGER_VERSION).toBe(4);
 
     // A version-1 ledger (side-less anchors, other digest) migrates: ids survive, anchors become
     // position anchors (never evaluable, so never retained), decisions are reset.
@@ -1199,8 +1206,6 @@ if (endpoint === "repos/acme/repo/pulls/42" && !args.includes("--method")) {
     expect(LEDGER_WORKFLOW).not.toContain("OPEN_BLOCKING");
     expect(LEDGER_WORKFLOW).not.toContain("/dismissals");
     expect(LEDGER_WORKFLOW).not.toContain("author_association");
-    expect(LEDGER_WORKFLOW).not.toContain("/aida full");
-
     expect(REVIEW_WORKFLOW).not.toContain("  issue_comment:");
     expect(REVIEW_WORKFLOW).toContain(".github/scripts/ai-pr-ledger.ts|\\");
     expect(REVIEW_WORKFLOW).toContain("ai-pr-ledger.ts fetch");
@@ -1260,6 +1265,6 @@ if (endpoint === "repos/acme/repo/pulls/42" && !args.includes("--method")) {
     expect(CONTRIBUTING).toContain("all-or-nothing");
     expect(CONTRIBUTING).toContain("P0 and P1 findings can be accepted but not rejected");
     expect(CONTRIBUTING).toContain("dismisses its own `CHANGES_REQUESTED`\nreview");
-    expect(CONTRIBUTING).not.toContain("/aida full");
+    expect(CONTRIBUTING).toContain("`full` — make the next review cover the whole head");
   });
 });
