@@ -123,6 +123,9 @@ import typeCheckSensorSource from "../sensors/aidlc-type-check.md" with {
 import upstreamCoverageSensorSource from "../sensors/aidlc-upstream-coverage.md" with {
 	type: "text",
 };
+import xrefLinksSensorSource from "../sensors/aidlc-xref-links.md" with {
+	type: "text",
+};
 
 // --- Constants ---
 
@@ -137,6 +140,7 @@ const SENSOR_HELP_SOURCES = [
 	traceabilitySensorSource,
 	typeCheckSensorSource,
 	upstreamCoverageSensorSource,
+	xrefLinksSensorSource,
 ] as const;
 
 export function sensorHelpSummaries(): ReadonlyMap<string, string> {
