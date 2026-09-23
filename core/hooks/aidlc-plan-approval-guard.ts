@@ -97,6 +97,7 @@ import {
   PlanApprovalSourceDriftError,
   planReviewAppendix,
   promptTestingContractMarkers,
+  questionsFileApprovalFingerprint,
 } from "../tools/aidlc-testing-posture.ts";
 
 export {
@@ -275,6 +276,70 @@ export function promptStageMarkers(text: string): string[] {
     if (stage.length > 0) stages.add(normalizeStageName(stage));
   }
   return Array.from(stages);
+}
+
+// The record-dir files whose bytes the Plan Approval fingerprint binds. Editing
+// one while an approval fingerprint already exists retires that approval; the
+// code-generation-plan.md file also carries the `## Testing Contract` the
+// fingerprint covers. The questions file itself is excluded: its edit is the
+// approval act (recording the fingerprint and the `[Answer]`), not a plan edit.
+const FINGERPRINT_BOUND_BASENAMES = new Set([
+  "code-generation-plan.md",
+  "unit-test-instructions.md",
+]);
+
+// The observable transition (issue A): silent fingerprint invalidation becomes
+// a visible signal. The invariant is unchanged — this NEVER alters the allow /
+// block decision; it only prints a one-line notice so the conductor learns at
+// edit time that the plan/instructions changed under an existing approval, and
+// can re-fingerprint before presenting a plan that would be refused at the gate.
+export const FINGERPRINT_BOUND_EDIT_NOTICE =
+  "editing an approval-bound file — if this changes it, re-fingerprint before approving";
+
+/**
+ * Whether any allowed write target is a fingerprint-bound file directly under
+ * `recordDir`. Pure: no I/O. Membership is a LEXICAL path test — `resolve()`
+ * normalizes `.`/`..` and relative segments, but does NOT follow symlinks
+ * (no `realpathSync`), so a symlink whose normalized path sits outside
+ * `recordDir` is not treated as bound. This narrowing is deliberate and safe
+ * here: the signal is advisory-only and never changes the allow/block decision,
+ * so a missed symlinked bound file at worst omits a notice — it can never
+ * wrongly allow or block a write. The dispatch/approval decision itself does
+ * its own trusted-target resolution elsewhere.
+ */
+export function writeTargetsTouchBoundFile(
+  writeTargets: string[],
+  recordDir: string,
+): boolean {
+  const boundDir = resolve(recordDir);
+  return writeTargets.some((target) => {
+    const abs = resolve(target);
+    return (
+      dirname(abs) === boundDir &&
+      FINGERPRINT_BOUND_BASENAMES.has(basename(abs))
+    );
+  });
+}
+
+/**
+ * The edit-time fingerprint-staleness notice, or null. Pure: no I/O. Returns
+ * the notice when a Plan Approval fingerprint currently exists for this target
+ * (`hasRecordedFingerprint`) AND at least one allowed write target is a
+ * fingerprint-bound file under this target's code-generation record dir. At
+ * PreToolUse the edit has NOT landed yet — and an idempotent write may not
+ * change the file at all — so the notice is deliberately PROSPECTIVE ("if this
+ * changes it, re-fingerprint"), not a claim that invalidation has already
+ * happened. It is advisory-only and never a post-edit byte comparison.
+ */
+export function planApprovalFingerprintEditSignal(
+  writeTargets: string[],
+  recordDir: string,
+  hasRecordedFingerprint: boolean,
+): string | null {
+  if (!hasRecordedFingerprint) return null;
+  return writeTargetsTouchBoundFile(writeTargets, recordDir)
+    ? FINGERPRINT_BOUND_EDIT_NOTICE
+    : null;
 }
 
 /**
@@ -1225,7 +1290,46 @@ export async function run(input: string): Promise<number> {
           (candidate) =>
             !isTrustedRecordTarget(projectDir, candidate, approvalDir),
         );
-        if (!outsideRecord && !mutation.opaqueShell) return 0;
+        if (!outsideRecord && !mutation.opaqueShell) {
+          // Issue A: an allowed Steps 2-3 write to a fingerprint-bound file
+          // under a live approval retires that approval silently today. Emit an
+          // observable transition here (never changing this allow decision) so
+          // the conductor re-fingerprints before presenting an unapprovable plan.
+          try {
+            // Cheap gate first: only a write to a fingerprint-bound file can
+            // ever produce the notice, so skip the questions-file read+parse on
+            // every other allow-branch pass (this runs on the PreToolUse hot
+            // path). `writeTargetsTouchBoundFile` is the same lexical-path test
+            // `planApprovalFingerprintEditSignal` applies, factored out so the
+            // I/O is reached only when it can matter. `approvalDir` here IS the
+            // code-generation record dir those helpers name `recordDir` (it is
+            // `codeGenerationRecordDir(projectDir, unit)`), and the bound
+            // basenames (code-generation-plan.md / unit-test-instructions.md,
+            // per FINGERPRINT_BOUND_BASENAMES) live directly under it — so the
+            // `dirname(abs) === boundDir` test resolves against the correct
+            // directory by construction, not by coincidence.
+            if (writeTargetsTouchBoundFile(mutation.targets, approvalDir)) {
+              const questionsPath = join(
+                approvalDir,
+                "code-generation-questions.md",
+              );
+              const hasRecordedFingerprint =
+                existsSync(questionsPath) &&
+                questionsFileApprovalFingerprint(
+                  readFileSync(questionsPath, "utf-8"),
+                ) !== null;
+              const notice = planApprovalFingerprintEditSignal(
+                mutation.targets,
+                approvalDir,
+                hasRecordedFingerprint,
+              );
+              if (notice !== null) process.stdout.write(`${notice}\n`);
+            }
+          } catch {
+            // Advisory only: never let the edit-time signal affect the decision.
+          }
+          return 0;
+        }
         const approval = evaluateCodeGenerationApproval(projectDir, target);
         const evidence: UnitEvidence = {
           unit,
