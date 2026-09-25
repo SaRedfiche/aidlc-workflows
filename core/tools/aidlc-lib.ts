@@ -5207,6 +5207,32 @@ export interface WorkflowSelectionOptions {
   sessionId?: string;
 }
 
+// The session of the conversation that invoked this process, when the caller
+// named none: the hook-injected override first, then the process ancestry.
+// Throws SessionResolutionConflictError when the two disagree and the override
+// did not come from a validated hook payload.
+export function resolveInvokingSessionId(projectDir: string): string | null {
+  const envSession = validSessionId(process.env.AIDLC_SESSION_OVERRIDE);
+  // This refusal is a footgun guard against stale exported overrides, not a
+  // security boundary. The SOURCE marker is an internal hookChildEnv contract.
+  // Deliberately setting both variables is an intentional same-user act
+  // equivalent to a sanctioned session switch; no privilege boundary exists
+  // between callers that could authenticate it.
+  const payloadOverride =
+    envSession !== null &&
+    process.env.AIDLC_SESSION_OVERRIDE_SOURCE === "payload";
+  const ancestrySession = resolveSessionIdFromAncestry(projectDir);
+  if (
+    envSession &&
+    ancestrySession &&
+    envSession !== ancestrySession &&
+    !payloadOverride
+  ) {
+    throw new SessionResolutionConflictError(envSession, ancestrySession);
+  }
+  return envSession ?? ancestrySession;
+}
+
 // Resolve one stable workflow target for an operation. Explicit selectors win,
 // then the session binding, then the legacy cursor and lone-intent rules.
 export function resolveWorkflowSelection(
@@ -5221,31 +5247,8 @@ export function resolveWorkflowSelection(
     }
     return { space: delegated.space, intent: delegated.intent, sessionId: null, binding: null };
   }
-  const explicitSession = validSessionId(options.sessionId);
-  let sessionId: string | null;
-  if (explicitSession) {
-    sessionId = explicitSession;
-  } else {
-    const envSession = validSessionId(process.env.AIDLC_SESSION_OVERRIDE);
-    // This refusal is a footgun guard against stale exported overrides, not a
-    // security boundary. The SOURCE marker is an internal hookChildEnv contract.
-    // Deliberately setting both variables is an intentional same-user act
-    // equivalent to a sanctioned session switch; no privilege boundary exists
-    // between callers that could authenticate it.
-    const payloadOverride =
-      envSession !== null &&
-      process.env.AIDLC_SESSION_OVERRIDE_SOURCE === "payload";
-    const ancestrySession = resolveSessionIdFromAncestry(projectDir);
-    if (
-      envSession &&
-      ancestrySession &&
-      envSession !== ancestrySession &&
-      !payloadOverride
-    ) {
-      throw new SessionResolutionConflictError(envSession, ancestrySession);
-    }
-    sessionId = envSession ?? ancestrySession;
-  }
+  const sessionId =
+    validSessionId(options.sessionId) ?? resolveInvokingSessionId(projectDir);
   const binding = sessionId ? readSessionBinding(projectDir, sessionId) : null;
   const space = options.space ?? binding?.space ?? activeSpace(projectDir);
   let intent: string | null;
