@@ -22,7 +22,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   _resetWorkspaceSourceStateCacheForTests,
@@ -31,7 +31,7 @@ import {
   workspaceSourceListing,
   workspaceSourceState,
 } from "../../core/tools/aidlc-lib.ts";
-import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
+import { cleanupTestProject, createTestProject, REPO_ROOT } from "../harness/fixtures.ts";
 
 const created: string[] = [];
 afterEach(() => {
@@ -173,5 +173,26 @@ describe("t-brownfield-source-walk-cache: compute the source walk once per comma
       writeFileSync(join(dir, "src", "main.ts"), "export const main = 1;\n");
       expect(workspaceSourceState(dir)).not.toBeNull();
     });
+  });
+
+  // The cache only delivers the "once per command" win where a command entry
+  // point OPENS a scope. The per-checkpoint accounting that fires the walk is
+  // driven by three dispatchers: aidlc-log review, aidlc-orchestrate
+  // next/continue/report/park (code-generation), and aidlc-state
+  // approve/reject/revise (plan-approval). A commit that claims the win for
+  // plan-approval and code-generation but wraps only one dispatcher would
+  // silently leave the felt-slow paths uncached — the docs-honesty/tests gap
+  // this suite closes. Assert every entry point opens the scope so removing a
+  // wrap fails here rather than shipping a hollow perf claim.
+  test("5. every command dispatcher that drives the walk opens the cache scope (wiring)", () => {
+    const wrap = "withWorkspaceSourceStateCache(() =>";
+    for (const rel of [
+      "core/tools/aidlc-log.ts", // review
+      "core/tools/aidlc-orchestrate.ts", // code-generation: next/continue/report/park
+      "core/tools/aidlc-state.ts", // plan-approval: approve/reject/revise
+    ]) {
+      const src = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      expect(src.includes(wrap), `${rel} must open a workspaceSourceState cache scope`).toBe(true);
+    }
   });
 });
