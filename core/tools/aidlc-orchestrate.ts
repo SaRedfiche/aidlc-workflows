@@ -151,6 +151,7 @@ import {
   type GuardRefusal,
   guardAttemptState,
   type GuardAttemptState,
+  withWorkspaceSourceStateCache,
   guardRecoveryAskFromRefusalText,
   guardPolicyStateField,
   guardRefusalStreakView,
@@ -10566,6 +10567,12 @@ export function main(argv: string[]): void {
     ...(!conflictingAttemptId && attemptId ? { attemptId } : {}),
   };
   try {
+    // Compute the whole-tree source identity ONCE per orchestrate command.
+    // next/continue/report/park each drive the plan-approval and code-gen
+    // checkpoint accounting, which recomputes the source walk per unit — this
+    // scope shares one computation across the command and is dropped when the
+    // command returns.
+    withWorkspaceSourceStateCache(() => {
     switch (subcommand) {
       case "next":
         handleNext(subArgs, projectDir);
@@ -10593,6 +10600,7 @@ export function main(argv: string[]): void {
         );
         process.exit(1);
     }
+    });
   } finally {
     engineInvocation = null;
     activeRetiredGuardPolicyNotice = null;
