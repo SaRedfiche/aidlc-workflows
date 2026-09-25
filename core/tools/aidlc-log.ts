@@ -23,6 +23,7 @@ import {
   requireProtectedResponse,
   consumeProtectedQuestion,
   withdrawProtectedQuestions,
+  resolveInvokingSessionId,
   resolveSessionIdFromAncestry,
   VERIFICATION_COMMAND_CHECKPOINT,
   VERIFICATION_COMMAND_RECOVERY,
@@ -300,20 +301,24 @@ function planApprovalTarget(flags: Record<string, string>): CodeGenerationTarget
   error("Plan Approval requires exactly one of --unit <unit> or --stage-level.");
 }
 
-// Resolve the Plan Approval session (issue C): an explicit --session wins; when
-// it is omitted, auto-resolve it from the active SessionStart context via the
-// process ancestry (the same resolver withdrawProtectedQuestions already uses).
-// The receipt binds whatever id this returns, so an auto-resolved id is the
-// same id the conductor would have passed by hand — no new approval path. When
-// nothing resolves, fail naming the exact --session argument to add, rather
-// than the bare "requires --session" that left the caller to go find the id.
+// Resolve the Plan Approval session: an explicit --session wins; when it is
+// omitted, use the invoking conversation's session by the same rule workflow
+// selection uses (the hook-injected override, then the process ancestry). The
+// receipt binds whatever id this returns, and the human's recorded reply must
+// sit under that same id, so auto-resolution adds no new approval path. When
+// nothing resolves, fail naming the exact --session argument to add.
 function resolvePlanApprovalSession(
   pd: string,
   flags: Record<string, string>,
 ): string {
   const explicit = flags.session?.trim();
   if (explicit) return explicit;
-  const resolved = resolveSessionIdFromAncestry(pd);
+  let resolved: string | null;
+  try {
+    resolved = resolveInvokingSessionId(pd);
+  } catch (e) {
+    error(`Plan Approval could not resolve its session: ${errorMessage(e)}`);
+  }
   if (resolved) return resolved;
   error(
     "Plan Approval requires --session <id> from the invoking SessionStart context. " +
@@ -552,7 +557,10 @@ function handleDecision(args: string[]): void {
   let protectedQuestion: ProtectedQuestion | null = null;
   try {
     protectedQuestion = withAuditLock(pd, () => {
-      withdrawProtectedQuestions(pd, flags.session?.trim() || resolveSessionIdFromAncestry(pd) || "*");
+      withdrawProtectedQuestions(
+        pd,
+        fields.Session || flags.session?.trim() || resolveSessionIdFromAncestry(pd) || "*",
+      );
       emitAudit(pd, "DECISION_RECORDED", fields);
       if (!policyFields && !verificationCommand) return null;
       return mintProtectedQuestion(pd, {
