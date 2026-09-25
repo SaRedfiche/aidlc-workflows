@@ -108,6 +108,7 @@ import {
   noteGuardPolicyRename,
   CEREMONY_FIELDS,
   CEREMONY_FLAGS,
+  CHECKBOX_MAP,
   CEREMONY_KEYS,
   type CeremonyPolicy,
   ceremonyOffClause,
@@ -150,6 +151,7 @@ import {
   hooksHealthReadDir,
   isAutonomousMode,
   isPlainObject,
+  isPerUnitStage,
   isTeamUnitOwnership,
   isPluginEnabled,
   isoTimestamp,
@@ -8637,6 +8639,47 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
 
       // Preserve checkbox history while rebuilding scope-owned plan suffixes.
       const existingCheckboxes = parseCheckboxes(content);
+      // The new plan must leave the workflow routable. `next` recovers a
+      // current stage the plan skips only from `[-]` or `[R]` (it asks for
+      // `report --result skipped`), and never for a team per-unit Construction
+      // stage, whose Unit gates live in Unit Progress while its box reads
+      // `[-]`. Anything else would commit a scope change nothing can route
+      // past, so refuse it before any write, the same way for every stage.
+      const skips = (slug: string): boolean => (adjustedMapping[slug] || "SKIP") !== "EXECUTE";
+      const currentSlug = getField(content, "Current Stage") ?? "";
+      const currentNode = graph.find((s) => s.slug === currentSlug);
+      const currentState = existingCheckboxes.find((c) => c.slug === currentSlug)?.state;
+      if (currentNode && skips(currentSlug) && currentState !== "completed" && currentState !== "skipped") {
+        if (isTeamUnitOwnership(content) && currentNode.phase === "construction" && isPerUnitStage(currentNode)) {
+          die(
+            `Cannot change scope to ${newScope} while ${currentSlug} is the current team Unit stage: ` +
+              `${newScope} skips it, and team routing cannot move Units off a skipped stage. ` +
+              `Finish ${currentSlug} for every Unit first, then change scope.`,
+          );
+        }
+        if (currentState !== "in-progress" && currentState !== "revising" && currentState !== "awaiting-approval") {
+          die(
+            `Cannot change scope to ${newScope}: it skips the current stage ${currentSlug}, which has not ` +
+              "started, so the workflow could not move past it. Continue the workflow until " +
+              `${currentSlug} is running or done, then change scope.`,
+          );
+        }
+      }
+      // A skipped stage cannot hold an open approval either: `next` refuses an
+      // awaiting-approval cursor on a SKIP stage and `report --result skipped`
+      // refuses `[?]`. Approving or requesting changes first leaves `[x]` or
+      // `[R]`, both of which route.
+      const openGatesSkipped = existingCheckboxes
+        .filter((c) => c.state === "awaiting-approval" && skips(c.slug))
+        .map((c) => c.slug);
+      if (openGatesSkipped.length > 0) {
+        const named = openGatesSkipped.join(", ");
+        die(
+          `Cannot change scope to ${newScope} while ${named} ${openGatesSkipped.length === 1 ? "is" : "are"} ` +
+            `waiting for approval: ${newScope} skips ${openGatesSkipped.length === 1 ? "it" : "them"}, and a ` +
+            "skipped stage cannot hold an open approval. Approve or request changes first, then change scope.",
+        );
+      }
       const existingMap = new Map(existingCheckboxes.map(c => [c.slug, c]));
       const phaseMap: Record<string, typeof graph> = {};
       for (const stage of graph) {
@@ -8661,15 +8704,16 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
         for (const stage of stages) {
           const action = adjustedMapping[stage.slug] || "SKIP";
           const existing = existingMap.get(stage.slug);
-          const marker = existing
-            ? `[${existing.state === "completed" ? "x" : existing.state === "in-progress" ? "-" : existing.state === "skipped" ? "S" : " "}]`
-            : "[ ]";
+          // Every checkbox state round-trips, including an open gate's [?]
+          // and a revision's [R]: collapsing those to [ ] would leave a gate
+          // the audit shows open reading as a stage that never started.
+          const marker = existing ? CHECKBOX_MAP[existing.state] : "[ ]";
           const suffix = action === "EXECUTE" ? "EXECUTE" : "SKIP";
           newStageProgress += `- ${marker} ${stage.slug} \u2014 ${suffix}\n`;
         }
       }
       const stageProgressRegex = /## Stage Progress\n<!-- [^\n]* -->\n([\s\S]*?)(?=\n## (?!Stage Progress))/;
-      const stageProgressHeader = "## Stage Progress\n<!-- Checkbox states: [ ] not started, [-] in progress, [x] completed, [S] skipped via --stage/--phase jump -->\n";
+      const stageProgressHeader = "## Stage Progress\n<!-- Checkbox states: [ ] not started, [-] in progress, [?] awaiting approval (gate open), [R] revising (user rejected gate), [x] completed, [S] skipped via --stage/--phase jump -->\n";
       content = content.replace(stageProgressRegex, stageProgressHeader + newStageProgress);
       content = setField(content, "Scope", newScope);
       content = setField(content, "Stages to Execute", executeStages.join(", "));
