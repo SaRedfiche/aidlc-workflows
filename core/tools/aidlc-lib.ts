@@ -18784,7 +18784,12 @@ export function workspaceSourceState(
   if (cache === null) {
     return workspaceSourceStateUncached(projectDir, intent, space);
   }
-  const key = `${projectDir}\0${intent ?? ""}\0${space ?? ""}`;
+  // Key faithfully distinguishes an ABSENT arg (undefined) from an explicit
+  // empty string: intentRepos/resolveWorkflowSelection resolve `undefined` to
+  // the active cursor's intent but `""` to the empty (legacy single-repo)
+  // selection, so those two must never share a memo slot. JSON-encoding the
+  // tuple with `?? null` keeps `undefined`->null distinct from `""`.
+  const key = JSON.stringify([projectDir, intent ?? null, space ?? null]);
   const hit = cache.get(key);
   if (hit !== undefined) {
     // A cached success carries no failure; keep the side-channel consistent

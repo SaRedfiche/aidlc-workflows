@@ -195,4 +195,25 @@ describe("t-brownfield-source-walk-cache: compute the source walk once per comma
       expect(src.includes(wrap), `${rel} must open a workspaceSourceState cache scope`).toBe(true);
     }
   });
+
+  // Regression for the key-collision landmine: workspaceSourceState(dir) [intent
+  // undefined -> active-cursor intent] and workspaceSourceState(dir, "") [explicit
+  // empty -> legacy empty selection] resolve to DIFFERENT source sets in
+  // resolveWorkflowSelection, so they must occupy separate memo slots. An earlier
+  // key `${dir}\0${intent ?? ""}\0...` collapsed both to one slot, so the second
+  // call would falsely return the first's cached object. Assert they do NOT share
+  // a slot: the "" call must not be served the undefined call's memoized object.
+  test('6. intent=undefined and intent="" never share a cache slot (key faithfulness)', () => {
+    const dir = project();
+    withWorkspaceSourceStateCache(() => {
+      const viaUndefined = workspaceSourceState(dir); // key tuple [dir, null, null]
+      const viaEmpty = workspaceSourceState(dir, ""); // key tuple [dir, "", null]
+      // Distinct keys -> the second call is a miss that computed its own object,
+      // never a false hit returning the undefined-call's object.
+      expect(viaUndefined).not.toBe(viaEmpty);
+      // And each is stable on repeat within the scope (its own slot memoizes).
+      expect(workspaceSourceState(dir)).toBe(viaUndefined);
+      expect(workspaceSourceState(dir, "")).toBe(viaEmpty);
+    });
+  });
 });
