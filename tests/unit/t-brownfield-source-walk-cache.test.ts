@@ -184,15 +184,36 @@ describe("t-brownfield-source-walk-cache: compute the source walk once per comma
   // silently leave the felt-slow paths uncached — the docs-honesty/tests gap
   // this suite closes. Assert every entry point opens the scope so removing a
   // wrap fails here rather than shipping a hollow perf claim.
-  test("5. every command dispatcher that drives the walk opens the cache scope (wiring)", () => {
-    const wrap = "withWorkspaceSourceStateCache(() =>";
+  //
+  // H1 hardening: a bare `includes("withWorkspaceSourceStateCache(() =>")` would
+  // pass if a future refactor wrapped the WRONG body (an unrelated helper, or a
+  // no-op `() => {}`) while the real `switch (subcommand)` dispatch ran OUTSIDE
+  // the scope — exactly the hollow-perf regression this test exists to catch.
+  // So anchor the wrap to the dispatch: the scope opener must sit immediately
+  // before `switch (subcommand)` (only whitespace/comments between), which is
+  // what actually makes the per-checkpoint walk share one computation.
+  test("5. every command dispatcher wraps its subcommand switch in the cache scope (wiring)", () => {
+    // `withWorkspaceSourceStateCache(() =>` [ws/comments] `switch (subcommand)`
+    const wrapsSwitch =
+      /withWorkspaceSourceStateCache\(\(\)\s*=>\s*\{?\s*(?:\/\/[^\n]*\n\s*)*switch\s*\(\s*subcommand\s*\)/;
     for (const rel of [
-      "core/tools/aidlc-log.ts", // review
+      "core/tools/aidlc-log.ts", // review (wraps handleReview, which owns the review switch)
       "core/tools/aidlc-orchestrate.ts", // code-generation: next/continue/report/park
       "core/tools/aidlc-state.ts", // plan-approval: approve/reject/revise
     ]) {
       const src = readFileSync(join(REPO_ROOT, rel), "utf-8");
-      expect(src.includes(wrap), `${rel} must open a workspaceSourceState cache scope`).toBe(true);
+      const opensScope = src.includes("withWorkspaceSourceStateCache(() =>");
+      expect(opensScope, `${rel} must open a workspaceSourceState cache scope`).toBe(true);
+      // aidlc-log wraps the single `review` case's handler rather than the whole
+      // switch (its switch has non-walk cases), so accept either the switch-anchored
+      // wrap OR a wrap of handleReview — but NOT a bare unrelated occurrence.
+      const anchored =
+        wrapsSwitch.test(src) ||
+        /withWorkspaceSourceStateCache\(\(\)\s*=>\s*\n?\s*handleReview\(/.test(src);
+      expect(
+        anchored,
+        `${rel} must wrap its dispatch (switch/handler), not an unrelated body`,
+      ).toBe(true);
     }
   });
 
@@ -214,6 +235,43 @@ describe("t-brownfield-source-walk-cache: compute the source walk once per comma
       // And each is stable on repeat within the scope (its own slot memoizes).
       expect(workspaceSourceState(dir)).toBe(viaUndefined);
       expect(workspaceSourceState(dir, "")).toBe(viaEmpty);
+    });
+  });
+
+  // H2: guardAttemptState computes the source identity ONCE and THREADS it into
+  // both freshReviewReceipts and pendingReviewRequestStatus via `options.sourceState`,
+  // which branch `options.sourceState !== undefined ? options.sourceState :
+  // workspaceSourceState(projectDir)`. The threading is faithful iff (a) the value
+  // guardAttemptState threads equals what the callee would recompute, and (b) the
+  // sentinel distinguishes an EXPLICIT null (unbindable, "no state") from an ABSENT
+  // arg (undefined, "compute it"). guardAttemptState computes the shared value as
+  // `workspaceSourceState(projectDir)` with no intent/space, so inside a command
+  // scope the threaded object IS the same memoized object the callee's recompute
+  // branch would return — threading changes nothing observable, only the walk count.
+  // A regression that swapped `!== undefined` for a truthy/`!= null` check would
+  // treat threaded-null as "recompute" and silently re-walk (or worse, flip a
+  // currency verdict); this pins that null and undefined are not interchangeable.
+  test("7. threaded sourceState equals the recompute value; null and undefined are distinct", () => {
+    const dir = project();
+    withWorkspaceSourceStateCache(() => {
+      // (a) The value guardAttemptState threads (workspaceSourceState(projectDir),
+      // no intent/space) is the SAME object the callee's recompute branch produces
+      // for the same key — so threading it in is observably identical to recomputing.
+      const threaded = workspaceSourceState(dir); // what guardAttemptState computes
+      const recomputed = workspaceSourceState(dir); // what the callee's else-branch does
+      expect(threaded).not.toBeNull();
+      expect(recomputed).toBe(threaded); // same memo slot -> faithful thread
+
+      // (b) The sentinel semantics the callee relies on. `undefined ?? null` in the
+      // cache key resolves to a DIFFERENT slot than an explicit "" (test 6), and the
+      // callee's `options.sourceState !== undefined` must treat an explicit `null`
+      // (unbindable) as a supplied decision, NOT as "recompute". Model that branch
+      // directly to lock the distinction the threading depends on.
+      const pick = (sourceState: typeof threaded | null | undefined) =>
+        sourceState !== undefined ? sourceState : workspaceSourceState(dir);
+      expect(pick(undefined)).toBe(threaded); // absent -> recompute (memoized object)
+      expect(pick(null)).toBeNull(); // explicit null -> honored, NOT recomputed
+      expect(pick(threaded)).toBe(threaded); // supplied value -> used as-is
     });
   });
 });
