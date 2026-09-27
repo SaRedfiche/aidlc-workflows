@@ -19094,10 +19094,10 @@ export function workspaceSourceEmbeddedGitPaths(
 // listing in the same bounded filesystem pass. Keys are `<repo>\0<path>`;
 // single-repo/Bolt worktrees use an empty repo component.
 
-// Per-command memo for workspaceSourceState. The whole-tree source walk fires
-// at EVERY plan-approval / code-generation checkpoint, and one command runs the
-// review accounting per unit — so a brownfield command recomputed the identical
-// walk many times over. This cache computes it ONCE per command.
+// Scoped memo for workspaceSourceState. Review accounting can read the same
+// source tree repeatedly within one admission or routing calculation. Share
+// that observation within the calculation, never across a boundary that needs
+// a fresh check (for example sensor dispatch followed by a locked admission).
 //
 // It is deliberately SCOPED, not a process-global TTL cache: staleness across
 // two logically distinct commands (a test loop, a long-lived host) would be a
@@ -19111,11 +19111,12 @@ let workspaceSourceStateCache:
   | null = null;
 
 /**
- * Run `fn` with a per-command workspaceSourceState memo active. Repeated calls
+ * Run `fn` with a fresh workspaceSourceState memo active. Repeated calls
  * with the same (projectDir, intent, space) inside `fn` share one computed
  * state. The scope is restored (including a nested prior scope) on exit, so this
- * is re-entrant and never leaks a cache across commands. Command entry points
- * that drive per-unit review accounting wrap their work in this.
+ * is re-entrant and never leaks a cache across calls. The caller must bound
+ * the scope to work that may share one source observation. State admissions
+ * open their own scope, including when called by a cached routing calculation.
  */
 export function withWorkspaceSourceStateCache<T>(fn: () => T): T {
   const previous = workspaceSourceStateCache;

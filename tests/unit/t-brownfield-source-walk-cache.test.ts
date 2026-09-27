@@ -4,7 +4,7 @@
 // code-generation checkpoint. Within one review command the freshness and
 // currency accounting each recomputed the whole-tree walk, per unit — so a
 // brownfield command re-walked the tree 3+ times. withWorkspaceSourceStateCache
-// computes it ONCE per command.
+// shares one observation within each admission or routing calculation.
 //
 // This suite pins Option B's contract:
 //   1. inside a cache scope, repeated calls for the same (projectDir,intent,
@@ -22,7 +22,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   _resetWorkspaceSourceStateCacheForTests,
@@ -31,7 +31,7 @@ import {
   workspaceSourceListing,
   workspaceSourceState,
 } from "../../core/tools/aidlc-lib.ts";
-import { cleanupTestProject, createTestProject, REPO_ROOT } from "../harness/fixtures.ts";
+import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
 
 const created: string[] = [];
 afterEach(() => {
@@ -63,7 +63,7 @@ function project(): string {
   return dir;
 }
 
-describe("t-brownfield-source-walk-cache: compute the source walk once per command", () => {
+describe("t-brownfield-source-walk-cache: share the source walk within each read scope", () => {
   test("1. inside a scope repeated calls return the IDENTICAL object (the walk reduction)", () => {
     const dir = project();
     const [a, b, c] = withWorkspaceSourceStateCache(() => [
@@ -175,46 +175,15 @@ describe("t-brownfield-source-walk-cache: compute the source walk once per comma
     });
   });
 
-  // The cache only delivers the "once per command" win where a command entry
-  // point OPENS a scope. The per-checkpoint accounting that fires the walk is
-  // driven by three dispatchers: aidlc-log review, aidlc-orchestrate
-  // next/continue/report/park (code-generation), and aidlc-state
-  // approve/reject/revise (plan-approval). A commit that claims the win for
-  // plan-approval and code-generation but wraps only one dispatcher would
-  // silently leave the felt-slow paths uncached — the docs-honesty/tests gap
-  // this suite closes. Assert every entry point opens the scope so removing a
-  // wrap fails here rather than shipping a hollow perf claim.
-  //
-  // H1 hardening: a bare `includes("withWorkspaceSourceStateCache(() =>")` would
-  // pass if a future refactor wrapped the WRONG body (an unrelated helper, or a
-  // no-op `() => {}`) while the real `switch (subcommand)` dispatch ran OUTSIDE
-  // the scope — exactly the hollow-perf regression this test exists to catch.
-  // So anchor the wrap to the dispatch: the scope opener must sit immediately
-  // before `switch (subcommand)` (only whitespace/comments between), which is
-  // what actually makes the per-checkpoint walk share one computation.
-  test("5. every command dispatcher wraps its subcommand switch in the cache scope (wiring)", () => {
-    // `withWorkspaceSourceStateCache(() =>` [ws/comments] `switch (subcommand)`
-    const wrapsSwitch =
-      /withWorkspaceSourceStateCache\(\(\)\s*=>\s*\{?\s*(?:\/\/[^\n]*\n\s*)*switch\s*\(\s*subcommand\s*\)/;
-    for (const rel of [
-      "core/tools/aidlc-log.ts", // review (wraps handleReview, which owns the review switch)
-      "core/tools/aidlc-orchestrate.ts", // code-generation: next/continue/report/park
-      "core/tools/aidlc-state.ts", // plan-approval: approve/reject/revise
-    ]) {
-      const src = readFileSync(join(REPO_ROOT, rel), "utf-8");
-      const opensScope = src.includes("withWorkspaceSourceStateCache(() =>");
-      expect(opensScope, `${rel} must open a workspaceSourceState cache scope`).toBe(true);
-      // aidlc-log wraps the single `review` case's handler rather than the whole
-      // switch (its switch has non-walk cases), so accept either the switch-anchored
-      // wrap OR a wrap of handleReview — but NOT a bare unrelated occurrence.
-      const anchored =
-        wrapsSwitch.test(src) ||
-        /withWorkspaceSourceStateCache\(\(\)\s*=>\s*\n?\s*handleReview\(/.test(src);
-      expect(
-        anchored,
-        `${rel} must wrap its dispatch (switch/handler), not an unrelated body`,
-      ).toBe(true);
-    }
+  test("5. a refused calculation drops its cache before the next source read", () => {
+    const dir = project();
+    const before = workspaceSourceFingerprint(dir);
+    expect(() => withWorkspaceSourceStateCache(() => {
+      expect(workspaceSourceFingerprint(dir)).toBe(before);
+      throw new Error("admission refused");
+    })).toThrow("admission refused");
+    writeFileSync(join(dir, "src", "mod0.ts"), "export const m0 = 42;\n");
+    expect(workspaceSourceFingerprint(dir)).not.toBe(before);
   });
 
   // Regression for the key-collision landmine: workspaceSourceState(dir) [intent

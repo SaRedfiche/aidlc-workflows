@@ -806,12 +806,6 @@ export function main(argv: string[]): void {
         `aidlc-state.ts ${subcommand}`,
       );
     }
-    // Compute the whole-tree source identity ONCE per state command. The
-    // plan-approval transitions (approve/reject/revise and their guards) drive
-    // the source-freshness accounting, which recomputes the walk per unit —
-    // this scope shares one computation across the command and is dropped when
-    // the command returns.
-    withWorkspaceSourceStateCache(() => {
     switch (subcommand) {
       case "get":
         handleGet(args.slice(1));
@@ -917,7 +911,6 @@ export function main(argv: string[]): void {
           `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, set-construction-iteration, set-construction-checkpoints, set-construction-execution, set-construction-verification-command, set-unit-ownership, set-unit-gate-rhythm, refresh-unit-progress, sync-unit-scope-stage, fold-unit-merge, checkbox, count, advance, finalize, complete-workflow, gate-start, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge, unit, park, unpark`
         );
     }
-    });
   } catch (e) {
     if (e instanceof UnitWaveRouteRefusalError || e instanceof StateAuditUnavailableError) {
       console.error(JSON.stringify({ error: e.message }));
@@ -5268,63 +5261,70 @@ function admitStageAction(
   stage: StageEntry,
   options: StageAdmissionOptions,
 ): void {
-  assertWorkflowNotArchived(stateContent, options.entrypoint ?? options.action);
-  if (options.unit !== undefined) {
-    const team = teamGateContext(
-      stateContent,
-      stage,
-      ["--unit", options.unit],
-      pd,
-    );
-    if (team !== null) {
-      verifyTeamUnitGateEvidence(
-        pd,
+  // One admission shares a source observation across its review accounting.
+  // Never retain it across the whole command: gate-start/revise run sensors
+  // outside the audit lock, then admit again inside the transaction. That
+  // second admission must see source changes made during dispatch or waiting
+  // for the lock, even when a routing caller has an outer read cache.
+  withWorkspaceSourceStateCache(() => {
+    assertWorkflowNotArchived(stateContent, options.entrypoint ?? options.action);
+    if (options.unit !== undefined) {
+      const team = teamGateContext(
         stateContent,
-        team,
-        options.action === "complete" ? "complete" : "present-approval-gate",
+        stage,
+        ["--unit", options.unit],
+        pd,
       );
-      if (options.action !== "complete") {
-        verifyTeamUnitGatePipelinePrecondition(pd, team);
+      if (team !== null) {
+        verifyTeamUnitGateEvidence(
+          pd,
+          stateContent,
+          team,
+          options.action === "complete" ? "complete" : "present-approval-gate",
+        );
+        if (options.action !== "complete") {
+          verifyTeamUnitGatePipelinePrecondition(pd, team);
+        }
+        return;
+      }
+    }
+
+    if (options.action !== "complete") {
+      verifyGateOpeningGuards(pd, stateContent, stage);
+      verifyConstructionCheckpointPrecondition(pd, stateContent, stage, options.action);
+      return;
+    }
+
+    const alreadyCompleted =
+      parseCheckboxes(stateContent).find((entry) => entry.slug === stage.slug)
+        ?.state === "completed";
+    if (options.entrypoint === "approve") {
+      verifyStageArtifacts(pd, stage);
+      verifySummaryConfirmationPrecondition(pd, stateContent, stage);
+      verifyPipelineLinkPrecondition(pd, stage);
+      verifyReviewerPrecondition(pd, stateContent, stage);
+      if (!alreadyCompleted) {
+        verifyConstructionCheckpointPrecondition(pd, stateContent, stage, options.action);
       }
       return;
     }
-  }
-
-  if (options.action !== "complete") {
-    verifyGateOpeningGuards(pd, stateContent, stage);
-    verifyConstructionCheckpointPrecondition(pd, stateContent, stage, options.action);
-    return;
-  }
-
-  const alreadyCompleted =
-    parseCheckboxes(stateContent).find((entry) => entry.slug === stage.slug)
-      ?.state === "completed";
-  if (options.entrypoint === "approve") {
-    verifyStageArtifacts(pd, stage);
-    verifySummaryConfirmationPrecondition(pd, stateContent, stage);
-    verifyPipelineLinkPrecondition(pd, stage);
-    verifyReviewerPrecondition(pd, stateContent, stage);
+    // A true replay is already fully applied and stays idempotent. A crash-window
+    // partial approval still reaches the source comparison: already-[x] recovery
+    // may lack review receipts, but any modern source binding still has to match.
+    verifyReviewerPrecondition(
+      pd,
+      stateContent,
+      stage,
+      "complete",
+      !alreadyCompleted,
+    );
     if (!alreadyCompleted) {
+      verifyStageArtifacts(pd, stage);
+      verifySummaryConfirmationPrecondition(pd, stateContent, stage);
+      verifyPipelineLinkPrecondition(pd, stage);
       verifyConstructionCheckpointPrecondition(pd, stateContent, stage, options.action);
     }
-    return;
-  }
-  // A true replay is already fully applied and stays idempotent. A crash-window
-  // partial approval still reaches the source comparison: already-[x] recovery
-  // may lack review receipts, but any modern source binding still has to match.
-  verifyReviewerPrecondition(
-    pd,
-    stateContent,
-    stage,
-    "complete",
-    !alreadyCompleted,
-  );
-  if (!alreadyCompleted) {
-    verifyStageArtifacts(pd, stage);
-    verifySummaryConfirmationPrecondition(pd, stateContent, stage);
-    verifyPipelineLinkPrecondition(pd, stage);
-    verifyConstructionCheckpointPrecondition(pd, stateContent, stage, options.action);
-  }
+  });
 }
 
 // The router's view of admitStageAction: the same call, with the two throw
