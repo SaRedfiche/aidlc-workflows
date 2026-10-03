@@ -11,9 +11,8 @@
 // `.vs/GVP/FileContentIndex/<uuid>.vsidx` as "the file could not be hashed",
 // and the gate stayed refused across restarts.
 //
-// These tests pin `.vs` OUT of the fingerprint in both modes, prove an
-// unhashable file inside it no longer breaks the bind, and pin the explicit
-// `.aidlc-source-paths.json` registration escape back IN.
+// These tests pin `.vs` OUT of the fingerprint and prove an unhashable file
+// inside it no longer breaks the bind.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
