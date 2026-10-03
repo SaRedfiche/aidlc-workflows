@@ -444,12 +444,13 @@ function announceRemoval(argv: readonly string[], message: string): void {
   (argv.includes("--json") ? process.stderr : process.stdout).write(`${message}\n`);
 }
 
+// aidlc.cmd and its helper. The Git Bash launcher beside them has its own check:
+// a person's own bin\aidlc must not block uninstall, which keeps that file.
 function windowsLauncherOwnedByInstaller(): boolean {
   try {
     const helper = readFileSync(windowsShimPath(), "utf-8");
     return readFileSync(commandPath(), "utf-8") === windowsShim() &&
-      [windowsShimHelper(), ...previousWindowsShimHelpers()].includes(helper) &&
-      windowsPosixLauncherOwnedByInstaller();
+      [windowsShimHelper(), ...previousWindowsShimHelpers()].includes(helper);
   } catch {
     return false;
   }
@@ -1017,11 +1018,8 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
   const windows = process.platform === "win32";
   const shim = windows ? windowsShim() : unixShim();
   const shimHelper = windows ? windowsShimHelper() : null;
-  // The Git Bash launcher guard runs FIRST among the Windows integrity checks:
-  // the aggregate windowsLauncherOwnedByInstaller() below ANDs the posix-launcher
-  // check, so on an upgrade a foreign/directory bin/aidlc would otherwise trip
-  // that aggregate first and misreport the fault as the main command / aidlc.cmd.
-  // Reporting it here gives the accurate, actionable message.
+  // The Git Bash launcher guard runs first among the Windows integrity checks,
+  // so a foreign or directory bin/aidlc is named as itself.
   const posixCommand = windows ? windowsPosixCommandPath() : null;
   const posixShim = windowsPosixShim();
   if (
@@ -1142,7 +1140,7 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
       if (
         readActiveExecutable() !== resolve(target) ||
         (windows
-          ? !windowsLauncherOwnedByInstaller()
+          ? !windowsLauncherOwnedByInstaller() || !windowsPosixLauncherOwnedByInstaller()
           : !unixLauncherOwnedByInstaller())
       ) {
         throw new Error(`command pointer validation failed for ${version}`);
