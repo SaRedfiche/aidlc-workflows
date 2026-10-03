@@ -67,6 +67,7 @@ import {
   reviewerAgentSet,
 } from "./agent-knowledge.ts";
 import { renderNeutralOnboarding, renderOnboarding } from "./onboarding.ts";
+import { forgetPackagedSources, packageInputsFingerprint, recordPackagedSources } from "./package-sources.ts";
 import {
   buildPluginProjection as emitPluginProjection,
   type PluginTarget,
@@ -579,8 +580,12 @@ function writeHarnessData(treeRoot: string, m: HarnessManifest): void {
   // Emitted only when a manifest sets it, so the three-field output stays
   // byte-identical for every harness that does not -- which is all of them today.
   if (m.documentExtractors) data.documentExtractors = m.documentExtractors;
-  // Likewise conditional: only a host that gates hooks on trust declares it.
+  // Likewise conditional: only a host whose hooks wait on the person (trust, engine) declares it.
   if (m.hookActivation) data.hookActivation = m.hookActivation;
+  // Only the Kiro rows declare a layout; the runtime reads it in place of the row name.
+  if (m.kiroLayout) data.kiroLayout = m.kiroLayout;
+  // And only a host that cuts a shell result below the engine's cap.
+  if (m.directiveMaxBytes) data.directiveMaxBytes = m.directiveMaxBytes;
   const dst = join(treeRoot, HARNESS_DATA);
   mkdirSync(dirname(dst), { recursive: true });
   writeFileSync(dst, `${JSON.stringify(data, null, 2)}\n`);
@@ -611,9 +616,23 @@ function writeProjectionData(outRoot: string, treeRoot: string, m: HarnessManife
       throw new Error(`[${m.name}] root integration is not projected: ${integration.path}`);
     }
   }
+  // A directory that holds only root integrations (.vscode/ for settings.json)
+  // is the project's, not a managed engine directory.
+  const onlyRootIntegrations = (entry: string): boolean => {
+    const files: string[] = [];
+    const visit = (dir: string): void => {
+      for (const name of readdirSync(join(outRoot, dir))) {
+        const rel = `${dir}/${name}`;
+        if (statSync(join(outRoot, rel)).isDirectory()) visit(rel);
+        else files.push(rel);
+      }
+    };
+    visit(entry);
+    return files.length > 0 && files.every((file) => rootIntegrationPaths.has(file));
+  };
   const managedDirectories = readdirSync(outRoot)
     .filter((entry) => statSync(join(outRoot, entry)).isDirectory())
-    .filter((entry) => !rootIntegrationPaths.has(entry))
+    .filter((entry) => !rootIntegrationPaths.has(entry) && !onlyRootIntegrations(entry))
     .sort();
   const allowedTopLevel = new Set([
     ...managedDirectories,
@@ -1818,6 +1837,8 @@ if (check) {
       `for ${targets.join(", ")}.`,
   );
 } else {
+  const builtFrom = packageInputsFingerprint(REPO_ROOT);
+  forgetPackagedSources(REPO_ROOT, targets);
   cleanWriteOutputs(targets, named === undefined);
   for (const n of targets) {
     writeHarness(n);
@@ -1827,4 +1848,11 @@ if (check) {
   assertIdenticalRootIntegrations(join(REPO_ROOT, "dist-release"), targets);
   // Emit plugin projections (the hybrid: per-harness host plugins from plugins/<name>/)
   emitPlugins(targets);
+  // Last, so only a finished build from unchanged sources is recorded as current.
+  if (!recordPackagedSources(REPO_ROOT, targets, builtFrom)) {
+    console.error(
+      "[sources] a packaging input changed while packaging, so the generated trees may mix old and new files: run `bun scripts/package.ts` again.",
+    );
+    process.exit(1);
+  }
 }

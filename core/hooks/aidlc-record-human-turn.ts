@@ -59,6 +59,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
+  clearSessionIntentHandoff,
   enterHookWorkflow,
   hookStandsOutside,
   clearPlanApprovalChallenge,
@@ -77,7 +78,12 @@ import {
   withAuditLock,
 } from "../tools/aidlc-lib.ts";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
-import { applyTypedGuardSwitchPrompt, isTypedGuardSwitchPrompt, normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
+import {
+  applyTypedGuardSwitchPrompt,
+  isTypedGuardSwitchPrompt,
+  isTypedGuardSwitchQuestion,
+  normalizeRetiredGuardPolicyField,
+} from "../tools/aidlc-guard-switch.ts";
 import {
   PLAN_APPROVAL_OVERRIDE_PHRASE_RE,
   type PlanApprovalPickerQuestion,
@@ -288,6 +294,12 @@ try {
       };
     }
   } catch { /* presence still records without identity on legacy payloads */ }
+  // A new prompt starts a new turn: a one-shot stop left from an earlier turn
+  // (a switch's, or a creation's whose Stop never ran) is spent here, before
+  // any early return, so nothing chains onto it or ends this turn on it (#1263).
+  if (promptSubmitted && sessionId) {
+    try { clearSessionIntentHandoff(projectDir, sessionId); } catch { /* per-user runtime state */ }
+  }
   // A conversation that has not joined the selected workflow is not a human at
   // its gates: it mints nothing there and its typed switches do not reach it.
   const workflow = enterHookWorkflow(projectDir, sessionId);
@@ -340,15 +352,21 @@ try {
   if (existsSync(stateFilePath(projectDir))) {
     if (mintAllowed) {
       // A typed guard switch or break-glass request is an instruction to the
-      // framework, not an answer to the pending Plan Approval question.
+      // framework, not an answer to the pending Plan Approval question; a
+      // question about a switch ("skip plan approval?") is for the agent.
+      const switchQuestion = typedPrompt.length > 0 && isTypedGuardSwitchQuestion(typedPrompt);
       const notAReply = typedPrompt.length > 0 && (
         typedPrompt.trim().startsWith("/") ||
         isTypedGuardSwitchPrompt(typedPrompt) ||
+        switchQuestion ||
         PLAN_APPROVAL_OVERRIDE_PHRASE_RE.test(typedPrompt.trim())
       );
       let replyNotice: string | null = null;
       let keptWordsOffset: number | null = null;
       let parkRequested = false;
+      // "Review the plan" is the person's request to see the plan; it is never
+      // also the answer to another question.
+      let planReviewRequested = false;
       try {
         withAuditLock(projectDir, () => {
           appendAuditEntryUnlocked("HUMAN_TURN", sessionId ? { Session: sessionId } : {}, projectDir);
@@ -370,9 +388,11 @@ try {
           }
           // The engine's own Plan Approval question, when one is open, owns the
           // reply: it is read in the person's own words from whichever chat it
-          // arrives in, and the hook records the answer itself.
+          // arrives in, and the hook records the answer itself. A question about
+          // a switch reaches it too: read as a question, it records nothing and
+          // a later plain yes no longer counts as the answer.
           let engineQuestionAnswered = false;
-          if (humanResponseText && !notAReply) {
+          if (humanResponseText && (!notAReply || switchQuestion)) {
             const reply = recordPlanApprovalAskReply(projectDir, sessionId, humanResponseText, pickerQuestion);
             if (reply) {
               replyNotice = reply.notice;
@@ -380,9 +400,22 @@ try {
               parkRequested = reply.stopForNow === true;
             } else if (typedPrompt) {
               replyNotice = recordPlanApprovalReviewRequest(projectDir, typedPrompt);
+              planReviewRequested = replyNotice !== null;
+              // Asking to see the plan says nothing about what should change, so
+              // a later Request Changes at a gate never takes these words.
+              if (planReviewRequested && sessionId && keptWordsOffset !== null) {
+                try {
+                  forgetGateWords(projectDir, sessionId, keptWordsOffset);
+                  keptWordsOffset = null;
+                } catch {
+                  // The words are a convenience; the turn and its request stand.
+                }
+              }
             }
           }
-          if (!engineQuestionAnswered && sessionId && humanResponseText) {
+          // A reply taken as "review the plan" is that request only: no open
+          // question reads it as its answer.
+          if (!engineQuestionAnswered && !planReviewRequested && sessionId && humanResponseText) {
             const plan = existsSync(join(projectDir, planApprovalChallengeRelativePath(projectDir, sessionId)));
             const protectedQuestion = existsSync(join(projectDir, protectedQuestionRelativePath(projectDir, sessionId)));
             if (plan && protectedQuestion) {
@@ -426,7 +459,7 @@ try {
         // A reply the engine's guard-recovery ask took as its answer is that
         // ask's, not revision feedback for a stage gate.
         const offset = keptWordsOffset;
-        if (consumeSharedDirectiveAsk(projectDir, humanResponseText) && offset !== null) {
+        if (!planReviewRequested && consumeSharedDirectiveAsk(projectDir, humanResponseText) && offset !== null) {
           try {
             withAuditLock(projectDir, () => forgetGateWords(projectDir, sessionId, offset));
           } catch {

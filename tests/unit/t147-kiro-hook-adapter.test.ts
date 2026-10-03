@@ -49,6 +49,7 @@ import {
   markSubagentInflight,
   readAuditShardEvents,
   readIntentRegistry,
+  readSessionBinding,
   sanitizeHarnessPlainText,
   splitKiroCommandArgs,
   subagentInflightMarkerPath,
@@ -1375,6 +1376,37 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
     }
   });
 
+  test("5c2: a host agent in .kiro/agents is dispatched untouched; the same files claiming a persona are held to it", () => {
+    const dir = scratchProject(true);
+    try {
+      cpSync(join(REPO_ROOT, "dist", "kiro", "aidlc"), join(dir, "aidlc"), { recursive: true });
+      const hostMarkdown = join(dir, ".kiro", "agents", "reviewer-agent.md");
+      const hostBody = "---\nname: reviewer-agent\ndescription: Reviews diffs.\ntools: [\"read\"]\n---\n\nReview the diff.\n";
+      writeFileSync(hostMarkdown, hostBody);
+      writeFileSync(
+        join(dir, ".kiro", "agents", "reviewer-agent.json"),
+        JSON.stringify({ name: "reviewer-agent", resources: ["file://README.md"] }),
+      );
+      const payload = {
+        ...FIXTURES.preToolUse_invoke_sub_agent as Record<string, unknown>,
+        cwd: dir,
+        tool_name: "subagent",
+        tool_input: { name: "reviewer-agent", prompt: "Review the diff." },
+      };
+
+      const host = runAdapter(dir, "deliver-stage-rules", payload);
+      expect(host.code, host.stderr).toBe(0);
+      expect(host.stderr).not.toContain("Worker dispatch blocked");
+
+      writeFileSync(hostMarkdown, hostBody.replace("description:", "display_name: Reviewer\ndescription:"));
+      const persona = runAdapter(dir, "deliver-stage-rules", payload);
+      expect(persona.code).toBe(2);
+      expect(persona.stderr).toContain("Worker dispatch blocked");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test.each([
     ["empty resources", JSON.stringify({ resources: [] })],
     ["absent resources", "{}"],
@@ -1962,11 +1994,16 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       expect(first.code).toBe(0);
       const stampPath = join(dir, "aidlc", ".aidlc-sessions", sid);
       expect(readFileSync(stampPath, "utf-8").trim()).toBe(a.uuid);
-      // Move the live cursor to B — a genuine drift A→B.
-      createIntent(dir, "intent-b", "default");
+      // Move the live cursor to B, a genuine drift from A to B. Another
+      // conversation creates B: without its session id, createIntent binds
+      // whichever session the test process's ancestry names, which on a slow
+      // host is this one, and then there is no drift left for the offer check
+      // to prove anything.
+      createIntent(dir, "intent-b", "default", undefined, undefined, "kiro-other-session");
+      expect(readSessionBinding(dir, sid)?.intent).toBe(a.dirName);
       // Fire again with a resume-shaped payload. Because Kiro coerces to
-      // startup, the core hook takes the STARTED path (re-stamps to B), never
-      // the RESUMED offer path.
+      // startup, the core hook takes the STARTED path, never the RESUMED offer
+      // path: the session's binding still selects A, so it re-stamps A.
       const second = runAdapter(dir, "session-start", {
         ...(FIXTURES.agentSpawn as object),
         session_id: sid,
@@ -1974,6 +2011,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       });
       expect(second.code).toBe(0);
       expect(second.stdout).not.toContain("INTENT REBIND OFFER");
+      expect(readFileSync(stampPath, "utf-8").trim()).toBe(a.uuid);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
