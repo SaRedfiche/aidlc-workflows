@@ -1,8 +1,8 @@
-// covers: file:core/tools/aidlc-lifecycle.ts file:core/tools/aidlc-install-paths.ts
+// covers: file:core/tools/aidlc-lifecycle.ts file:core/tools/aidlc-install-paths.ts file:core/tools/aidlc-doctor.ts
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -11,6 +11,8 @@ import {
   windowsPosixLauncherBodyIsOwned,
 } from "../../core/tools/aidlc-install-paths.ts";
 import { windowsPosixShim } from "../../core/tools/aidlc-lifecycle.ts";
+import { REPO_ROOT } from "../harness/fixtures.ts";
+import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 
 // Behavioral tests below run wherever a POSIX /bin/sh exists — Linux + macOS
 // runners AND the Windows merge queue (Git Bash provides /bin/sh). Gating on
@@ -237,4 +239,56 @@ describe("windows extensionless git bash launcher", () => {
       expect(body).not.toBe(windowsPosixShim());
     }
   });
+
+  // Git Bash, where Claude Code runs its hooks on Windows, needs the
+  // extensionless launcher; doctor must not read healthy without it.
+  test.skipIf(process.platform !== "win32")(
+    "doctor fails while Git Bash cannot run a bare aidlc, and names the step that fixes it",
+    () => {
+      const machine = mkdtempSync(join(tmpdir(), "aidlc-gitbash-doctor-"));
+      const project = mkdtempSync(join(tmpdir(), "aidlc-gitbash-doctor-project-"));
+      try {
+        cpSync(join(REPO_ROOT, "dist", "claude"), project, { recursive: true });
+        const bin = join(machine, "bin");
+        mkdirSync(bin, { recursive: true });
+        writeFileSync(join(bin, "aidlc.cmd"), "@echo off\r\n");
+        const env = { ...process.env, AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: bin };
+        const rowStarting = (prefix: string) => {
+          const r = spawnSync(process.execPath, [join(project, ".claude", "tools", "aidlc.ts"), "doctor", "--json", "--project-dir", project], {
+            cwd: project,
+            encoding: "utf-8",
+            env,
+            timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          });
+          const report = JSON.parse(r.stdout) as { data?: { checks?: Array<{ pass: boolean; label: string; fix?: string }> } };
+          return (report.data?.checks ?? []).find((check) => check.label.startsWith(prefix));
+        };
+        const row = () => rowStarting("Windows launcher (Git Bash)");
+        // Only aidlc.cmd: what W5-CC's install had. No version marker, so the installer is the fix.
+        expect(row()).toEqual({
+          pass: false,
+          label: "Windows launcher (Git Bash): a bare `aidlc` does not run in Git Bash, so hooks that call it fail there",
+          fix: "rerun the AI-DLC installer (install.ps1)",
+        });
+        // Once a workflow has started with no hook run, the hooks row names this
+        // cause and its fix, never /hooks (nothing there to approve).
+        const created = spawnSync(process.execPath, [
+          join(project, ".claude", "tools", "aidlc-utility.ts"),
+          "intent-create", "--scope", "bugfix", "--label", "git bash", "--arguments", "fix the flag parser",
+        ], { cwd: project, encoding: "utf-8", env, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+        expect(created.status, created.stderr).toBe(0);
+        const never = rowStarting("Hooks have never executed");
+        expect(never?.fix).toBe("Git Bash cannot run a bare `aidlc`, so no hook runs: rerun the AI-DLC installer (install.ps1)");
+        writeFileSync(join(bin, "aidlc"), windowsPosixShim());
+        expect(row()?.pass).toBe(true);
+        writeFileSync(join(bin, "aidlc"), "#!/bin/sh\necho not ours\n");
+        const foreign = row();
+        expect(foreign?.pass).toBe(false);
+        expect(foreign?.fix).toBe(`move ${join(bin, "aidlc")} aside, then rerun the AI-DLC installer (install.ps1)`);
+      } finally {
+        rmSync(machine, { recursive: true, force: true });
+        rmSync(project, { recursive: true, force: true });
+      }
+    },
+  );
 });

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import {
   basename,
@@ -217,6 +217,46 @@ export function previousWindowsPosixShims(): readonly string[] {
 // desync between install and uninstall.
 export function windowsPosixLauncherBodyIsOwned(body: string): boolean {
   return body === windowsPosixShim() || previousWindowsPosixShims().includes(body);
+}
+
+export type WindowsGitBashLauncherState =
+  | { ok: true }
+  | { ok: false; launcher: string; foreign: boolean; fix: string };
+
+// Whether Git Bash, where Claude Code runs its hooks on Windows, can run a bare
+// `aidlc` from this native install: only through the extensionless launcher
+// beside aidlc.cmd. Null off Windows and when there is no native command here.
+export function windowsGitBashLauncherState(): WindowsGitBashLauncherState | null {
+  const launcher = windowsPosixCommandPath();
+  if (launcher === null || !existsSync(commandPath())) return null;
+  let version: string | null = null;
+  try {
+    version = readVersionMarker(activeVersionPath());
+  } catch {
+    // The fix falls back to the installer.
+  }
+  const repair = version ? `run \`aidlc use ${version}\`` : "rerun the AI-DLC installer (install.ps1)";
+  let body: string | null = null;
+  let present = false;
+  try {
+    const info = lstatSync(launcher);
+    present = true;
+    if (info.isFile()) body = readFileSync(launcher, "utf-8");
+  } catch {
+    // Missing.
+  }
+  if (body !== null && windowsPosixLauncherBodyIsOwned(body)) return { ok: true };
+  return present
+    ? { ok: false, launcher, foreign: true, fix: `move ${launcher} aside, then ${repair}` }
+    : { ok: false, launcher, foreign: false, fix: repair };
+}
+
+// The hooks' fix when Git Bash cannot run `aidlc` (then no hook runs there),
+// or null when that is not the cause: callers name it before generic advice.
+export function gitBashLauncherRecovery(): string | null {
+  const state = windowsGitBashLauncherState();
+  if (state === null || state.ok) return null;
+  return `Git Bash cannot run a bare \`aidlc\`, so no hook runs: ${state.fix}`;
 }
 
 export function packageManagerForExecutable(
