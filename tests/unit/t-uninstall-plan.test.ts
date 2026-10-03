@@ -151,8 +151,11 @@ function plan(fixture: Fixture, purge = false): ReturnType<typeof buildUninstall
   const result = readOnly(fixture, () => buildUninstallPlan(purge));
   expect(new Set(result.files.map((file) => file.path)).size).toBe(result.files.length);
   expect(new Set(result.directories).size).toBe(result.directories.length);
+  // The bin directory may sit outside the install root; the command and, on
+  // Windows, the Git Bash launcher beside it are the only files planned there.
+  const besideCommand = [fixture.command, join(fixture.bin, "aidlc")];
   for (const file of result.files) {
-    expect(file.path === fixture.command || file.path.startsWith(`${fixture.root}${sep}`)).toBe(true);
+    expect(besideCommand.includes(file.path) || file.path.startsWith(`${fixture.root}${sep}`), file.path).toBe(true);
     const stat = lstatSync(file.path);
     if (file.path === fixture.command && process.platform !== "win32" && stat.isSymbolicLink()) {
       expect(file.expected).toBe(`symlink:${readlinkSync(file.path)}`);

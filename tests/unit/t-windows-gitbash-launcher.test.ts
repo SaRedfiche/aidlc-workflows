@@ -72,7 +72,9 @@ describe("windows extensionless git bash launcher", () => {
 
   test("the launcher path is bin/aidlc on Windows and null elsewhere", () => {
     const previous = process.env.AIDLC_BIN_DIR;
-    const bin = join("/tmp", "aidlc-bin-fixture");
+    // Absolute on every platform: on Windows the bin root is resolved, so a
+    // drive-less "/tmp" path comes back as "C:\tmp".
+    const bin = join(tmpdir(), "aidlc-bin-fixture");
     process.env.AIDLC_BIN_DIR = bin;
     try {
       const path = windowsPosixCommandPath();
@@ -324,7 +326,14 @@ describe("windows extensionless git bash launcher", () => {
         const bin = join(machine, "bin");
         const project = join(root, "project");
         mkdirSync(join(project, ".git"), { recursive: true });
-        const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: bin, NO_COLOR: "1" };
+        // A missing gh: the fixture release has no real attestation to verify.
+        const env: NodeJS.ProcessEnv = {
+          ...process.env,
+          AIDLC_INSTALL_ROOT: machine,
+          AIDLC_BIN_DIR: bin,
+          AIDLC_GH_BIN: join(root, "no-gh", "gh.exe"),
+          NO_COLOR: "1",
+        };
         delete env.AIDLC_TEST_CONFIG_TTY;
         const lifecycle = (args: string[], extra: NodeJS.ProcessEnv = {}, input = "") => {
           const r = spawnSync(process.execPath, [join(REPO_ROOT, "core", "tools", "aidlc-lifecycle.ts"), ...args], {
