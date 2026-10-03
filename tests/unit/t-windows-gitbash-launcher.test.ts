@@ -2,7 +2,17 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -11,8 +21,14 @@ import {
   windowsPosixLauncherBodyIsOwned,
 } from "../../core/tools/aidlc-install-paths.ts";
 import { windowsPosixShim } from "../../core/tools/aidlc-lifecycle.ts";
+import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
-import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { writeReleaseFixture } from "../harness/release-fixture.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 
 // Behavioral tests below run wherever a POSIX /bin/sh exists — Linux + macOS
 // runners AND the Windows merge queue (Git Bash provides /bin/sh). Gating on
@@ -290,5 +306,82 @@ describe("windows extensionless git bash launcher", () => {
         rmSync(project, { recursive: true, force: true });
       }
     },
+  );
+
+  // A person's own bin\aidlc, such as a hand-made forwarder: they asked to
+  // update or switch, not to overwrite it. At a terminal it asks once (Enter
+  // means yes), --yes answers yes, and otherwise the refusal names the step.
+  // Their file is kept either way.
+  test.skipIf(process.platform !== "win32")(
+    "an aidlc in bin that AI-DLC did not write is asked about once, kept as a backup, then replaced",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "aidlc-gitbash-foreign-"));
+      try {
+        const release = join(root, "release");
+        mkdirSync(release);
+        writeReleaseFixture({ root: release, repoRoot: REPO_ROOT, version: AIDLC_VERSION, binary: "executable" });
+        const machine = join(root, "machine");
+        const bin = join(machine, "bin");
+        const project = join(root, "project");
+        mkdirSync(join(project, ".git"), { recursive: true });
+        const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: bin, NO_COLOR: "1" };
+        delete env.AIDLC_TEST_CONFIG_TTY;
+        const lifecycle = (args: string[], extra: NodeJS.ProcessEnv = {}, input = "") => {
+          const r = spawnSync(process.execPath, [join(REPO_ROOT, "core", "tools", "aidlc-lifecycle.ts"), ...args], {
+            cwd: project,
+            encoding: "utf-8",
+            env: { ...env, ...extra },
+            input,
+            timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          });
+          return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+        };
+        const installed = lifecycle(["update", "--version", AIDLC_VERSION, "--from", release]);
+        expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+        const launcher = join(bin, "aidlc");
+        const own = "#!/bin/sh\nexec \"$(dirname \"$0\")/aidlc.cmd\" \"$@\"\n";
+        const backups = () => readdirSync(bin).filter((name) => name.startsWith("aidlc.bak-")).sort();
+
+        // No terminal and no --yes: left as it is, and the step is named.
+        writeFileSync(launcher, own);
+        const refused = lifecycle(["use", AIDLC_VERSION]);
+        expect(refused.status).toBe(4);
+        expect(refused.stdout + refused.stderr).toContain(
+          `${launcher} wasn't made by AI-DLC, so it was left as it is. Move ${launcher} aside, then run this command again.`,
+        );
+        expect(readFileSync(launcher, "utf-8")).toBe(own);
+        expect(backups()).toEqual([]);
+
+        // At a terminal, "n" leaves it as well.
+        const declined = lifecycle(["use", AIDLC_VERSION], { AIDLC_TEST_CONFIG_TTY: "1" }, "n\n");
+        expect(declined.status).toBe(1);
+        expect(declined.stdout).toContain(
+          `${launcher} wasn't made by AI-DLC. Replace it with AI-DLC's launcher? Your file is kept as ${launcher}.bak-`,
+        );
+        expect(readFileSync(launcher, "utf-8")).toBe(own);
+        expect(backups()).toEqual([]);
+
+        // Enter means yes: AI-DLC's launcher is written and one line says where the old file went.
+        const accepted = lifecycle(["use", AIDLC_VERSION], { AIDLC_TEST_CONFIG_TTY: "1" }, "\n");
+        expect(accepted.status, accepted.stdout + accepted.stderr).toBe(0);
+        expect(readFileSync(launcher, "utf-8")).toBe(windowsPosixShim());
+        expect(backups()).toHaveLength(1);
+        const kept = join(bin, backups()[0]);
+        expect(readFileSync(kept, "utf-8")).toBe(own);
+        expect(accepted.stdout).toContain(`Replaced ${launcher} with AI-DLC's launcher; your file is now ${kept}.`);
+
+        // --yes answers yes for a script or an agent; with --json the line stays off stdout.
+        writeFileSync(launcher, own);
+        const scripted = lifecycle(["update", "--version", AIDLC_VERSION, "--from", release, "--yes", "--json"]);
+        expect(scripted.status, scripted.stdout + scripted.stderr).toBe(0);
+        expect(JSON.parse(scripted.stdout).ok).toBe(true);
+        expect(scripted.stderr).toContain(`Replaced ${launcher} with AI-DLC's launcher; your file is now ${launcher}.bak-`);
+        expect(readFileSync(launcher, "utf-8")).toBe(windowsPosixShim());
+        expect(backups()).toHaveLength(2);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 });

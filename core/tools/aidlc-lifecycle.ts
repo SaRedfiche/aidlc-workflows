@@ -10,6 +10,7 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  renameSync,
   rmSync,
   rmdirSync,
   statSync,
@@ -28,6 +29,7 @@ import {
   emitResult,
   failure,
   globalOptions,
+  readTerminalLine,
   success,
   usage,
   valueAfter,
@@ -179,6 +181,7 @@ const PUBLIC_LIFECYCLE_GRAMMARS: Readonly<
       "--no-color",
       "--offline",
       "--quiet",
+      "--yes",
     ]),
     positionals: 0,
   },
@@ -194,6 +197,7 @@ const PUBLIC_LIFECYCLE_GRAMMARS: Readonly<
       "--no-color",
       "--offline",
       "--quiet",
+      "--yes",
     ]),
     positionals: 1,
   },
@@ -469,6 +473,47 @@ function windowsPosixLauncherOwnedByInstaller(): boolean {
   } catch {
     return false;
   }
+}
+
+// A bin\aidlc that AI-DLC did not write, such as a hand-made Git Bash
+// forwarder. A directory is a name clash, not a launcher to replace; activation
+// names it.
+function foreignWindowsPosixLauncher(): string | null {
+  const path = windowsPosixCommandPath();
+  if (path === null || !existsSync(path) || windowsPosixLauncherOwnedByInstaller()) return null;
+  return statSync(path, { throwIfNoEntry: false })?.isDirectory() ? null : path;
+}
+
+function foreignWindowsPosixLauncherRefusal(path: string): string {
+  return `${path} wasn't made by AI-DLC, so it was left as it is. Move ${path} aside, then run this command again.`;
+}
+
+type LauncherReplacement = { backup: string; out: { write(text: string): unknown } };
+
+// The person asked to install or switch versions, not to overwrite their own
+// file, so at a terminal this asks once (Enter means yes), --yes answers yes
+// for a script or an agent, and otherwise the refusal names the step. It asks
+// before any download or lock; activation moves the file.
+function windowsPosixLauncherReplacement(argv: readonly string[]): LauncherReplacement | undefined {
+  const path = foreignWindowsPosixLauncher();
+  if (path === null) return undefined;
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+  let backup = `${path}.bak-${stamp}`;
+  for (let n = 2; pathEntryExists(backup); n += 1) backup = `${path}.bak-${stamp}-${n}`;
+  const out = argv.includes("--json") || argv.includes("--quiet") ? process.stderr : process.stdout;
+  if (argv.includes("--yes")) return { backup, out };
+  if (!process.stdin.isTTY && process.env.AIDLC_TEST_CONFIG_TTY !== "1") {
+    commandError(foreignWindowsPosixLauncherRefusal(path), EXIT.integrity);
+  }
+  const answer = readTerminalLine(
+    `${path} wasn't made by AI-DLC. Replace it with AI-DLC's launcher? Your file is kept as ${backup}. [Y/n]:`,
+    0,
+    out,
+  );
+  if (answer === null || !/^\s*(?:y|yes)?\s*$/i.test(answer)) {
+    commandError(foreignWindowsPosixLauncherRefusal(path), EXIT.failure);
+  }
+  return { backup, out };
 }
 
 function unixLauncherOwnedByInstaller(): boolean {
@@ -992,7 +1037,7 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
       info?.isDirectory()
         ? `${posixCommand} is a directory, not the Git Bash launcher file; ` +
             "remove or rename it, then re-run install"
-        : `existing ${posixCommand} is not owned by this AI-DLC install`,
+        : foreignWindowsPosixLauncherRefusal(posixCommand),
       EXIT.integrity,
     );
   }
@@ -1119,10 +1164,25 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
   });
 }
 
-export function activate(version: string, options: { failAfter?: number } = {}): void {
+export function activate(
+  version: string,
+  options: { failAfter?: number; replaceLauncher?: LauncherReplacement } = {},
+): void {
   const releaseReservation = reserveVersion(version);
   try {
-    activateReserved(version, options);
+    // The person's file moves only now, and comes back if activation fails.
+    const replace = options.replaceLauncher;
+    const moved = replace ? foreignWindowsPosixLauncher() : null;
+    if (replace && moved !== null) renameSync(moved, replace.backup);
+    try {
+      activateReserved(version, { failAfter: options.failAfter });
+    } catch (error) {
+      if (replace && moved !== null && !pathEntryExists(moved)) renameSync(replace.backup, moved);
+      throw error;
+    }
+    if (replace && moved !== null) {
+      replace.out.write(`Replaced ${moved} with AI-DLC's launcher; your file is now ${replace.backup}.\n`);
+    }
   } finally {
     releaseReservation();
   }
@@ -1500,6 +1560,7 @@ async function installVersion(options: {
   caBundle?: string;
   channel?: ReleaseChannel;
   apiUrl?: string;
+  replaceLauncher?: LauncherReplacement;
 }): Promise<{ version: string; distributions: string[] }> {
   // An explicit version or local directory bypasses discovery. Otherwise the
   // stable channel is the `latest/download` redirect and the preview channel is
@@ -1635,7 +1696,7 @@ async function installVersion(options: {
           }],
         });
       }
-      if (options.activate) activate(version);
+      if (options.activate) activate(version, { replaceLauncher: options.replaceLauncher });
     }
     return { version, distributions };
   } finally {
@@ -2025,6 +2086,7 @@ async function updateCommand(argv: string[]): Promise<CommandResult> {
     caBundle: valueAfter(argv, "--ca-bundle"),
     channel,
     apiUrl,
+    replaceLauncher: dryRun ? undefined : windowsPosixLauncherReplacement(argv),
   });
   // Moving between channels is a switch, never a downgrade error: the newest
   // stable sorts below a preview built after it, and converging on it is the
@@ -2124,7 +2186,7 @@ function rollbackCommand(argv: string[]): ReturnType<typeof success> {
         "to roll back anyway, without them, run it again with --allow-harness-loss",
     );
   }
-  activate(target);
+  activate(target, { replaceLauncher: windowsPosixLauncherReplacement(argv) });
   return success(`rolled back to ${target}`, { version: target });
 }
 
@@ -2341,6 +2403,7 @@ async function useCommand(argv: string[]): Promise<CommandResult> {
     const reason = inspectInstalledVersion(version).reason ?? "integrity validation failed";
     commandError(`retained version ${version} is incomplete: ${reason}`, EXIT.integrity);
   }
+  const replaceLauncher = windowsPosixLauncherReplacement(argv);
   if (!completeVersion(version)) {
     await installVersion({
       version,
@@ -2352,7 +2415,7 @@ async function useCommand(argv: string[]): Promise<CommandResult> {
       caBundle: valueAfter(argv, "--ca-bundle"),
     });
   }
-  activate(version);
+  activate(version, { replaceLauncher });
   return success(`active AI-DLC version set to ${version}`, { version });
 }
 
@@ -2587,6 +2650,7 @@ export async function main(input: string[]): Promise<void> {
             dryRun: false,
             baseUrl: valueAfter(argv, "--release-base-url"),
             caBundle: valueAfter(argv, "--ca-bundle"),
+            replaceLauncher: windowsPosixLauncherReplacement(argv),
           })).version}`,
         )
       : usage("unknown lifecycle command");

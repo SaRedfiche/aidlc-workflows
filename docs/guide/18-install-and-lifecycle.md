@@ -195,7 +195,7 @@ installation uses `status: "failed"`, exit code 1, `data.installed: true`, and
 | `--ca-bundle <absolute-path>` | `-CaBundle <absolute-path>` | Use a custom CA bundle |
 | `--profile <absolute-path>` | Not available | Transactionally add the Unix PATH block |
 | Not available | `-NoModifyPath` | Skip persistent User PATH and current-process PATH changes; print a direct command |
-| `--yes` | `-Yes` | Automation mode; it does not bypass integrity checks |
+| `--yes` | `-Yes` | Automation mode; it does not bypass integrity checks. On Windows it also replaces an `aidlc` in the bin directory that AI-DLC did not write, keeping that file as a backup |
 | `--quiet` | `-Quiet` | Suppress progress and emit one result line |
 | `--json` | `-Json` | Suppress progress and emit one schema-versioned JSON result |
 | `--no-color` | `-NoColor` | Disable color output |
@@ -1324,7 +1324,11 @@ check. Warnings are advisory and exit 0; any failed check exits 1.
 project context without changing the shell directory. Destructive operations
 such as `uninstall` ask nothing on a TTY: they print what they remove and
 keep, then do it. Without a TTY they require `--yes`. `--yes` never bypasses
-ownership, integrity, active-workflow, or release-authentication refusals.
+ownership, integrity, active-workflow, or release-authentication refusals, with
+one exception on Windows: an `aidlc` in the bin directory that AI-DLC did not
+write, such as a hand-made Git Bash forwarder. `aidlc use`, `aidlc update` and
+the installer ask once at a terminal whether to replace it; `--yes` answers
+yes, and the file is kept beside it as `aidlc.bak-<time>`.
 
 | Code | Meaning |
 |------|---------|
