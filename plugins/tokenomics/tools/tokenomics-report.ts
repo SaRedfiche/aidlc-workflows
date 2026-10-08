@@ -177,6 +177,11 @@ export type ReportModel = {
   sessionCount: number;
   // Known rate-table keys, so the renderer can flag an unknown-model slice.
   knownModels: Set<string>;
+  // True when the usage-ledger module could not be loaded for an UNEXPECTED
+  // reason (not a plain pre-compose absence). Surfaced in the report body AND
+  // via a non-zero exit code so a "no usage" artifact is never mistaken for a
+  // silent load failure.
+  loadError: boolean;
 };
 
 // Build the report model from a feature aggregate. Pure given its inputs.
@@ -187,8 +192,10 @@ export function buildReportModel(args: {
   stagePhase: StagePhaseMap;
   knownModels: Set<string>;
   trackingDisabled: boolean;
+  loadError?: boolean;
 }): ReportModel {
   const { feature, aggregate, sessionCount, stagePhase, knownModels, trackingDisabled } = args;
+  const loadError = args.loadError ?? false;
   if (!aggregate || !hasAnyTokens(aggregate.totals)) {
     return {
       hasData: false,
@@ -200,6 +207,7 @@ export function buildReportModel(args: {
       byAgent: [],
       sessionCount,
       knownModels,
+      loadError,
     };
   }
   return {
@@ -212,6 +220,7 @@ export function buildReportModel(args: {
     byAgent: costByKey(aggregate.byAgent),
     sessionCount,
     knownModels,
+    loadError,
   };
 }
 
@@ -227,11 +236,19 @@ export function renderMarkdown(m: ReportModel): string {
   const L: string[] = [];
   L.push(`# AI tokenomics — ${m.feature}`);
   L.push("");
+  if (m.loadError) {
+    L.push(
+      "> ⚠ **Could not load the usage ledger module** — this report could not read usage. This is a load failure, NOT an absence of usage: if a workshop recorded cost, it is not reflected below. Fix the install (re-run the plugin compose / `plugin-sync`) and re-run.",
+    );
+    L.push("");
+  }
   if (!m.hasData) {
     L.push(
       m.trackingDisabled
         ? "Usage tracking is disabled (`AIDLC_DISABLE_USAGE_TRACKING=1`), so no cost was recorded for this feature."
-        : "No usage was recorded for this feature. Token/cost capture is wired only in the Claude harness; on other harnesses the ledger is empty.",
+        : m.loadError
+          ? "No cost is shown because the ledger could not be read (see the warning above)."
+          : "No usage was recorded for this feature. Token/cost capture is wired only in the Claude harness; on other harnesses the ledger is empty.",
     );
     return `${L.join("\n")}\n`;
   }
@@ -291,6 +308,9 @@ export function renderMarkdown(m: ReportModel): string {
 // Render a compact terminal summary. Pure.
 export function renderTable(m: ReportModel): string {
   if (!m.hasData) {
+    if (m.loadError) {
+      return `tokenomics — ${m.feature}: ⚠ could not load the usage ledger module — load failure, not an absence of usage. Fix the install and re-run.\n`;
+    }
     return m.trackingDisabled
       ? `tokenomics — ${m.feature}: usage tracking disabled, nothing recorded.\n`
       : `tokenomics — ${m.feature}: no usage recorded (Claude-harness-only capture).\n`;
@@ -318,6 +338,7 @@ export function toJsonView(m: ReportModel): Record<string, unknown> {
   return {
     hasData: m.hasData,
     trackingDisabled: m.trackingDisabled,
+    loadError: m.loadError,
     feature: m.feature,
     totals: m.totals,
     phases: m.phases,
@@ -419,17 +440,31 @@ export function main(argv: string[]): number {
   // never left reading "no usage recorded" when the ledger actually failed to
   // load. stdout (the report contract) is unchanged either way.
   let core: UsageCore | null = null;
+  let loadError = false;
   try {
     core = require("./aidlc-usage.ts") as UsageCore;
   } catch (err) {
     core = null;
     const msg = err instanceof Error ? err.message : String(err);
-    // MODULE_NOT_FOUND is the expected pre-compose case; anything else is an
-    // unexpected load failure worth surfacing.
-    const expectedMissing = /cannot find module|module_not_found/i.test(msg);
+    // The ONLY expected failure is the sibling itself being absent (pre-compose
+    // / a harness with no producer): that is the honest empty-state path. A
+    // module-not-found for ANY OTHER module (a missing TRANSITIVE dependency of
+    // a present aidlc-usage.ts), or any other error shape, is an UNEXPECTED load
+    // failure — flag it so stdout/exit surface it, never silently "no usage".
+    //
+    // Classify on the QUOTED missing-module name only. The runtime error reads
+    // `Cannot find module '<missing>' imported from '<importer>'`, and the
+    // importer tail is always .../aidlc-usage.ts here — so matching the whole
+    // message would wrongly treat a transitive miss (missing <missing>, importer
+    // aidlc-usage.ts) as the expected case. Pull out `<missing>` and check only
+    // that it names aidlc-usage.
+    const missingModule = msg.match(/cannot find module ['"]([^'"]+)['"]/i)?.[1];
+    const expectedMissing =
+      missingModule !== undefined && /aidlc-usage(\.ts)?$/i.test(missingModule);
     if (!expectedMissing) {
+      loadError = true;
       process.stderr.write(
-        `tokenomics-report: could not load the usage ledger module (${msg}); reporting empty state. If a workshop recorded usage, this is a load failure, not an absence of usage.\n`,
+        `tokenomics-report: could not load the usage ledger module (${msg}); reporting a load-failure state, not an absence of usage.\n`,
       );
     }
   }
@@ -443,6 +478,7 @@ export function main(argv: string[]): number {
       stagePhase: {},
       knownModels: new Set(),
       trackingDisabled,
+      loadError,
     });
   } else {
     const workflowKey = core.intentUsageKey(projectDir, sessionId);
@@ -472,7 +508,10 @@ export function main(argv: string[]): number {
   } else {
     process.stdout.write(renderMarkdown(model));
   }
-  return 0;
+  // Non-zero only on an UNEXPECTED ledger-load failure, so an agent/harness
+  // step that checks the exit code sees it even if it captured only stdout. A
+  // genuinely-empty ledger (expected absence) is still a success (0).
+  return model.loadError ? 1 : 0;
 }
 
 if (import.meta.main) {

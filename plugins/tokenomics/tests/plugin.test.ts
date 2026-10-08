@@ -219,6 +219,23 @@ describe("renderMarkdown", () => {
     });
     expect(renderMarkdown(disabled)).toContain("AIDLC_DISABLE_USAGE_TRACKING");
   });
+
+  test("surfaces a ledger load failure in the report body, distinct from empty", () => {
+    const failed = buildReportModel({
+      feature: "f1",
+      aggregate: null,
+      sessionCount: 0,
+      stagePhase: STAGE_PHASE,
+      knownModels: KNOWN,
+      trackingDisabled: false,
+      loadError: true,
+    });
+    const out = renderMarkdown(failed);
+    expect(out).toContain("Could not load the usage ledger module");
+    expect(out).toContain("load failure");
+    // Must NOT read as a benign "no usage recorded".
+    expect(out).not.toContain("Token/cost capture is wired only in the Claude harness");
+  });
 });
 
 describe("renderTable", () => {
@@ -235,6 +252,19 @@ describe("renderTable", () => {
     expect(out).toContain("estimated cost");
     expect(out).toContain("list-price estimate");
     expect(out).toContain("$6.00");
+  });
+
+  test("surfaces a load failure in the terminal summary", () => {
+    const failed = buildReportModel({
+      feature: "f1",
+      aggregate: null,
+      sessionCount: 0,
+      stagePhase: STAGE_PHASE,
+      knownModels: KNOWN,
+      trackingDisabled: false,
+      loadError: true,
+    });
+    expect(renderTable(failed)).toContain("could not load the usage ledger");
   });
 });
 
@@ -259,6 +289,20 @@ describe("toJsonView", () => {
     const view = toJsonView(m) as { byModel: { key: string; usd: number | null }[] };
     const opus = view.byModel.find((r) => r.key === "opus-4-8");
     expect(opus?.usd).toBeCloseTo(4.0);
+  });
+
+  test("carries the loadError flag", () => {
+    const failed = buildReportModel({
+      feature: "f1",
+      aggregate: null,
+      sessionCount: 0,
+      stagePhase: STAGE_PHASE,
+      knownModels: KNOWN,
+      trackingDisabled: false,
+      loadError: true,
+    });
+    const view = toJsonView(failed) as { loadError: boolean };
+    expect(view.loadError).toBe(true);
   });
 });
 
