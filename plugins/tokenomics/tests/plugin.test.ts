@@ -48,7 +48,7 @@ function fixtureAggregate(): UsageAggregate {
     byModel: {
       "opus-4-8": totals(4.0),
       "haiku-4-5": totals(2.0),
-      "mystery-9": totals(0), // unknown model → unpriced
+      "mystery-9": totals(0, 500, 100, 0, 0), // unknown model, has tokens → unpriced
     },
     byAgent: {
       main: totals(5.0),
@@ -196,6 +196,36 @@ describe("renderMarkdown", () => {
     expect(out).toContain("unpriced");
   });
 
+  test("labels the total an incomplete subtotal when a model is unpriced", () => {
+    // The fixture's ghost-model-7 has recorded tokens but is not in KNOWN.
+    expect(m.hasUnpriced).toBe(true);
+    const out = renderMarkdown(m);
+    expect(out).toContain("Priced subtotal");
+    expect(out).toContain("incomplete");
+    expect(out).not.toContain("**Estimated cost:");
+  });
+
+  test("labels the total a plain estimate when every model is priced", () => {
+    const allPriced: UsageAggregate = {
+      totals: totals(5.0, 100, 50, 0, 0),
+      byStage: { "code-generation": { totals: totals(5.0, 100, 50, 0, 0), byModel: {}, byAgent: {} } },
+      byModel: { "opus-4-8": totals(5.0, 100, 50, 0, 0) },
+      byAgent: { main: totals(5.0, 100, 50, 0, 0) },
+    };
+    const priced = buildReportModel({
+      feature: "f",
+      aggregate: allPriced,
+      sessionCount: 1,
+      stagePhase: STAGE_PHASE,
+      knownModels: KNOWN,
+      trackingDisabled: false,
+    });
+    expect(priced.hasUnpriced).toBe(false);
+    const out = renderMarkdown(priced);
+    expect(out).toContain("**Estimated cost:");
+    expect(out).not.toContain("incomplete");
+  });
+
   test("renders the honest empty state when there is no data", () => {
     const empty = buildReportModel({
       feature: "f1",
@@ -249,9 +279,10 @@ describe("renderTable", () => {
       trackingDisabled: false,
     });
     const out = renderTable(m);
-    expect(out).toContain("estimated cost");
-    expect(out).toContain("list-price estimate");
+    expect(out).toContain("priced subtotal");
+    expect(out).toContain("INCOMPLETE");
     expect(out).toContain("$6.00");
+    expect(out).toContain("sessions");
   });
 
   test("surfaces a load failure in the terminal summary", () => {

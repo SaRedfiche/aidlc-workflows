@@ -182,6 +182,11 @@ export type ReportModel = {
   // via a non-zero exit code so a "no usage" artifact is never mistaken for a
   // silent load failure.
   loadError: boolean;
+  // True when at least one model with recorded tokens is NOT in the rate table.
+  // Its tokens are counted but its cost is withheld, so the aggregate USD is an
+  // INCOMPLETE lower bound — the renderers label the total accordingly rather
+  // than presenting a withheld-cost total as if it were complete.
+  hasUnpriced: boolean;
 };
 
 // Build the report model from a feature aggregate. Pure given its inputs.
@@ -208,8 +213,14 @@ export function buildReportModel(args: {
       sessionCount,
       knownModels,
       loadError,
+      hasUnpriced: false,
     };
   }
+  // Any model bucket with recorded tokens whose key is not in the rate table
+  // means part of the usage is unpriced, so the aggregate USD is a lower bound.
+  const hasUnpriced = Object.entries(aggregate.byModel).some(
+    ([key, t]) => !knownModels.has(key) && hasAnyTokens(t),
+  );
   return {
     hasData: true,
     trackingDisabled,
@@ -221,6 +232,7 @@ export function buildReportModel(args: {
     sessionCount,
     knownModels,
     loadError,
+    hasUnpriced,
   };
 }
 
@@ -254,11 +266,18 @@ export function renderMarkdown(m: ReportModel): string {
   }
   const t = m.totals;
   const cacheWrite = t.tokens.cacheCreate5m + t.tokens.cacheCreate1h;
+  const costLabel = m.hasUnpriced
+    ? `**Priced subtotal: ${fmtUsd(t.usd)} (incomplete — excludes unpriced models below)**`
+    : `**Estimated cost: ${fmtUsd(t.usd)}**`;
   L.push(
-    `**Estimated cost: ${fmtUsd(t.usd)}** · ${fmtTokens(t.tokens.input + t.tokens.output + t.tokens.cacheRead + cacheWrite)} tokens · ${m.sessionCount} session(s)`,
+    `${costLabel} · ${fmtTokens(t.tokens.input + t.tokens.output + t.tokens.cacheRead + cacheWrite)} tokens · ${m.sessionCount} session(s)`,
   );
   L.push("");
   L.push("> List-price estimate, not a billed figure — priced from AI-DLC's default/overridable rate table, not from provisioned-throughput or negotiated AWS pricing.");
+  if (m.hasUnpriced) {
+    L.push("");
+    L.push("> ⚠ One or more models with recorded usage are not in the rate table, so their cost is withheld. Every dollar total here — overall, per phase, per stage — is a lower bound that excludes those models (shown as unpriced under By model).");
+  }
   L.push("");
   L.push("## By phase");
   L.push("");
@@ -316,9 +335,12 @@ export function renderTable(m: ReportModel): string {
       : `tokenomics — ${m.feature}: no usage recorded (Claude-harness-only capture).\n`;
   }
   const t = m.totals;
+  const costLine = m.hasUnpriced
+    ? `  priced subtotal: ${fmtUsd(t.usd)}  (INCOMPLETE — excludes unpriced models below)`
+    : `  estimated cost : ${fmtUsd(t.usd)}  (list-price estimate)`;
   const lines = [
     `tokenomics — ${m.feature}`,
-    `  estimated cost : ${fmtUsd(t.usd)}  (list-price estimate)`,
+    costLine,
     `  sessions       : ${m.sessionCount}`,
     `  by phase       :`,
     ...m.phases.map((p) => `    ${p.phase.padEnd(14)} ${fmtUsd(p.totals.usd)}`),
@@ -339,6 +361,8 @@ export function toJsonView(m: ReportModel): Record<string, unknown> {
     hasData: m.hasData,
     trackingDisabled: m.trackingDisabled,
     loadError: m.loadError,
+    hasUnpriced: m.hasUnpriced,
+    totalIsLowerBound: m.hasUnpriced,
     feature: m.feature,
     totals: m.totals,
     phases: m.phases,
