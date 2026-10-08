@@ -5,11 +5,23 @@ feature cost to build in AI tokens and list-price dollars.
 
 It adds **no capture**. The usage ledger, per-model pricing, and per-stage /
 per-model / per-agent / per-intent attribution already live in core
-(`aidlc-usage.ts`). This plugin reads that ledger for one intent (= one feature)
-and renders a report, adding only:
+(`aidlc-usage.ts`). This plugin reads that ledger for one intent and renders a
+report, adding only:
 
 - a **stage → phase** fold (the ledger keys stages, not phases), and
 - a human-facing **report** (Markdown artifact + terminal table + JSON).
+
+The report **tool** (`tokenomics-report.ts`) is fully deterministic — no LLM
+call, no transcript parse. The stage wraps it in AI-DLC's standard
+approval-gate ritual, which is agent-driven (`model: haiku`); that agent's only
+job is to run the tool, byte-copy its output into the artifact, and open the
+Approve / Request-Changes gate — it never re-renders or re-computes the numbers.
+
+Attribution is **per intent** when an intent is active. When none is (an
+unscoped or legacy workspace), core's key degrades to an unscoped `…/legacy`
+bucket; the report detects that and labels the figures as whole-workspace usage
+rather than one feature's cost, instead of presenting a fallback id as a
+feature name.
 
 ## What it shows
 

@@ -20,6 +20,7 @@ import {
   renderTable,
   resolveStagePhaseMap,
   toJsonView,
+  NO_STAGE_PHASE,
   UNATTRIBUTED_PHASE,
   type Totals,
   type UsageAggregate,
@@ -87,7 +88,8 @@ describe("fmtTokens", () => {
     expect(fmtTokens(2000)).toBe("2k");
     expect(fmtTokens(3_400_000)).toBe("3.4M");
     expect(fmtTokens(0)).toBe("0");
-    expect(fmtTokens(-5)).toBe("0");
+    // A negative count is corruption — surfaced, not hidden as 0.
+    expect(fmtTokens(-5)).toBe("⚠-5");
   });
 });
 
@@ -116,6 +118,30 @@ describe("phaseRollup", () => {
     const un = rows.find((r) => r.phase === UNATTRIBUTED_PHASE);
     expect(un).toBeDefined();
     expect(un?.stages.map((s) => s.slug)).toEqual(["deployment-execution"]);
+  });
+
+  test("emits a no-stage residual so phase sums reconcile to the headline total", () => {
+    // totals.usd = 10 but byStage sums to only 6 → a $4 stageless residual.
+    const agg: UsageAggregate = {
+      totals: totals(10.0, 1000, 0, 0, 0),
+      byStage: {
+        "code-generation": { totals: totals(6.0, 600, 0, 0, 0), byModel: {}, byAgent: {} },
+      },
+      byModel: { "opus-4-8": totals(10.0, 1000, 0, 0, 0) },
+      byAgent: { main: totals(10.0, 1000, 0, 0, 0) },
+    };
+    const rows = phaseRollup(agg, { "code-generation": "construction" });
+    const residual = rows.find((r) => r.phase === NO_STAGE_PHASE);
+    expect(residual).toBeDefined();
+    expect(residual?.totals.usd).toBeCloseTo(4.0);
+    // The phase table now reconciles to the headline total.
+    const sum = rows.reduce((s, r) => s + r.totals.usd, 0);
+    expect(sum).toBeCloseTo(agg.totals.usd);
+  });
+
+  test("no residual row when stages already sum to the total", () => {
+    const rows = phaseRollup(fixtureAggregate(), STAGE_PHASE);
+    expect(rows.find((r) => r.phase === NO_STAGE_PHASE)).toBeUndefined();
   });
 });
 
@@ -171,6 +197,37 @@ describe("buildReportModel", () => {
     expect(m.totals.usd).toBeCloseTo(6.0);
     expect(m.phases.length).toBe(3);
   });
+
+  test("priced subtotal EXCLUDES an unpriced model even if core folded its cost into totals.usd", () => {
+    // Adversarial case: core wrongly priced the unknown model into totals.usd
+    // ($9) and byModel ($3). The derived priced subtotal must still be the sum
+    // of KNOWN models only ($6), so "excludes unpriced" is true by construction.
+    const agg: UsageAggregate = {
+      totals: totals(9.0, 1600, 600, 0, 0),
+      byStage: {},
+      byModel: {
+        "opus-4-8": totals(4.0, 500, 200, 0, 0),
+        "haiku-4-5": totals(2.0, 500, 300, 0, 0),
+        "mystery-9": totals(3.0, 600, 100, 0, 0), // unknown, but core gave it a cost
+      },
+      byAgent: { main: totals(9.0, 1600, 600, 0, 0) },
+    };
+    const built = buildReportModel({
+      feature: "f",
+      aggregate: agg,
+      sessionCount: 1,
+      stagePhase: STAGE_PHASE,
+      knownModels: KNOWN,
+      trackingDisabled: false,
+    });
+    expect(built.hasUnpriced).toBe(true);
+    expect(built.pricedSubtotalUsd).toBeCloseTo(6.0); // 4 + 2, NOT 9
+    const out = renderMarkdown(built);
+    expect(out).toContain("Priced subtotal: $6.00");
+    // The headline must not present the $9 (unpriced-inclusive) total.
+    expect(out).not.toContain("Priced subtotal: $9.00");
+    expect(out).not.toContain("Estimated cost: $9.00");
+  });
 });
 
 describe("renderMarkdown", () => {
@@ -197,7 +254,7 @@ describe("renderMarkdown", () => {
   });
 
   test("labels the total an incomplete subtotal when a model is unpriced", () => {
-    // The fixture's ghost-model-7 has recorded tokens but is not in KNOWN.
+    // The fixture's mystery-9 has recorded tokens but is not in KNOWN.
     expect(m.hasUnpriced).toBe(true);
     const out = renderMarkdown(m);
     expect(out).toContain("Priced subtotal");

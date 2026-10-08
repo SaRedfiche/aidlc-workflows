@@ -10,7 +10,9 @@ Core's `aidlc-usage.ts` keeps a durable ledger at
 input / output / cache-create / cache-read tokens and prices them against a
 model-version rate table (`DEFAULT_RATES`, overlaid by a shipped
 `model-rates.json`, overlaid by `$AIDLC_MODEL_RATES`). The ledger partitions
-usage by stage, by model, by agent, and per intent (= per feature) → per
+usage by stage, by model, by agent, and per intent (= per feature when an
+intent is active; an unscoped `…/legacy` bucket otherwise, which the report
+labels as whole-workspace usage) → per
 session. This plugin only reads that.
 
 ## The one new fold: stage → phase

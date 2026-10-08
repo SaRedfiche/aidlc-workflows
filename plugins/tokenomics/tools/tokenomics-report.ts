@@ -79,6 +79,11 @@ export const PHASE_ORDER = [
 ] as const;
 export type Phase = (typeof PHASE_ORDER)[number];
 export const UNATTRIBUTED_PHASE = "unattributed";
+// A phase bucket for usage that exists in the feature total but is attached to
+// NO stage at all (e.g. main-loop usage recorded before any stage was entered).
+// Distinct from UNATTRIBUTED_PHASE, which is a stage present in byStage but
+// missing from the phase map.
+export const NO_STAGE_PHASE = "unattributed (no stage)";
 
 // A stage→phase lookup: stage slug → phase string. Built from stage-file
 // frontmatter at the CLI edge; injected into the pure rollup so tests supply
@@ -114,26 +119,60 @@ export type PhaseRow = {
 };
 
 // Fold an aggregate's byStage buckets into per-phase rows, ordered by
-// PHASE_ORDER (then "unattributed" last). A stage missing from the map lands in
-// "unattributed" so its cost stays visible. Pure.
+// PHASE_ORDER (then the two unattributed buckets last). A stage missing from the
+// map lands in "unattributed". If the aggregate total exceeds the sum of all
+// stage buckets (usage attached to no stage), the remainder is emitted as a
+// NO_STAGE_PHASE residual row so the phase table ALWAYS reconciles to the
+// headline total and no cost silently vanishes. Pure.
 export function phaseRollup(
-  aggregate: Pick<UsageAggregate, "byStage">,
+  aggregate: Pick<UsageAggregate, "byStage" | "totals">,
   stagePhase: StagePhaseMap,
 ): PhaseRow[] {
   const byPhase = new Map<string, PhaseRow>();
+  const stageSum = emptyTotals();
   for (const [slug, bucket] of Object.entries(aggregate.byStage)) {
     const phase = stagePhase[slug] ?? UNATTRIBUTED_PHASE;
     const row =
       byPhase.get(phase) ?? { phase, totals: emptyTotals(), stages: [] };
     addTotals(row.totals, bucket.totals);
+    addTotals(stageSum, bucket.totals);
     row.stages.push({ slug, totals: bucket.totals });
     byPhase.set(phase, row);
   }
+  // Residual: cost/tokens in the feature total not attributed to any stage.
+  const residual = residualTotals(aggregate.totals, stageSum);
+  if (residual) {
+    byPhase.set(NO_STAGE_PHASE, { phase: NO_STAGE_PHASE, totals: residual, stages: [] });
+  }
   const order = (p: string): number => {
+    if (p === NO_STAGE_PHASE) return PHASE_ORDER.length + 1; // after "unattributed"
     const i = (PHASE_ORDER as readonly string[]).indexOf(p);
     return i < 0 ? PHASE_ORDER.length : i; // unattributed sorts last
   };
   return [...byPhase.values()].sort((a, b) => order(a.phase) - order(b.phase));
+}
+
+// The positive remainder of `total - part` across usd and every token bucket, or
+// null when nothing material is left over (a floating-point epsilon on usd and
+// zero tokens). Negative deltas (part > total — a ledger inconsistency) clamp to
+// 0 so a residual never fabricates negative cost. Pure.
+function residualTotals(total: Totals, part: Totals): Totals | null {
+  const t = total.tokens;
+  const p = part.tokens;
+  const r: Totals = {
+    tokens: {
+      input: Math.max(0, t.input - p.input),
+      output: Math.max(0, t.output - p.output),
+      cacheCreate5m: Math.max(0, t.cacheCreate5m - p.cacheCreate5m),
+      cacheCreate1h: Math.max(0, t.cacheCreate1h - p.cacheCreate1h),
+      cacheRead: Math.max(0, t.cacheRead - p.cacheRead),
+    },
+    usd: Math.max(0, total.usd - part.usd),
+  };
+  const material =
+    r.usd > 0.005 ||
+    r.tokens.input + r.tokens.output + r.tokens.cacheCreate5m + r.tokens.cacheCreate1h + r.tokens.cacheRead > 0;
+  return material ? r : null;
 }
 
 // Sum every model/agent sub-bucket's USD, keyed. Preserves a null-cost (unknown
@@ -141,7 +180,7 @@ export function phaseRollup(
 export function costByKey(buckets: Record<string, Totals>): { key: string; usd: number }[] {
   return Object.entries(buckets)
     .map(([key, t]) => ({ key, usd: t.usd }))
-    .sort((a, b) => b.usd - a.usd);
+    .sort((a, b) => b.usd - a.usd || a.key.localeCompare(b.key));
 }
 
 // Whether an aggregate recorded any tokens at all.
@@ -153,7 +192,9 @@ export function hasAnyTokens(t: Totals): boolean {
 // Compact token count: 1234 → "1.2k", 3_400_000 → "3.4M". Mirrors
 // aidlc-usage.ts fmtTokensCompact. Pure.
 export function fmtTokens(n: number): string {
-  if (!Number.isFinite(n) || n <= 0) return "0";
+  if (!Number.isFinite(n)) return "0";
+  if (n < 0) return `⚠${Math.round(n)}`; // a negative count is corruption — show it, don't hide it as 0
+  if (n === 0) return "0";
   const trim = (s: string): string => s.replace(/\.0$/, "");
   if (n >= 1e6) return `${trim((n / 1e6).toFixed(1))}M`;
   if (n >= 1e3) return `${trim((n / 1e3).toFixed(1))}k`;
@@ -162,6 +203,14 @@ export function fmtTokens(n: number): string {
 
 function fmtUsd(n: number): string {
   return `$${n.toFixed(2)}`;
+}
+
+// Whether the feature label is a fallback/unscoped identity rather than a real
+// named intent. intentUsageKey degrades to `record:<space>/legacy` or
+// `record:default/legacy` when no intent is active; main() strips the prefix,
+// so the bare label can read like a feature name when it is not one. Pure.
+export function isLegacyFeature(feature: string): boolean {
+  return /(^|\/)legacy$/.test(feature) || feature === "this feature";
 }
 
 export type ReportModel = {
@@ -187,6 +236,11 @@ export type ReportModel = {
   // INCOMPLETE lower bound — the renderers label the total accordingly rather
   // than presenting a withheld-cost total as if it were complete.
   hasUnpriced: boolean;
+  // The sum of USD across KNOWN (rate-table) models only, derived here rather
+  // than trusting aggregate.totals.usd. This is the headline figure when
+  // hasUnpriced is true, so "excludes unpriced models" is true BY CONSTRUCTION
+  // even if core ever folded an unknown model's cost into the aggregate total.
+  pricedSubtotalUsd: number;
 };
 
 // Build the report model from a feature aggregate. Pure given its inputs.
@@ -214,6 +268,7 @@ export function buildReportModel(args: {
       knownModels,
       loadError,
       hasUnpriced: false,
+      pricedSubtotalUsd: 0,
     };
   }
   // Any model bucket with recorded tokens whose key is not in the rate table
@@ -221,6 +276,11 @@ export function buildReportModel(args: {
   const hasUnpriced = Object.entries(aggregate.byModel).some(
     ([key, t]) => !knownModels.has(key) && hasAnyTokens(t),
   );
+  // Derive the priced subtotal from KNOWN model buckets only — never trust
+  // aggregate.totals.usd to have excluded unpriced cost.
+  const pricedSubtotalUsd = Object.entries(aggregate.byModel)
+    .filter(([key]) => knownModels.has(key))
+    .reduce((sum, [, t]) => sum + t.usd, 0);
   return {
     hasData: true,
     trackingDisabled,
@@ -233,6 +293,7 @@ export function buildReportModel(args: {
     knownModels,
     loadError,
     hasUnpriced,
+    pricedSubtotalUsd,
   };
 }
 
@@ -254,6 +315,12 @@ export function renderMarkdown(m: ReportModel): string {
     );
     L.push("");
   }
+  if (m.hasData && isLegacyFeature(m.feature)) {
+    L.push(
+      "> ⚠ This usage is NOT attributed to a specific feature — no intent was active, so it fell into an unscoped/legacy bucket. Treat the figures as whole-workspace usage, not one feature's cost.",
+    );
+    L.push("");
+  }
   if (!m.hasData) {
     L.push(
       m.trackingDisabled
@@ -267,7 +334,7 @@ export function renderMarkdown(m: ReportModel): string {
   const t = m.totals;
   const cacheWrite = t.tokens.cacheCreate5m + t.tokens.cacheCreate1h;
   const costLabel = m.hasUnpriced
-    ? `**Priced subtotal: ${fmtUsd(t.usd)} (incomplete — excludes unpriced models below)**`
+    ? `**Priced subtotal: ${fmtUsd(m.pricedSubtotalUsd)} (incomplete — excludes unpriced models below)**`
     : `**Estimated cost: ${fmtUsd(t.usd)}**`;
   L.push(
     `${costLabel} · ${fmtTokens(t.tokens.input + t.tokens.output + t.tokens.cacheRead + cacheWrite)} tokens · ${m.sessionCount} session(s)`,
@@ -336,7 +403,7 @@ export function renderTable(m: ReportModel): string {
   }
   const t = m.totals;
   const costLine = m.hasUnpriced
-    ? `  priced subtotal: ${fmtUsd(t.usd)}  (INCOMPLETE — excludes unpriced models below)`
+    ? `  priced subtotal: ${fmtUsd(m.pricedSubtotalUsd)}  (INCOMPLETE — excludes unpriced models below)`
     : `  estimated cost : ${fmtUsd(t.usd)}  (list-price estimate)`;
   const lines = [
     `tokenomics — ${m.feature}`,
@@ -363,6 +430,7 @@ export function toJsonView(m: ReportModel): Record<string, unknown> {
     loadError: m.loadError,
     hasUnpriced: m.hasUnpriced,
     totalIsLowerBound: m.hasUnpriced,
+    pricedSubtotalUsd: m.pricedSubtotalUsd,
     feature: m.feature,
     totals: m.totals,
     phases: m.phases,
