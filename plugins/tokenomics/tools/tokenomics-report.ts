@@ -310,6 +310,27 @@ export function renderTable(m: ReportModel): string {
   return `${lines.join("\n")}\n`;
 }
 
+// A JSON-safe view of the report. An unknown model (absent from the rate table)
+// has its cost rendered as `null`, NOT its raw 0 — matching the "unpriced"
+// discipline of the Markdown/table renderers, so a `--json` consumer never
+// reads a fabricated zero-dollar price for an unpriceable model. Pure.
+export function toJsonView(m: ReportModel): Record<string, unknown> {
+  return {
+    hasData: m.hasData,
+    trackingDisabled: m.trackingDisabled,
+    feature: m.feature,
+    totals: m.totals,
+    phases: m.phases,
+    byModel: m.byModel.map((r) => ({
+      key: r.key,
+      usd: m.knownModels.has(r.key) ? r.usd : null,
+    })),
+    byAgent: m.byAgent,
+    sessionCount: m.sessionCount,
+    knownModels: [...m.knownModels],
+  };
+}
+
 // ===========================================================================
 // I/O edge — resolve the stage→phase map from composed stage files
 // ===========================================================================
@@ -380,37 +401,55 @@ export function main(argv: string[]): number {
   const asJson = argv.includes("--json");
   const asTable = argv.includes("--table");
 
+  const trackingDisabled = process.env.AIDLC_DISABLE_USAGE_TRACKING === "1";
+
   // Load core's usage API as a sibling at runtime (post-compose this tool lives
   // next to aidlc-usage.ts in the harness tools dir). Kept out of the module's
-  // top-level imports so the pure logic compiles/tests without the sibling.
-  const core = require("./aidlc-usage.ts") as UsageCore;
+  // top-level imports so the pure logic compiles/tests without the sibling. If
+  // the sibling is absent (pre-compose, or a compose that did not run), DO NOT
+  // crash — route through the same honest empty-state the rest of the design
+  // preserves, so "the ledger could not be read" degrades like "no usage",
+  // never an uncaught require error.
+  let core: UsageCore | null = null;
+  try {
+    core = require("./aidlc-usage.ts") as UsageCore;
+  } catch {
+    core = null;
+  }
 
-  const trackingDisabled = process.env.AIDLC_DISABLE_USAGE_TRACKING === "1";
-  const workflowKey = core.intentUsageKey(projectDir, sessionId);
-  const feature = workflowKey.replace(/^(intent|record):/, "");
-
-  const ledger = core.loadLedger(projectDir);
-  const workflow = ledger.workflows[workflowKey] ?? null;
-  const aggregate: UsageAggregate | null = workflow
-    ? { totals: workflow.totals, byStage: workflow.byStage, byModel: workflow.byModel, byAgent: workflow.byAgent }
-    : null;
-  const sessionCount = workflow ? Object.keys(workflow.sessions).length : 0;
-
-  const stagePhase = resolveStagePhaseMap(harnessStageDirs(projectDir, harnessDir));
-  const knownModels = new Set(Object.keys(core.loadRates()));
-
-  const model = buildReportModel({
-    feature,
-    aggregate,
-    sessionCount,
-    stagePhase,
-    knownModels,
-    trackingDisabled,
-  });
+  let model: ReportModel;
+  if (!core) {
+    model = buildReportModel({
+      feature: "this feature",
+      aggregate: null,
+      sessionCount: 0,
+      stagePhase: {},
+      knownModels: new Set(),
+      trackingDisabled,
+    });
+  } else {
+    const workflowKey = core.intentUsageKey(projectDir, sessionId);
+    const feature = workflowKey.replace(/^(intent|record):/, "");
+    const ledger = core.loadLedger(projectDir);
+    const workflow = ledger.workflows[workflowKey] ?? null;
+    const aggregate: UsageAggregate | null = workflow
+      ? { totals: workflow.totals, byStage: workflow.byStage, byModel: workflow.byModel, byAgent: workflow.byAgent }
+      : null;
+    const sessionCount = workflow ? Object.keys(workflow.sessions).length : 0;
+    const stagePhase = resolveStagePhaseMap(harnessStageDirs(projectDir, harnessDir));
+    const knownModels = new Set(Object.keys(core.loadRates()));
+    model = buildReportModel({
+      feature,
+      aggregate,
+      sessionCount,
+      stagePhase,
+      knownModels,
+      trackingDisabled,
+    });
+  }
 
   if (asJson) {
-    // Serialize the Set for JSON consumers.
-    process.stdout.write(`${JSON.stringify({ ...model, knownModels: [...model.knownModels] })}\n`);
+    process.stdout.write(`${JSON.stringify(toJsonView(model))}\n`);
   } else if (asTable) {
     process.stdout.write(renderTable(model));
   } else {

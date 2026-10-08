@@ -16,6 +16,7 @@ import {
   phaseRollup,
   renderMarkdown,
   renderTable,
+  toJsonView,
   UNATTRIBUTED_PHASE,
   type Totals,
   type UsageAggregate,
@@ -231,5 +232,29 @@ describe("renderTable", () => {
     expect(out).toContain("estimated cost");
     expect(out).toContain("list-price estimate");
     expect(out).toContain("$6.00");
+  });
+});
+
+describe("toJsonView", () => {
+  const m = buildReportModel({
+    feature: "my-feature",
+    aggregate: fixtureAggregate(),
+    sessionCount: 2,
+    stagePhase: STAGE_PHASE,
+    knownModels: KNOWN,
+    trackingDisabled: false,
+  });
+
+  test("serializes an unknown model's cost as null, never a fabricated 0", () => {
+    const view = toJsonView(m) as { byModel: { key: string; usd: number | null }[] };
+    const mystery = view.byModel.find((r) => r.key === "mystery-9");
+    expect(mystery).toBeDefined();
+    expect(mystery?.usd).toBeNull();
+  });
+
+  test("keeps a known model's numeric cost", () => {
+    const view = toJsonView(m) as { byModel: { key: string; usd: number | null }[] };
+    const opus = view.byModel.find((r) => r.key === "opus-4-8");
+    expect(opus?.usd).toBeCloseTo(4.0);
   });
 });

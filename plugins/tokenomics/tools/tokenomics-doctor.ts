@@ -25,8 +25,8 @@ function installed(
 const checks = [
   installed("tools/tokenomics-report.ts", "error"),
   installed("stages/operation/tokenomics-report.md", "error"),
-  installed("scopes/tokenomics.md", "advisory"),
-  installed("agents/tokenomics-reporter.md", "advisory"),
+  installed("scopes/tokenomics-spend.md", "advisory"),
+  installed("agents/tokenomics-reporter-agent.md", "advisory"),
 ];
 
 process.stdout.write(`${JSON.stringify({ checks })}\n`);
