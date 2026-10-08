@@ -13,7 +13,9 @@ and renders a report, adding only:
 
 ## What it shows
 
-- Estimated total cost + total tokens + session count
+- Cost headline as the tool emits it (a plain estimate when every model is
+  priced, an incomplete priced subtotal when any model is unpriced) + total
+  tokens + session count
 - Cost **by phase** (initialization → operation; unmapped stages shown as
   `unattributed`, never dropped)
 - Cost **by stage**

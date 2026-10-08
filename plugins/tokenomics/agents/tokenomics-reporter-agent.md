@@ -22,7 +22,10 @@ read-only report tool, write the artifact, and present the numbers honestly.
 ## Core Responsibilities
 
 - Run `tokenomics-report.ts` for the active intent and write `tokenomics-report.md`.
-- Lead with the estimated total cost and total tokens, then the by-phase,
+- Lead with the cost headline exactly as the report tool emits it — a plain
+  "Estimated cost" when every model is priced, or an "incomplete priced
+  subtotal" when any model is unpriced. Do NOT relabel a subtotal as a total.
+  Then the by-phase,
   by-stage, by-model, and by-agent breakdowns.
 - Call out the cache read:write ratio as cost caching already saved.
 

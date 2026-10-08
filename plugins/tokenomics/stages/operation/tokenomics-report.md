@@ -50,7 +50,10 @@ machine-readable form use `--json`.
 ### Step 2: Write the artifact
 
 Write `tokenomics-report.md` to this stage's engine-resolved record directory,
-leading with the estimated total cost and total tokens, then the by-phase,
+leading with the cost headline exactly as the tool emits it (a plain estimate
+when every model is priced, an incomplete priced subtotal when any model is
+unpriced — never relabel a subtotal as a total) and total tokens, then the
+by-phase,
 by-stage, by-model, and by-agent breakdowns and the cache-economics line.
 
 ### Step 3: Open the Approval Gate
