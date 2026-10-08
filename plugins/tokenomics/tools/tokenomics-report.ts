@@ -493,6 +493,24 @@ export function main(argv: string[]): number {
     }
   }
 
+  // A require() that SUCCEEDS can still hand back a wrong-shape module (a stale
+  // or partially-written aidlc-usage.ts missing the exports we call). Validate
+  // the required surface up front and route a wrong-shape module through the
+  // SAME loadError path, so a later `core.intentUsageKey(...)` can never throw
+  // mid-report and bypass the honest load-failure handling.
+  if (
+    core &&
+    (typeof core.intentUsageKey !== "function" ||
+      typeof core.loadLedger !== "function" ||
+      typeof core.loadRates !== "function")
+  ) {
+    loadError = true;
+    core = null;
+    process.stderr.write(
+      "tokenomics-report: the usage ledger module loaded but is missing expected exports (intentUsageKey/loadLedger/loadRates); reporting a load-failure state, not an absence of usage.\n",
+    );
+  }
+
   let model: ReportModel;
   if (!core) {
     model = buildReportModel({
