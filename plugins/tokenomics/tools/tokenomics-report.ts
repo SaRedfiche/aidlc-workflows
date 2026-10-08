@@ -343,7 +343,9 @@ export function renderMarkdown(m: ReportModel): string {
   L.push("> List-price estimate, not a billed figure — priced from AI-DLC's default/overridable rate table, not from provisioned-throughput or negotiated AWS pricing.");
   if (m.hasUnpriced) {
     L.push("");
-    L.push("> ⚠ One or more models with recorded usage are not in the rate table, so their cost is withheld. Every dollar total here — overall, per phase, per stage — is a lower bound that excludes those models (shown as unpriced under By model).");
+    L.push(
+      "> ⚠ One or more models with recorded usage are not in the rate table (shown as unpriced under By model). The headline **priced subtotal** is derived from priced models only, so it excludes them. The per-phase, per-stage, and per-agent figures below are the ledger's own attributed USD and are NOT re-derived — treat them as approximate, since core withholds an unpriced model's cost in most cases but the breakdowns are not guaranteed to exclude it.",
+    );
   }
   L.push("");
   L.push("## By phase");
@@ -429,7 +431,10 @@ export function toJsonView(m: ReportModel): Record<string, unknown> {
     trackingDisabled: m.trackingDisabled,
     loadError: m.loadError,
     hasUnpriced: m.hasUnpriced,
-    totalIsLowerBound: m.hasUnpriced,
+    // When hasUnpriced: `totals` is the ledger's RAW aggregate (may include an
+    // unpriced model's cost if core priced it); `pricedSubtotalUsd` is the
+    // headline figure derived from priced models only. Consumers wanting a
+    // guaranteed-excludes-unpriced number use pricedSubtotalUsd, not totals.usd.
     pricedSubtotalUsd: m.pricedSubtotalUsd,
     feature: m.feature,
     totals: m.totals,
