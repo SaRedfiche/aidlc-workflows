@@ -3,6 +3,8 @@
 // Run: bun test plugins/tokenomics/tests/plugin.test.ts
 
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -16,6 +18,7 @@ import {
   phaseRollup,
   renderMarkdown,
   renderTable,
+  resolveStagePhaseMap,
   toJsonView,
   UNATTRIBUTED_PHASE,
   type Totals,
@@ -256,5 +259,34 @@ describe("toJsonView", () => {
     const view = toJsonView(m) as { byModel: { key: string; usd: number | null }[] };
     const opus = view.byModel.find((r) => r.key === "opus-4-8");
     expect(opus?.usd).toBeCloseTo(4.0);
+  });
+});
+
+describe("resolveStagePhaseMap", () => {
+  test("reads slug→phase from stage frontmatter, incl. quoted and multi-word values", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tok-stages-"));
+    try {
+      mkdirSync(join(dir, "construction"), { recursive: true });
+      writeFileSync(
+        join(dir, "construction", "a.md"),
+        "---\nslug: stage-a\nphase: construction\n---\n# A\n",
+      );
+      writeFileSync(
+        join(dir, "construction", "b.md"),
+        '---\nslug: stage-b\nphase: "operation"\n---\n# B\n',
+      );
+      // A multi-word value must be captured whole (the \S+ bug would truncate
+      // it to "operation" and misroute by dropping the rest).
+      writeFileSync(
+        join(dir, "construction", "c.md"),
+        "---\nslug: stage-c\nphase: operation phase\n---\n# C\n",
+      );
+      const map = resolveStagePhaseMap([dir]);
+      expect(map["stage-a"]).toBe("construction");
+      expect(map["stage-b"]).toBe("operation"); // quotes stripped
+      expect(map["stage-c"]).toBe("operation phase"); // whole value, not just "operation"
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

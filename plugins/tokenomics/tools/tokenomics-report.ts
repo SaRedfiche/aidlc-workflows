@@ -337,15 +337,20 @@ export function toJsonView(m: ReportModel): Record<string, unknown> {
 
 // Parse a stage markdown file's `slug:` and `phase:` frontmatter. Returns null
 // when either is absent. Never throws.
-function stagePhaseFromFile(path: string): { slug: string; phase: string } | null {
+export function stagePhaseFromFile(path: string): { slug: string; phase: string } | null {
   let raw: string;
   try {
     raw = readFileSync(path, "utf-8");
   } catch {
     return null;
   }
+  // Capture the whole trimmed value, not just the first token: `\S+` would stop
+  // at the first space and silently misroute a multi-word or quoted `phase:`
+  // value to "unattributed" with no diagnostic. A quoted value is unquoted so
+  // `phase: "operation"` and `phase: operation` resolve identically.
   const slug = raw.match(/^slug:\s*(\S+)\s*$/m)?.[1];
-  const phase = raw.match(/^phase:\s*(\S+)\s*$/m)?.[1];
+  const phaseRaw = raw.match(/^phase:\s*(.+?)\s*$/m)?.[1];
+  const phase = phaseRaw?.replace(/^["']|["']$/g, "");
   return slug && phase ? { slug, phase } : null;
 }
 
@@ -406,15 +411,27 @@ export function main(argv: string[]): number {
   // Load core's usage API as a sibling at runtime (post-compose this tool lives
   // next to aidlc-usage.ts in the harness tools dir). Kept out of the module's
   // top-level imports so the pure logic compiles/tests without the sibling. If
-  // the sibling is absent (pre-compose, or a compose that did not run), DO NOT
-  // crash — route through the same honest empty-state the rest of the design
-  // preserves, so "the ledger could not be read" degrades like "no usage",
-  // never an uncaught require error.
+  // the sibling cannot be loaded we DO NOT crash — but we DO emit a stderr
+  // diagnostic so the two cases are distinguishable: a genuinely-absent sibling
+  // (pre-compose / a harness with no producer) is the expected empty-state path
+  // and prints nothing extra, whereas an UNEXPECTED load failure (a corrupt or
+  // wrong-shape module) warns on stderr before degrading, so an operator is
+  // never left reading "no usage recorded" when the ledger actually failed to
+  // load. stdout (the report contract) is unchanged either way.
   let core: UsageCore | null = null;
   try {
     core = require("./aidlc-usage.ts") as UsageCore;
-  } catch {
+  } catch (err) {
     core = null;
+    const msg = err instanceof Error ? err.message : String(err);
+    // MODULE_NOT_FOUND is the expected pre-compose case; anything else is an
+    // unexpected load failure worth surfacing.
+    const expectedMissing = /cannot find module|module_not_found/i.test(msg);
+    if (!expectedMissing) {
+      process.stderr.write(
+        `tokenomics-report: could not load the usage ledger module (${msg}); reporting empty state. If a workshop recorded usage, this is a load failure, not an absence of usage.\n`,
+      );
+    }
   }
 
   let model: ReportModel;
