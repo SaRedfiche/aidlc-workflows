@@ -1,0 +1,16 @@
+{
+  "name": "tokenomics",
+  "version": "0.1.0",
+  "description": "Post-workshop AI tokenomics: a read-only report of what a feature cost to build. Renders the usage ledger AI-DLC already keeps (tokens + list-price cost, attributed per phase, stage, model, and agent) into an end-of-workshop report. Capture, pricing, and attribution are reused from core — this plugin adds only the human-facing report.",
+  "author": { "name": "AWS AIDLC" },
+  "dependencies": ["core"],
+  "aidlc": {
+    "contributes": {
+      "stages": "stages/",
+      "agents": "agents/",
+      "scopes": "scopes/",
+      "knowledge": "knowledge/",
+      "tools": "tools/"
+    }
+  }
+}
